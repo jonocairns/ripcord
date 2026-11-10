@@ -1,299 +1,95 @@
 import {
 	ChannelPermission,
-	OWNER_ROLE_ID,
 	type TChannel,
 	type TChannelUserPermissionsMap,
 	type TReadStateMap,
 } from '@sharkord/shared';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
+import { canViewChannel, resolveChannelGrant, type TChannelGrants } from '../../utils/permission-policy';
 import { db } from '..';
-import {
-	channelReadStates,
-	channelRolePermissions,
-	channels,
-	channelUserPermissions,
-	messages,
-	userRoles,
-	users,
-} from '../schema';
-import { getUserRoleIds } from './roles';
+import { channelReadStates, channels, messages, users } from '../schema';
+import { loadChannelGrantsForUser, loadPrivateViewGrantsForUsers, loadUserGrantsForChannel } from './permissions';
 
-const getPermissions = async (userId: number, roleIds: number[], permission: ChannelPermission, channelId?: number) => {
-	const userPermissionsQuery = db
-		.select({
-			channelId: channelUserPermissions.channelId,
-			allow: channelUserPermissions.allow,
-		})
-		.from(channelUserPermissions)
-		.where(
-			and(
-				eq(channelUserPermissions.userId, userId),
-				eq(channelUserPermissions.permission, permission),
-				channelId ? eq(channelUserPermissions.channelId, channelId) : undefined,
-			),
-		);
+const grantsFor = (channel: TChannel, byChannel: ReadonlyMap<number, TChannelGrants>): TChannelGrants => ({
+	private: channel.private,
+	user: byChannel.get(channel.id)?.user ?? [],
+	roles: byChannel.get(channel.id)?.roles ?? [],
+});
 
-	let rolePermissionsQuery = null;
-
-	if (roleIds.length > 0) {
-		rolePermissionsQuery = db
-			.select({
-				channelId: channelRolePermissions.channelId,
-				allow: channelRolePermissions.allow,
-			})
-			.from(channelRolePermissions)
-			.where(
-				and(
-					inArray(channelRolePermissions.roleId, roleIds),
-					eq(channelRolePermissions.permission, permission),
-					channelId ? eq(channelRolePermissions.channelId, channelId) : undefined,
-				),
-			);
-	}
-
-	const [userPermissions, rolePermissions] = await Promise.all([
-		userPermissionsQuery,
-		rolePermissionsQuery || Promise.resolve([]),
-	]);
-
-	const userPermissionMap = new Map(userPermissions.map((p) => [p.channelId, p.allow]));
-
-	const rolePermissionMap = new Map<number, boolean>();
-
-	for (const perm of rolePermissions) {
-		const existing = rolePermissionMap.get(perm.channelId);
-
-		rolePermissionMap.set(perm.channelId, existing || perm.allow);
-	}
-
-	return { userPermissionMap, rolePermissionMap };
+export const getChannelsForUser = async (userId: number, channelRows?: TChannel[]): Promise<TChannel[]> => {
+	const { isOwner, byChannel } = loadChannelGrantsForUser(userId);
+	const allChannels = channelRows ?? db.select().from(channels).all();
+	return allChannels.filter((channel) => canViewChannel(isOwner, grantsFor(channel, byChannel)));
 };
 
-const getChannelsForUser = async (userId: number, channelRows?: TChannel[]): Promise<TChannel[]> => {
-	const roleIds = await getUserRoleIds(userId);
-
-	const allChannels = channelRows ?? (await db.select().from(channels));
-
-	if (roleIds.includes(OWNER_ROLE_ID)) return allChannels;
-
-	const { userPermissionMap, rolePermissionMap } = await getPermissions(
-		userId,
-		roleIds,
-		ChannelPermission.VIEW_CHANNEL,
-	);
-
-	const accessibleChannels = allChannels.filter((channel) => {
-		if (!channel.private) {
-			return true;
-		}
-
-		const userPerm = userPermissionMap.get(channel.id);
-
-		if (userPerm !== undefined) {
-			return userPerm;
-		}
-
-		const rolePerm = rolePermissionMap.get(channel.id);
-
-		return rolePerm;
-	});
-
-	return accessibleChannels;
-};
-
-const getAllChannelUserPermissions = async (
+export const getAllChannelUserPermissions = async (
 	userId: number,
 	channelRows?: TChannel[],
 ): Promise<TChannelUserPermissionsMap> => {
-	const roleIds = await getUserRoleIds(userId);
-	const allChannels = channelRows ?? (await db.select().from(channels));
-
-	const userPermissions = await db
-		.select({
-			channelId: channelUserPermissions.channelId,
-			permission: channelUserPermissions.permission,
-			allow: channelUserPermissions.allow,
-		})
-		.from(channelUserPermissions)
-		.where(eq(channelUserPermissions.userId, userId));
-
-	let rolePermissions: typeof userPermissions = [];
-
-	if (roleIds.length > 0) {
-		rolePermissions = await db
-			.select({
-				channelId: channelRolePermissions.channelId,
-				permission: channelRolePermissions.permission,
-				allow: channelRolePermissions.allow,
-			})
-			.from(channelRolePermissions)
-			.where(inArray(channelRolePermissions.roleId, roleIds));
-	}
-
-	const userPermMap = new Map<number, Map<ChannelPermission, boolean>>();
-
-	for (const perm of userPermissions) {
-		if (!userPermMap.has(perm.channelId)) {
-			userPermMap.set(perm.channelId, new Map());
-		}
-
-		userPermMap.get(perm.channelId)!.set(perm.permission as ChannelPermission, perm.allow);
-	}
-
-	const rolePermMap = new Map<number, Map<ChannelPermission, boolean>>();
-
-	for (const perm of rolePermissions) {
-		if (!rolePermMap.has(perm.channelId)) {
-			rolePermMap.set(perm.channelId, new Map());
-		}
-
-		const channelMap = rolePermMap.get(perm.channelId)!;
-		const existing = channelMap.get(perm.permission as ChannelPermission);
-
-		channelMap.set(perm.permission as ChannelPermission, existing || perm.allow);
-	}
-
-	const allPermissionTypes = Object.values(ChannelPermission);
-
-	const channelPermissions: Record<number, { channelId: number; permissions: Record<ChannelPermission, boolean> }> = {};
-
+	const { isOwner, byChannel } = loadChannelGrantsForUser(userId);
+	const allChannels = channelRows ?? db.select().from(channels).all();
+	const result: TChannelUserPermissionsMap = {};
 	for (const channel of allChannels) {
-		const permissions: Record<string, boolean> = {};
-
-		for (const permissionType of allPermissionTypes) {
-			if (roleIds.includes(OWNER_ROLE_ID)) {
-				permissions[permissionType] = true;
-				continue;
-			}
-			const userPerm = userPermMap.get(channel.id)?.get(permissionType);
-
-			if (userPerm !== undefined) {
-				permissions[permissionType] = userPerm;
-
-				continue;
-			}
-
-			const rolePerm = rolePermMap.get(channel.id)?.get(permissionType);
-
-			if (rolePerm !== undefined) {
-				permissions[permissionType] = rolePerm;
-
-				continue;
-			}
-
-			permissions[permissionType] = false;
-		}
-
-		channelPermissions[channel.id] = {
+		const grants = grantsFor(channel, byChannel);
+		const allowed = (permission: ChannelPermission) => isOwner || resolveChannelGrant(grants, permission);
+		result[channel.id] = {
 			channelId: channel.id,
-			permissions: permissions as Record<ChannelPermission, boolean>,
+			permissions: {
+				[ChannelPermission.VIEW_CHANNEL]: allowed(ChannelPermission.VIEW_CHANNEL),
+				[ChannelPermission.SEND_MESSAGES]: allowed(ChannelPermission.SEND_MESSAGES),
+				[ChannelPermission.JOIN]: allowed(ChannelPermission.JOIN),
+				[ChannelPermission.SPEAK]: allowed(ChannelPermission.SPEAK),
+				[ChannelPermission.WEBCAM]: allowed(ChannelPermission.WEBCAM),
+				[ChannelPermission.SHARE_SCREEN]: allowed(ChannelPermission.SHARE_SCREEN),
+			},
 		};
 	}
-
-	return channelPermissions;
+	return result;
 };
 
-const resolveAffectedUserIdsForChannel = (
-	channelId: number,
-	options?: {
-		forceAllUsers?: boolean;
-		permission?: ChannelPermission;
-	},
-): number[] | undefined => {
-	const channel = db.select().from(channels).where(eq(channels.id, channelId)).get();
+const allUserIds = () =>
+	db
+		.select({ id: users.id })
+		.from(users)
+		.all()
+		.map((user) => user.id);
 
-	if (!channel) {
-		return undefined;
+export const getChannelViewerIdsSync = (channelId: number): number[] | undefined => {
+	const snapshot = loadUserGrantsForChannel(channelId, ChannelPermission.VIEW_CHANNEL);
+	if (!snapshot) return undefined;
+	if (!snapshot.channel.private) return allUserIds();
+	const viewers = new Set(snapshot.ownerIds);
+	for (const [userId, grants] of snapshot.byUser) {
+		if (canViewChannel(snapshot.ownerIds.has(userId), grants)) viewers.add(userId);
 	}
-
-	// if channel is public, return all user IDs
-	if (!channel.private || options?.forceAllUsers) {
-		const allUsers = db.select({ id: users.id }).from(users).all();
-
-		return allUsers.map((user) => user.id);
-	}
-
-	// if a specific permission is required, filter by it
-	const permission = options?.permission;
-
-	const usersWithDirectPerms = db
-		.select({ userId: channelUserPermissions.userId, allow: channelUserPermissions.allow })
-		.from(channelUserPermissions)
-		.where(
-			and(
-				eq(channelUserPermissions.channelId, channelId),
-				permission ? eq(channelUserPermissions.permission, permission) : undefined,
-			),
-		)
-		.all();
-
-	const rolesWithPerms = db
-		.select({ roleId: channelRolePermissions.roleId })
-		.from(channelRolePermissions)
-		.where(
-			and(
-				eq(channelRolePermissions.channelId, channelId),
-				permission ? eq(channelRolePermissions.permission, permission) : undefined,
-				permission ? eq(channelRolePermissions.allow, true) : undefined,
-			),
-		)
-		.all();
-
-	const roleIds = rolesWithPerms.map((r) => r.roleId);
-
-	let usersWithRoles: { userId: number }[] = [];
-
-	if (roleIds.length > 0) {
-		usersWithRoles = db
-			.select({ userId: userRoles.userId })
-			.from(userRoles)
-			.where(inArray(userRoles.roleId, roleIds))
-			.all();
-	}
-
-	// get users with the owner role because they have access to everything all the time
-	const owners = db
-		.select({ userId: userRoles.userId })
-		.from(userRoles)
-		.where(eq(userRoles.roleId, OWNER_ROLE_ID))
-		.all();
-
-	// A user-level permission overrides the user's roles (as in getChannelsForUser
-	// and getAllChannelUserPermissions), so an explicit deny excludes a user that a
-	// role would otherwise let in.
-	const deniedUserIds = new Set(permission ? usersWithDirectPerms.filter((u) => !u.allow).map((u) => u.userId) : []);
-
-	const userIdSet = new Set<number>();
-
-	usersWithDirectPerms.forEach((u) => {
-		if (!permission || u.allow) userIdSet.add(u.userId);
-	});
-	usersWithRoles.forEach((u) => {
-		if (!deniedUserIds.has(u.userId)) userIdSet.add(u.userId);
-	});
-	owners.forEach((u) => userIdSet.add(u.userId));
-
-	return Array.from(userIdSet);
+	return [...viewers];
 };
 
-const getAffectedUserIdsForChannel = async (
-	channelId: number,
-	options?: { forceAllUsers?: boolean; permission?: ChannelPermission },
-): Promise<number[]> => resolveAffectedUserIdsForChannel(channelId, options) ?? [];
+export const getChannelViewerIds = async (channelId: number): Promise<number[]> =>
+	getChannelViewerIdsSync(channelId) ?? [];
 
-export const getChannelViewerIdsSync = (channelId: number): number[] | undefined =>
-	resolveAffectedUserIdsForChannel(channelId, { permission: ChannelPermission.VIEW_CHANNEL });
+export const getChannelOverrideSubjectIds = async (channelId: number): Promise<number[]> => {
+	const snapshot = loadUserGrantsForChannel(channelId);
+	if (!snapshot) return [];
+	if (!snapshot.channel.private) return allUserIds();
+	// These users' permission maps may have changed, including users who just lost access.
+	return [...new Set([...snapshot.byUser.keys(), ...snapshot.ownerIds])];
+};
 
 // Resolve both sides of role changes with the same synchronous viewer rules used
 // by live publishers. Snapshot before mutating roles; never await while resolving.
-export const getVisibleChannelIdsByUserSync = (userIds: number[]): Map<number, Set<number>> => {
-	const visibleByUser = new Map(userIds.map((userId) => [userId, new Set<number>()]));
-	for (const { id } of db.select({ id: channels.id }).from(channels).all()) {
-		for (const userId of getChannelViewerIdsSync(id) ?? []) {
-			visibleByUser.get(userId)?.add(id);
+export const getVisiblePrivateChannelIdsByUserSync = (userIds: number[]): Map<number, Set<number>> => {
+	const { byUser, channelIds, ownerIds } = loadPrivateViewGrantsForUsers(userIds);
+	const result = new Map<number, Set<number>>();
+	for (const [userId, byChannel] of byUser) {
+		const visible = new Set<number>();
+		for (const channelId of channelIds) {
+			if (canViewChannel(ownerIds.has(userId), byChannel.get(channelId) ?? { private: true, user: [], roles: [] }))
+				visible.add(channelId);
 		}
+		result.set(userId, visible);
 	}
-	return visibleByUser;
+	return result;
 };
 
 const selectUnreadCounts = (userId: number, channelId?: number) =>
@@ -334,4 +130,4 @@ const getChannelsReadStatesForUser = async (userId: number, channelId?: number):
 	return readStateMap;
 };
 
-export { getAffectedUserIdsForChannel, getAllChannelUserPermissions, getChannelsForUser, getChannelsReadStatesForUser };
+export { getChannelsReadStatesForUser };

@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { publishChannelPermissions, publishUser, publishUserChannelVisibility } from '../../db/publishers';
-import { getVisibleChannelIdsByUserSync } from '../../db/queries/channels';
+import { getVisiblePrivateChannelIdsByUserSync } from '../../db/queries/channels';
 import { userRoles } from '../../db/schema';
 import { invariant } from '../../utils/invariant';
 import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sessions';
@@ -37,7 +37,7 @@ const removeRoleRoute = protectedProcedure
 			message: 'User does not have this role',
 		});
 
-		const previousVisibleByUser = getVisibleChannelIdsByUserSync([input.userId]);
+		const previousVisibleByUser = getVisiblePrivateChannelIdsByUserSync([input.userId]);
 
 		await db.delete(userRoles).where(and(eq(userRoles.userId, input.userId), eq(userRoles.roleId, input.roleId)));
 

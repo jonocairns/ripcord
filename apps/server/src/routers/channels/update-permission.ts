@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { publishChannelPermissions, publishChannelVisibility } from '../../db/publishers';
-import { getAffectedUserIdsForChannel, getChannelViewerIdsSync } from '../../db/queries/channels';
+import { getChannelOverrideSubjectIds, getChannelViewerIdsSync } from '../../db/queries/channels';
 import { channelRolePermissions, channels, channelUserPermissions } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
@@ -82,7 +82,7 @@ const updatePermissionsRoute = protectedProcedure
 			}
 		});
 
-		const affectedUserIds = await getAffectedUserIdsForChannel(input.channelId);
+		const affectedUserIds = await getChannelOverrideSubjectIds(input.channelId);
 
 		// Order matters: permissions first (clients learn the channel is private
 		// before they lose it), then visibility, then eviction, so users losing

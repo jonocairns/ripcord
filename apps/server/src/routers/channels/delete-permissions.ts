@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { publishChannelPermissions, publishChannelVisibility } from '../../db/publishers';
-import { getAffectedUserIdsForChannel, getChannelViewerIdsSync } from '../../db/queries/channels';
+import { getChannelOverrideSubjectIds, getChannelViewerIdsSync } from '../../db/queries/channels';
 import { channelRolePermissions, channels, channelUserPermissions } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { invariant } from '../../utils/invariant';
@@ -38,7 +38,7 @@ const deletePermissionsRoute = protectedProcedure
 			await ctx.needsChannelPermission(channel.id, ChannelPermission.VIEW_CHANNEL);
 		}
 
-		const affectedUserIds = await getAffectedUserIdsForChannel(input.channelId);
+		const affectedUserIds = await getChannelOverrideSubjectIds(input.channelId);
 
 		const previousViewerIds = new Set(getChannelViewerIdsSync(input.channelId) ?? []);
 

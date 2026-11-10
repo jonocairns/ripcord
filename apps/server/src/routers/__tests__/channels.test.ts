@@ -3,7 +3,7 @@ import { ChannelPermission, ChannelType, ServerEvents } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { initTest } from '../../__tests__/helpers';
 import { tdb } from '../../__tests__/setup';
-import { getAffectedUserIdsForChannel, getChannelsReadStatesForUser } from '../../db/queries/channels';
+import { getChannelsReadStatesForUser, getChannelViewerIds } from '../../db/queries/channels';
 import { channels } from '../../db/schema';
 import { generateFileToken, verifyFileToken } from '../../helpers/files-crypto';
 import { pubsub } from '../../utils/pubsub';
@@ -1058,7 +1058,7 @@ describe('channel event visibility', () => {
 		});
 		await caller.channels.updatePermissions({ channelId: 1, userId: 2, permissions: [] });
 
-		expect(await getAffectedUserIdsForChannel(1, { permission: ChannelPermission.VIEW_CHANNEL })).not.toContain(2);
+		expect(await getChannelViewerIds(1)).not.toContain(2);
 
 		const memberEvents = recordChannelEvents(2);
 		const ownerEvents = recordChannelEvents(1);

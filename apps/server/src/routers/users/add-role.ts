@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { publishChannelPermissions, publishUser, publishUserChannelVisibility } from '../../db/publishers';
-import { getVisibleChannelIdsByUserSync } from '../../db/queries/channels';
+import { getVisiblePrivateChannelIdsByUserSync } from '../../db/queries/channels';
 import { getRole } from '../../db/queries/roles';
 import { userRoles } from '../../db/schema';
 import { invariant } from '../../utils/invariant';
@@ -42,7 +42,7 @@ const addRoleRoute = protectedProcedure
 			message: 'User already has this role',
 		});
 
-		const previousVisibleByUser = getVisibleChannelIdsByUserSync([input.userId]);
+		const previousVisibleByUser = getVisiblePrivateChannelIdsByUserSync([input.userId]);
 
 		await db.insert(userRoles).values({
 			userId: input.userId,

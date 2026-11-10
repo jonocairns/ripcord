@@ -1,7 +1,7 @@
 import type { Permission, TJoinedRole, TRole } from '@sharkord/shared';
 import { eq, getTableColumns, sql } from 'drizzle-orm';
 import { db } from '..';
-import { rolePermissions, roles, userRoles } from '../schema';
+import { rolePermissions, roles } from '../schema';
 
 type TQueryResult = TRole & {
 	permissions: string | null;
@@ -45,13 +45,4 @@ const getRoles = async (): Promise<TJoinedRole[]> => {
 	return results.map(parseRole);
 };
 
-const getUserRoleIds = async (userId: number): Promise<number[]> => {
-	const userRoleRecords = await db
-		.select({ roleId: userRoles.roleId })
-		.from(userRoles)
-		.where(eq(userRoles.userId, userId));
-
-	return userRoleRecords.map((ur) => ur.roleId);
-};
-
-export { getDefaultRole, getRole, getRoles, getUserRoleIds };
+export { getDefaultRole, getRole, getRoles };
