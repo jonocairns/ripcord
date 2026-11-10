@@ -40,3 +40,10 @@ export const hasChannelAccess = (
 	if (user.isOwner) return true;
 	return resolveChannelGrant(channel, ChannelPermission.VIEW_CHANNEL) && resolveChannelGrant(channel, permission);
 };
+
+// For listings and fan-out: can an existing, connected user see this channel.
+// It repeats the public, owner and VIEW_CHANNEL steps of hasChannelAccess and
+// leaves out its user checks; permission-policy-view.test.ts keeps the two in step.
+// Request authorization uses hasChannelAccess.
+export const canViewChannel = (isOwner: boolean, channel: TChannelGrants): boolean =>
+	!channel.private || isOwner || resolveChannelGrant(channel, ChannelPermission.VIEW_CHANNEL);

@@ -164,9 +164,9 @@ describe('password and role atomicity', () => {
 		const { caller } = await initTest();
 		const roleId = await caller.roles.add();
 		tdb.insert(userRoles).values({ userId: 2, roleId, createdAt: 1 }).run();
-		const original = channelQueries.getVisibleChannelIdsByUserSync;
+		const original = channelQueries.getVisiblePrivateChannelIdsByUserSync;
 		// Runs after the route's up-front checks and before its transaction.
-		const spy = spyOn(channelQueries, 'getVisibleChannelIdsByUserSync').mockImplementation((userIds) => {
+		const spy = spyOn(channelQueries, 'getVisiblePrivateChannelIdsByUserSync').mockImplementation((userIds) => {
 			tdb.update(roles).set({ isDefault: false }).run();
 			tdb.update(roles).set({ isDefault: true }).where(eq(roles.id, roleId)).run();
 			return original(userIds);

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { db } from '../../db';
 import { fallbackUsersToDefaultRoleSync } from '../../db/mutations/users';
 import { publishChannelPermissions, publishRole, publishUserChannelVisibility } from '../../db/publishers';
-import { getVisibleChannelIdsByUserSync } from '../../db/queries/channels';
+import { getVisiblePrivateChannelIdsByUserSync } from '../../db/queries/channels';
 import { getRole } from '../../db/queries/roles';
 import { roles, userRoles } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
@@ -42,7 +42,7 @@ const deleteRoleRoute = protectedProcedure
 			.where(eq(userRoles.roleId, role.id));
 
 		const affectedUserIds = affectedUsers.map((user) => user.userId);
-		const previousVisibleByUser = getVisibleChannelIdsByUserSync(affectedUserIds);
+		const previousVisibleByUser = getVisiblePrivateChannelIdsByUserSync(affectedUserIds);
 
 		db.transaction((tx) => {
 			// Re-read inside the transaction: another admin may have deleted this role

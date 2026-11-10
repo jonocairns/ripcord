@@ -1,10 +1,4 @@
-import {
-	ChannelPermission,
-	Permission,
-	ServerEvents,
-	type TChannel,
-	type TChannelUserPermissionsMap,
-} from '@sharkord/shared';
+import { Permission, ServerEvents, type TChannel, type TChannelUserPermissionsMap } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { toPublicChannel } from '../helpers/to-public-channel';
 import { pluginManager } from '../plugins';
@@ -13,11 +7,11 @@ import { invalidateUserAuthState } from '../utils/user-sessions';
 import { publishVoiceChannelSnapshot, publishVoiceChannelWithdrawal } from '../utils/voice-channel-visibility';
 import { db } from '.';
 import {
-	getAffectedUserIdsForChannel,
 	getAllChannelUserPermissions,
 	getChannelUnreadCountSync,
+	getChannelViewerIds,
 	getChannelViewerIdsSync,
-	getVisibleChannelIdsByUserSync,
+	getVisiblePrivateChannelIdsByUserSync,
 } from './queries/channels';
 import { getEmojiById } from './queries/emojis';
 import { getMessage } from './queries/messages';
@@ -28,9 +22,7 @@ import { categories, channels, users } from './schema';
 
 const publishMessage = async (messageId: number, channelId: number, type: 'create' | 'update' | 'delete') => {
 	if (type === 'delete') {
-		const affectedUserIds = await getAffectedUserIdsForChannel(channelId, {
-			permission: ChannelPermission.VIEW_CHANNEL,
-		});
+		const affectedUserIds = await getChannelViewerIds(channelId);
 
 		pubsub.publishFor(affectedUserIds, ServerEvents.MESSAGE_DELETE, {
 			messageId: messageId,
@@ -46,9 +38,7 @@ const publishMessage = async (messageId: number, channelId: number, type: 'creat
 
 	const targetEvent = type === 'create' ? ServerEvents.NEW_MESSAGE : ServerEvents.MESSAGE_UPDATE;
 
-	const affectedUserIds = await getAffectedUserIdsForChannel(channelId, {
-		permission: ChannelPermission.VIEW_CHANNEL,
-	});
+	const affectedUserIds = await getChannelViewerIds(channelId);
 
 	pubsub.publishFor(affectedUserIds, targetEvent, message);
 
@@ -119,9 +109,6 @@ const publishUser = async (userId: number | undefined, type: 'create' | 'update'
 
 	pubsub.publish(targetEvent, user);
 };
-
-const getChannelViewerIds = (channelId: number) =>
-	getAffectedUserIdsForChannel(channelId, { permission: ChannelPermission.VIEW_CHANNEL });
 
 // Channel events only reach users who may see the channel, so a private
 // channel's name and topic stay hidden from everyone else.
@@ -230,7 +217,7 @@ const publishUserChannelVisibility = (
 		.from(channels)
 		.all()
 		.filter((channel) => channel.private);
-	const visibleByUser = getVisibleChannelIdsByUserSync(userIds);
+	const visibleByUser = getVisiblePrivateChannelIdsByUserSync(userIds);
 
 	for (const userId of userIds) {
 		const previousChannelIds = previousVisibleByUser.get(userId);

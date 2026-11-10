@@ -1,6 +1,6 @@
 import { ChannelPermission, Permission, ServerEvents } from '@sharkord/shared';
 import { z } from 'zod';
-import { getAffectedUserIdsForChannel } from '../../db/queries/channels';
+import { getChannelViewerIds } from '../../db/queries/channels';
 import { protectedProcedure } from '../../utils/trpc';
 
 const signalTypingRoute = protectedProcedure
@@ -15,9 +15,7 @@ const signalTypingRoute = protectedProcedure
 		await ctx.needsPermission(Permission.SEND_MESSAGES);
 		await ctx.needsChannelPermission(input.channelId, ChannelPermission.SEND_MESSAGES);
 
-		const affectedUserIds = await getAffectedUserIdsForChannel(input.channelId, {
-			permission: ChannelPermission.VIEW_CHANNEL,
-		});
+		const affectedUserIds = await getChannelViewerIds(input.channelId);
 
 		ctx.pubsub.publishFor(affectedUserIds, ServerEvents.MESSAGE_TYPING, {
 			channelId: input.channelId,
