@@ -4,9 +4,79 @@ import { DisconnectCode } from '@sharkord/shared';
 import type { TDisconnectInfo } from '@/features/server/types';
 
 const effects: string[] = [];
+const trace: string[] = [];
+let online = true;
+let captureVoice = false;
+let pendingVoice = false;
+let mustChangePassword = false;
+const push = (name: string) => {
+	effects.push(name);
+	trace.push(name);
+};
+const { createSessionAuthenticationGate: realGate } = await import('../../session-authentication-gate');
+mock.module('@/lib/session-authentication-gate', () => ({
+	createSessionAuthenticationGate: () => {
+		const gate = realGate();
+		return {
+			wait: gate.wait,
+			invalidate: () => {
+				trace.push('gate:invalidate');
+				gate.invalidate();
+			},
+			authenticate: () => {
+				trace.push('gate:authenticate');
+				gate.authenticate();
+			},
+			cancel: (reason: unknown) => {
+				trace.push('gate:cancel');
+				gate.cancel(reason);
+			},
+		};
+	},
+}));
+const nativeSetTimeout = globalThis.setTimeout;
+const nativeClearTimeout = globalThis.clearTimeout;
+const timers = new Map<unknown, { callback: () => void; live: boolean }>();
+globalThis.setTimeout = Object.assign((callback: TimerHandler, delay?: number) => {
+	if ((delay ?? 0) < 1000) return nativeSetTimeout(callback, delay);
+	assert.equal(typeof callback, 'function');
+	const id = nativeSetTimeout(() => {}, 0);
+	timers.set(id, {
+		callback: () => {
+			if (typeof callback === 'function') callback();
+		},
+		live: true,
+	});
+	trace.push(`timer:arm:${delay}`);
+	return id;
+}, nativeSetTimeout);
+globalThis.clearTimeout = (id) => {
+	if (id !== undefined && timers.has(id)) {
+		trace.push('timer:clear');
+		const timer = timers.get(id);
+		if (timer) timer.live = false;
+	} else Reflect.apply(nativeClearTimeout, globalThis, [id]);
+};
+const liveTimers = () => [...timers.values()].filter((timer) => timer.live);
+const fireTimer = () => {
+	const live = liveTimers();
+	assert.equal(live.length, 1);
+	const timer = live[0];
+	assert.ok(timer);
+	timer.live = false;
+	trace.push('timer:fire');
+	timer.callback();
+};
+const listeners = new Map<() => void, boolean>();
+const fireOnline = () => {
+	for (const [fn, once] of [...listeners]) {
+		if (once) listeners.delete(fn);
+		fn();
+	}
+};
 const noop = () => {};
 const record = (name: string) => () => {
-	effects.push(name);
+	push(name);
 };
 const deferred = <T>() => {
 	let resolve!: (value: T) => void;
@@ -23,15 +93,16 @@ const state = {
 	connecting: false,
 	resetState: () => {
 		disconnectInfo = undefined;
-		effects.push('reset');
+		push('reset');
 	},
 	setConnecting: (value: boolean) => {
 		state.connecting = value;
-		effects.push(`loading:${value}`);
+		push(`loading:${value}`);
 	},
 	setInitialData: record('snapshot'),
 	setDisconnectInfo: (info: TDisconnectInfo | undefined) => {
 		disconnectInfo = info;
+		trace.push(info ? `disconnectInfo:${info.code}` : 'disconnectInfo:cleared');
 	},
 	bumpServerRejoinNonce: record('nonce'),
 };
@@ -73,7 +144,29 @@ const modules: Record<string, string[]> = {
 for (const [path, names] of Object.entries(modules)) {
 	mock.module(path, () => Object.fromEntries(names.map((name) => [name, record(name)])));
 }
-mock.module('@/features/server/voice/reconnect-lab-debug', () => ({ isVoiceReconnectOnline: () => true }));
+mock.module('@/features/server/voice/reconnect-lab-debug', () => ({ isVoiceReconnectOnline: () => online }));
+mock.module('@/features/server/voice/reconnect-coordinator', () =>
+	Object.fromEntries(
+		(modules['@/features/server/voice/reconnect-coordinator'] ?? []).map((name) => [
+			name,
+			(...args: unknown[]) => {
+				effects.push(name);
+				trace.push(name === 'clearVoiceReconnectRecovery' ? `${name}:${args[0]}` : name);
+				if (name === 'captureVoiceReconnectIntentForCurrentSession') return captureVoice ? true : undefined;
+				if (name === 'getValidPendingVoiceReconnect') return pendingVoice ? {} : undefined;
+				return undefined;
+			},
+		]),
+	),
+);
+mock.module('@/helpers/desktop-diagnostics', () => ({
+	recordDesktopDiagnostic: (event: string, data: { reconnecting?: boolean }) => {
+		effects.push('recordDesktopDiagnostic');
+		trace.push(
+			`recordDesktopDiagnostic:${event}${event === 'websocket_opened' ? `:reconnecting=${data.reconnecting}` : ''}`,
+		);
+	},
+}));
 mock.module('@/features/server/reconnect-event-buffer', () =>
 	Object.fromEntries(
 		[
@@ -95,13 +188,13 @@ mock.module('@/helpers/storage', () => ({
 	getRefreshToken: () => (hasAuth ? 'refresh' : undefined),
 	clearAuthToken: () => {
 		hasAuth = false;
-		effects.push('clearAuthToken');
+		push('clearAuthToken');
 	},
 }));
 const refresh = deferred<boolean>();
 mock.module('@/helpers/auth', () => ({
 	refreshAccessToken: () => {
-		effects.push('refresh');
+		push('refresh');
 		return refresh.promise;
 	},
 	revokeRefreshToken: noop,
@@ -136,7 +229,7 @@ mock.module('@trpc/client', () => ({
 		const socket = {
 			...options,
 			close: async () => {
-				effects.push('close');
+				push('close');
 			},
 			connection: { ws: { readyState: 1, close: record('raw-close') } },
 		};
@@ -146,21 +239,532 @@ mock.module('@trpc/client', () => ({
 	createTRPCProxyClient: () => ({
 		others: {
 			handshake: {
-				query: () =>
-					holdHandshake ? handshake.promise : Promise.resolve({ hasPassword: false, handshakeHash: 'hash' }),
+				query: () => {
+					trace.push('handshake');
+					return holdHandshake ? handshake.promise : Promise.resolve({ hasPassword: false, handshakeHash: 'hash' });
+				},
 			},
 			joinServer: {
-				query: () => (holdJoin ? join.promise : Promise.resolve({ mustChangePassword: false, commands: {} })),
+				query: () => {
+					trace.push('join');
+					return holdJoin ? join.promise : Promise.resolve({ mustChangePassword, commands: {} });
+				},
 			},
 		},
 	}),
 }));
 // Browser/module-load dependencies are mocked explicitly; run in an isolated process.
-Object.assign(globalThis, { window: {}, WebSocket: { OPEN: 1 } });
+Object.assign(globalThis, {
+	window: {
+		addEventListener: (type: string, fn: () => void, options?: { once?: boolean }) => {
+			trace.push(`listener:add:${type}`);
+			listeners.set(fn, options?.once ?? false);
+		},
+		removeEventListener: (type: string, fn: () => void) => {
+			trace.push(`listener:remove:${type}`);
+			listeners.delete(fn);
+		},
+	},
+	WebSocket: { OPEN: 1 },
+});
 const trpc = await import('../../trpc');
 const actions = await import('../../../features/server/actions');
 const mode = process.argv[2];
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+const newModes = [
+	'trace-connect',
+	'trace-drop-resume',
+	'trace-drop-resume-voice',
+	'trace-terminal-kicked',
+	'trace-terminal-banned',
+	'trace-terminal-after-drop',
+	'trace-cleanup',
+	'trace-cleanup-pending',
+	'trace-replace',
+	'trace-replace-pending',
+	'trace-grace-expiry',
+	'grace-rearm',
+	'grace-offline',
+	'open-offline-defer',
+	'open-offline-socket-closed',
+	'open-online-socket-closed',
+	'open-without-drop',
+	'first-connect-drop',
+	'must-change-password',
+	'edge-b-replacement-drop',
+	'edge-c-online',
+	'edge-c-expiry',
+	'gate',
+	'gate-readystate',
+];
+const literalTraces: Record<string, string[]> = {
+	'trace-connect': [
+		'loading:true',
+		'pauseStreamObservability',
+		'pauseDiagnosticDelivery',
+		'stopClientTracing',
+		'gate:invalidate',
+		'handshake',
+		'join',
+		'logDebug',
+		'snapshot',
+		'disconnectInfo:cleared',
+		'setErrorReportingUser',
+		'configureDiagnosticDelivery',
+		'setErrorReportingIdentity',
+		'configureStreamObservability',
+		'getStreamClientSessionId',
+		'configureTraceBackend',
+		'setPluginCommands',
+		'gate:authenticate',
+		'markVoiceReconnectSessionAuthenticated',
+		'authenticateStreamObservability',
+		'authenticateDiagnosticDelivery',
+		'recordVoiceDiagnostic',
+		'loading:false',
+	],
+	'trace-drop-resume': [
+		'recordVoiceDiagnostic',
+		'recordDesktopDiagnostic:websocket_closed',
+		'gate:invalidate',
+		'pauseStreamObservability',
+		'pauseDiagnosticDelivery',
+		'stopClientTracing',
+		'markVoiceReconnectSessionUnauthenticated',
+		'captureVoiceReconnectIntentForCurrentSession',
+		'timer:arm:20000',
+		'recordDesktopDiagnostic:websocket_opened:reconnecting=true',
+		'pauseStreamObservability',
+		'pauseDiagnosticDelivery',
+		'stopClientTracing',
+		'gate:invalidate',
+		'timer:clear',
+		'logDebug',
+		'handshake',
+		'join',
+		'logDebug',
+		'startReconnectSnapshotEventBuffer',
+		'snapshot',
+		'disconnectInfo:cleared',
+		'setErrorReportingUser',
+		'configureDiagnosticDelivery',
+		'setErrorReportingIdentity',
+		'configureStreamObservability',
+		'getStreamClientSessionId',
+		'configureTraceBackend',
+		'setPluginCommands',
+		'flushReconnectSnapshotEventBuffer',
+		'nonce',
+		'gate:authenticate',
+		'markVoiceReconnectSessionAuthenticated',
+		'authenticateStreamObservability',
+		'authenticateDiagnosticDelivery',
+		'recordVoiceDiagnostic',
+		'getValidPendingVoiceReconnect',
+	],
+	'trace-drop-resume-voice': [
+		'recordVoiceDiagnostic',
+		'recordDesktopDiagnostic:websocket_closed',
+		'gate:invalidate',
+		'pauseStreamObservability',
+		'pauseDiagnosticDelivery',
+		'stopClientTracing',
+		'markVoiceReconnectSessionUnauthenticated',
+		'captureVoiceReconnectIntentForCurrentSession',
+		'ensureVoiceReconnectStarted',
+		'timer:arm:20000',
+		'recordDesktopDiagnostic:websocket_opened:reconnecting=true',
+		'pauseStreamObservability',
+		'pauseDiagnosticDelivery',
+		'stopClientTracing',
+		'gate:invalidate',
+		'timer:clear',
+		'logDebug',
+		'handshake',
+		'join',
+		'logDebug',
+		'startReconnectSnapshotEventBuffer',
+		'snapshot',
+		'disconnectInfo:cleared',
+		'setErrorReportingUser',
+		'configureDiagnosticDelivery',
+		'setErrorReportingIdentity',
+		'configureStreamObservability',
+		'getStreamClientSessionId',
+		'configureTraceBackend',
+		'setPluginCommands',
+		'flushReconnectSnapshotEventBuffer',
+		'nonce',
+		'gate:authenticate',
+		'markVoiceReconnectSessionAuthenticated',
+		'authenticateStreamObservability',
+		'authenticateDiagnosticDelivery',
+		'recordVoiceDiagnostic',
+		'getValidPendingVoiceReconnect',
+		'logDebug',
+		'ensureVoiceReconnectStarted',
+	],
+	'trace-terminal-kicked': [
+		'recordVoiceDiagnostic',
+		'recordDesktopDiagnostic:websocket_closed',
+		'gate:invalidate',
+		'pauseStreamObservability',
+		'pauseDiagnosticDelivery',
+		'stopClientTracing',
+		'clearVoiceReconnectRecovery:kicked',
+		'clearStreamObservability',
+		'clearDiagnosticDelivery',
+		'stopClientTracing',
+		'setErrorReportingIdentity',
+		'gate:cancel',
+		'close',
+		'resetServerScreens',
+		'reset',
+		'setErrorReportingUser',
+		'resetDialogs',
+		'resetApp',
+		'playSound',
+		'disconnectInfo:4000',
+	],
+	'trace-terminal-banned': [
+		'recordVoiceDiagnostic',
+		'recordDesktopDiagnostic:websocket_closed',
+		'gate:invalidate',
+		'pauseStreamObservability',
+		'pauseDiagnosticDelivery',
+		'stopClientTracing',
+		'clearVoiceReconnectRecovery:banned',
+		'clearStreamObservability',
+		'clearDiagnosticDelivery',
+		'stopClientTracing',
+		'setErrorReportingIdentity',
+		'gate:cancel',
+		'close',
+		'resetServerScreens',
+		'reset',
+		'setErrorReportingUser',
+		'resetDialogs',
+		'resetApp',
+		'playSound',
+		'disconnectInfo:4001',
+	],
+	'trace-terminal-after-drop': [
+		'recordVoiceDiagnostic',
+		'recordDesktopDiagnostic:websocket_closed',
+		'gate:invalidate',
+		'pauseStreamObservability',
+		'pauseDiagnosticDelivery',
+		'stopClientTracing',
+		'listener:remove:online',
+		'clearVoiceReconnectRecovery:kicked',
+		'clearStreamObservability',
+		'clearDiagnosticDelivery',
+		'stopClientTracing',
+		'setErrorReportingIdentity',
+		'gate:cancel',
+		'timer:clear',
+		'close',
+		'resetServerScreens',
+		'reset',
+		'setErrorReportingUser',
+		'resetDialogs',
+		'resetApp',
+		'playSound',
+		'disconnectInfo:4000',
+	],
+	'trace-cleanup': [
+		'clearStreamObservability',
+		'clearDiagnosticDelivery',
+		'stopClientTracing',
+		'setErrorReportingIdentity',
+		'gate:cancel',
+		'close',
+		'resetServerScreens',
+		'reset',
+		'setErrorReportingUser',
+		'resetDialogs',
+		'resetApp',
+	],
+	'trace-cleanup-pending': [
+		'clearStreamObservability',
+		'clearDiagnosticDelivery',
+		'stopClientTracing',
+		'setErrorReportingIdentity',
+		'gate:cancel',
+		'listener:remove:online',
+		'timer:clear',
+		'close',
+		'resetServerScreens',
+		'reset',
+		'setErrorReportingUser',
+		'resetDialogs',
+		'resetApp',
+	],
+	'trace-replace': [
+		'refresh',
+		'logDebug',
+		'close',
+		'pauseStreamObservability',
+		'pauseDiagnosticDelivery',
+		'stopClientTracing',
+		'gate:invalidate',
+		'handshake',
+		'logDebug',
+		'clearReconnectSnapshotEventBuffer',
+		'clearStreamObservability',
+		'clearDiagnosticDelivery',
+		'stopClientTracing',
+		'setErrorReportingIdentity',
+		'gate:cancel',
+		'close',
+		'resetServerScreens',
+		'reset',
+		'setErrorReportingUser',
+		'resetDialogs',
+		'resetApp',
+		'disconnectInfo:1006',
+	],
+	'trace-replace-pending': [
+		'listener:remove:online',
+		'timer:clear',
+		'close',
+		'pauseStreamObservability',
+		'pauseDiagnosticDelivery',
+		'stopClientTracing',
+		'gate:invalidate',
+	],
+	'trace-grace-expiry': [
+		'timer:fire',
+		'clearStreamObservability',
+		'clearDiagnosticDelivery',
+		'stopClientTracing',
+		'setErrorReportingIdentity',
+		'gate:cancel',
+		'close',
+		'resetServerScreens',
+		'reset',
+		'setErrorReportingUser',
+		'resetDialogs',
+		'resetApp',
+		'playSound',
+		'disconnectInfo:1006',
+	],
+};
+if (mode && newModes.includes(mode)) {
+	type Socket = (typeof sockets)[number];
+	const drop = (socket: Socket, code = 1006) => {
+		socket.connection.ws.readyState = 3;
+		socket.onClose({ code, reason: 'reason', wasClean: code !== 1006 });
+	};
+	const reopen = (socket: Socket) => {
+		socket.connection.ws.readyState = 1;
+		socket.onOpen();
+	};
+	const socketAt = (index: number) => {
+		const socket = sockets[index];
+		assert.ok(socket);
+		return socket;
+	};
+	const deferredState = () => {
+		drop(socketAt(0));
+		online = false;
+		reopen(socketAt(0));
+	};
+	const wait = () => trpc.waitForTRPCSessionAuthentication(new AbortController().signal);
+	const pending = async (promise: Promise<void>) => {
+		let settled = false;
+		void promise.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		await tick();
+		assert.equal(settled, false);
+	};
+	let start = 0;
+	if (mode === 'first-connect-drop' || mode.startsWith('edge-c-')) {
+		holdHandshake = true;
+		const connecting = actions.connect();
+		drop(socketAt(0));
+		if (mode === 'first-connect-drop') {
+			fireTimer();
+			assert.equal(trpc.getTRPCClientIfInitialized(), null);
+			assert.equal(disconnectInfo?.code, 1006);
+		} else {
+			online = false;
+			reopen(socketAt(0));
+			handshake.resolve({ hasPassword: false, handshakeHash: 'hash' });
+			await connecting;
+			assert.ok(trace.includes('gate:authenticate'));
+			assert.equal(liveTimers().length, 1);
+			assert.equal(listeners.size, 1);
+			online = true;
+			start = trace.length;
+			if (mode === 'edge-c-online') {
+				fireOnline();
+				await tick();
+				assert.ok(trace.slice(start).includes('timer:clear'));
+				assert.ok(trace.slice(start).includes('handshake'));
+			} else {
+				fireTimer();
+				assert.equal(trpc.getTRPCClientIfInitialized(), null);
+				assert.equal(disconnectInfo?.code, 1006);
+			}
+		}
+	} else {
+		mustChangePassword = mode === 'must-change-password';
+		captureVoice = mode === 'trace-drop-resume-voice';
+		pendingVoice = captureVoice;
+		await actions.connect();
+		const socket = socketAt(0);
+		start = mode === 'trace-connect' ? 0 : trace.length;
+		if (['trace-drop-resume', 'trace-drop-resume-voice', 'must-change-password', 'gate-readystate'].includes(mode)) {
+			let waiting: Promise<void> | undefined;
+			if (mode === 'gate-readystate') {
+				socket.connection.ws.readyState = 3;
+				const before = trace.length;
+				waiting = wait();
+				await pending(waiting);
+				assert.deepEqual(trace.slice(before), ['gate:invalidate']);
+			}
+			drop(socket, 4013);
+			reopen(socket);
+			await tick();
+			if (waiting) await waiting;
+			if (mustChangePassword) {
+				assert.ok(!trace.includes('gate:authenticate'));
+				assert.ok(!trace.includes('markVoiceReconnectSessionAuthenticated'));
+				assert.equal(trace.filter((item) => item === 'handshake').length, 2);
+			}
+		} else if (mode.startsWith('trace-terminal-')) {
+			if (mode === 'trace-terminal-after-drop') {
+				deferredState();
+				start = trace.length;
+			}
+			drop(socket, mode === 'trace-terminal-banned' ? DisconnectCode.BANNED : DisconnectCode.KICKED);
+		} else if (mode === 'trace-cleanup' || mode === 'trace-cleanup-pending' || mode === 'trace-replace-pending') {
+			if (mode !== 'trace-cleanup') {
+				deferredState();
+				start = trace.length;
+			}
+			if (mode === 'trace-replace-pending') trpc.reconnectTRPC('first');
+			else trpc.cleanup();
+		} else if (mode === 'trace-grace-expiry') {
+			drop(socket);
+			state.connected = false;
+			start = trace.length;
+			fireTimer();
+			assert.equal(trpc.getTRPCClientIfInitialized(), null);
+		} else if (mode === 'grace-rearm') {
+			drop(socket);
+			drop(socket, 4013);
+			assert.deepEqual(
+				trace.slice(start).filter((item) => item.startsWith('timer:')),
+				['timer:arm:20000', 'timer:clear', 'timer:arm:20000'],
+			);
+			assert.equal(liveTimers().length, 1);
+			fireTimer();
+			assert.equal(disconnectInfo?.code, 4013);
+		} else if (mode === 'grace-offline') {
+			drop(socket);
+			online = false;
+			start = trace.length;
+			fireTimer();
+			assert.deepEqual(trace.slice(start), ['timer:fire', 'timer:arm:20000']);
+			assert.ok(trpc.getTRPCClientIfInitialized());
+			assert.equal(liveTimers().length, 1);
+			online = true;
+			fireTimer();
+			assert.equal(trpc.getTRPCClientIfInitialized(), null);
+		} else if (mode.startsWith('open-offline-') || mode === 'open-online-socket-closed') {
+			deferredState();
+			assert.equal(liveTimers().length, 1);
+			assert.ok(trace.includes('listener:add:online'));
+			assert.equal(trace.filter((item) => item === 'handshake').length, 1);
+			online = true;
+			start = trace.length;
+			if (mode !== 'open-offline-defer') socket.connection.ws.readyState = 3;
+			if (mode === 'open-online-socket-closed') socket.onOpen();
+			else fireOnline();
+			await tick();
+			assert.ok(trace.slice(start).includes('listener:remove:online'));
+			if (mode === 'open-offline-defer') {
+				assert.ok(trace.slice(start).includes('timer:clear'));
+				assert.ok(trace.slice(start).includes('handshake'));
+				assert.ok(trace.slice(start).includes('snapshot'));
+			} else {
+				assert.ok(!trace.slice(start).includes('timer:clear'));
+				assert.ok(!trace.slice(start).includes('handshake'));
+				assert.equal(liveTimers().length, 1);
+			}
+		} else if (mode === 'open-without-drop') {
+			socket.onOpen();
+			assert.deepEqual(trace.slice(start), [
+				'recordDesktopDiagnostic:websocket_opened:reconnecting=false',
+				'pauseStreamObservability',
+				'pauseDiagnosticDelivery',
+				'stopClientTracing',
+				'gate:invalidate',
+			]);
+			await pending(wait());
+		} else if (mode === 'trace-replace' || mode === 'edge-b-replacement-drop') {
+			holdHandshake = true;
+			drop(socket, 4013);
+			reopen(socket);
+			handshake.reject(new MockTRPCClientError('expired', { code: 'UNAUTHORIZED' }));
+			await tick();
+			start = trace.indexOf('refresh');
+			handshake = deferred<{ hasPassword: boolean; handshakeHash: string }>();
+			refresh.resolve(true);
+			await tick();
+			if (mode === 'trace-replace') {
+				handshake.reject(new Error('server unavailable'));
+				await tick();
+			} else {
+				start = trace.length;
+				drop(socketAt(1));
+				reopen(socketAt(1));
+				await tick();
+				assert.ok(!trace.slice(start).includes('handshake'));
+				assert.ok(!trace.slice(start).includes('logDebug'));
+				assert.equal(liveTimers().length, 0);
+				assert.ok(trpc.getTRPCClientIfInitialized());
+			}
+		} else if (mode === 'gate') {
+			await wait();
+			drop(socket);
+			const resumed = wait();
+			await pending(resumed);
+			reopen(socket);
+			await tick();
+			await resumed;
+			drop(socket);
+			const replaced = wait();
+			trpc.reconnectTRPC('different-host');
+			await pending(replaced);
+			await actions.connect();
+			await replaced;
+			drop(socketAt(sockets.length - 1));
+			const cancelled = wait();
+			const rejected = assert.rejects(cancelled, trpc.TRPCClientUnavailableError);
+			trpc.cleanup();
+			await rejected;
+			await assert.rejects(wait(), trpc.TRPCClientUnavailableError);
+			await actions.connect();
+			const controller = new AbortController();
+			const reason = new Error('aborted');
+			controller.abort(reason);
+			await assert.rejects(trpc.waitForTRPCSessionAuthentication(controller.signal), (error) => error === reason);
+		}
+	}
+	if (mode.startsWith('trace-')) {
+		assert.deepEqual(trace.slice(start), literalTraces[mode]);
+	}
+	process.exit(0);
+}
 if (mode === 'initial-reopen' || mode === 'close-refresh') {
 	holdHandshake = true;
 	const connecting = actions.connect();
