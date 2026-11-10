@@ -10,6 +10,7 @@ import { withRemoteTraceContext } from '../helpers/remote-trace-context';
 import { startSpanObservation } from '../helpers/tracing';
 import { logger } from '../logger';
 import type { TConnectionInfo } from '../types';
+import { IS_DEVELOPMENT } from './env';
 import { invariant } from './invariant';
 import type { pubsub } from './pubsub';
 import { createRateLimiter, getClientRateLimitKey } from './rate-limiters/rate-limiter';
@@ -51,7 +52,7 @@ export type Context = {
 	saveUserIp: (userId: number, ip: string) => Promise<void>;
 };
 
-const t = initTRPC.context<Context>().create();
+const t = initTRPC.context<Context>().create({ isDev: IS_DEVELOPMENT });
 
 const tracingMiddleware = t.middleware(async ({ path, type, next, getRawInput, ctx }) => {
 	const raw = await getRawInput();
