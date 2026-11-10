@@ -11,8 +11,9 @@ const updateVoiceStateRoute = protectedProcedure
 			soundMuted: z.boolean().optional(),
 			webcamEnabled: z.boolean().optional(),
 			sharingScreen: z.boolean().optional(),
-			// Client-monotonic ordering token. The permission checks below are
-			// async, so two rapid updates can apply out of order without it.
+			// Client-monotonic ordering token. Updates can reach the server out of
+			// order (separate requests, awaited middleware), so without it two rapid
+			// updates could apply in the wrong order.
 			seq: z.number().int().nonnegative().optional(),
 		}),
 	)

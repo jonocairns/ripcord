@@ -1,4 +1,4 @@
-import { OWNER_ROLE_ID, Permission } from '@sharkord/shared';
+import { OWNER_ROLE_ID } from '@sharkord/shared';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { TChannelGrants, TUserGrants } from '../../utils/permission-policy';
 import { db } from '..';
@@ -23,11 +23,9 @@ export const loadUserGrants = (userId: number): TUserGrants | undefined => {
 		.leftJoin(rolePermissions, eq(roles.id, rolePermissions.roleId))
 		.where(eq(userRoles.userId, userId))
 		.all();
-	const permissions = new Set<Permission>();
+	const permissions = new Set<string>();
 	for (const row of rows) {
-		for (const permission of Object.values(Permission)) {
-			if (permission === row.permission) permissions.add(permission);
-		}
+		if (row.permission !== null) permissions.add(row.permission);
 	}
 	return { banned: user.banned, isOwner: rows.some((row) => row.roleId === OWNER_ROLE_ID), permissions };
 };

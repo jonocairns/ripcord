@@ -3,7 +3,9 @@ import { ChannelPermission, type Permission } from '@sharkord/shared';
 export type TUserGrants = {
 	banned: boolean;
 	isOwner: boolean;
-	permissions: ReadonlySet<Permission>;
+	// Raw role permission strings, including ones no longer in the Permission
+	// enum: role grants compare a role's stored permissions with these.
+	permissions: ReadonlySet<string>;
 };
 
 type TChannelGrant = { permission: string; allow: boolean };
