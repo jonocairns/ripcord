@@ -67,12 +67,11 @@ const updateRoleRoute = protectedProcedure
 			return updatedRole;
 		});
 
-		await Promise.all([
-			publishRole(updatedRole.id, 'update'),
-			revalidateActiveVoiceSessions({
-				userIds: affectedUsers.map((user) => user.userId),
-			}),
-		]);
+		// Order matters: publish the role change before evicting affected seats.
+		await publishRole(updatedRole.id, 'update');
+		await revalidateActiveVoiceSessions({
+			userIds: affectedUsers.map((user) => user.userId),
+		});
 		enqueueActivityLog({
 			type: ActivityLogType.UPDATED_ROLE,
 			userId: ctx.user.id,

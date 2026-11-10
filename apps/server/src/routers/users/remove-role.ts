@@ -41,14 +41,10 @@ const removeRoleRoute = protectedProcedure
 
 		await db.delete(userRoles).where(and(eq(userRoles.userId, input.userId), eq(userRoles.roleId, input.roleId)));
 
-		await Promise.all([
-			publishUser(input.userId, 'update'),
-			publishChannelPermissions([input.userId]),
-			revalidateActiveVoiceSessions({
-				userIds: [input.userId],
-			}),
-		]);
+		// Order matters: user and permissions first, then visibility, then eviction.
+		await Promise.all([publishUser(input.userId, 'update'), publishChannelPermissions([input.userId])]);
 		await publishUserChannelVisibility([input.userId], previousVisibleByUser);
+		await revalidateActiveVoiceSessions({ userIds: [input.userId] });
 	});
 
 export { removeRoleRoute };
