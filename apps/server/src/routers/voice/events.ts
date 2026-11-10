@@ -35,9 +35,11 @@ const onUserLeaveVoiceRoute = protectedProcedure.subscription(async ({ ctx }) =>
 
 const onUserUpdateVoiceStateRoute = protectedProcedure.subscription(async ({ ctx }) => {
 	return observable<Events[ServerEvents.USER_VOICE_STATE_UPDATE]>((observer) => {
-		// A restore batched with this subscription can reconcile state before
-		// tRPC attaches the observable. Subscribe first, then replay own state so
-		// faster permission checks cannot lose the reconnect mute confirmation.
+		// tRPC attaches a subscription's listener only after this procedure's
+		// middleware finishes, while other procedures in the same frame (such as a
+		// voice restore) run concurrently and can publish own state first. That
+		// one-shot event would be lost, so subscribe, then replay current own state
+		// in the same synchronous step. Replay plus live delivery is idempotent.
 		const subscription = ctx.pubsub.subscribeFor(ctx.user.id, ServerEvents.USER_VOICE_STATE_UPDATE).subscribe(observer);
 		const runtime = VoiceRuntime.findRuntimeByUserId(ctx.user.id);
 		if (runtime) {
