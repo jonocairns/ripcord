@@ -33,13 +33,13 @@ const updatePermissionsRoute = protectedProcedure
 
 		const permissions = input.isCreate ? [] : input.permissions;
 
-		await db.transaction(async (tx) => {
+		await db.transaction((tx) => {
 			if (input.userId) {
-				await tx
-					.delete(channelUserPermissions)
+				tx.delete(channelUserPermissions)
 					.where(
 						and(eq(channelUserPermissions.channelId, input.channelId), eq(channelUserPermissions.userId, input.userId)),
-					);
+					)
+					.run();
 
 				const values = allPermissions.map((perm) => ({
 					channelId: input.channelId,
@@ -49,13 +49,13 @@ const updatePermissionsRoute = protectedProcedure
 					createdAt: Date.now(),
 				}));
 
-				await tx.insert(channelUserPermissions).values(values);
+				tx.insert(channelUserPermissions).values(values).run();
 			} else if (input.roleId) {
-				await tx
-					.delete(channelRolePermissions)
+				tx.delete(channelRolePermissions)
 					.where(
 						and(eq(channelRolePermissions.channelId, input.channelId), eq(channelRolePermissions.roleId, input.roleId)),
-					);
+					)
+					.run();
 
 				const values = allPermissions.map((perm) => ({
 					channelId: input.channelId,
@@ -65,7 +65,7 @@ const updatePermissionsRoute = protectedProcedure
 					createdAt: Date.now(),
 				}));
 
-				await tx.insert(channelRolePermissions).values(values);
+				tx.insert(channelRolePermissions).values(values).run();
 			}
 		});
 

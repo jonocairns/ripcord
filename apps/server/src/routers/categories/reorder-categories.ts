@@ -16,18 +16,18 @@ const reorderCategoriesRoute = protectedProcedure
 	.mutation(async ({ input, ctx }) => {
 		await ctx.needsPermission(Permission.MANAGE_CATEGORIES);
 
-		await db.transaction(async (tx) => {
+		await db.transaction((tx) => {
 			for (let i = 0; i < input.categoryIds.length; i++) {
 				const categoryId = input.categoryIds[i]!;
 				const newPosition = i + 1;
 
-				await tx
-					.update(categories)
+				tx.update(categories)
 					.set({
 						position: newPosition,
 						updatedAt: Date.now(),
 					})
-					.where(eq(categories.id, categoryId));
+					.where(eq(categories.id, categoryId))
+					.run();
 			}
 		});
 
