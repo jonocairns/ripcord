@@ -476,15 +476,20 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 				return 'cleared';
 			}
 
-			const authenticated = selectReconnectAuthenticated(stateBeforeSubscribe);
-			if (authenticated) {
-				// The legacy fast path accepted an already-authenticated socket before
-				// consulting expiry; keep that behavior during this mechanical move.
+			// Check expiry before accepting an authenticated socket: after an app
+			// teardown the provider can remount long after the reconnect intent
+			// expired, and restoring then would silently rejoin voice with a live mic.
+			// An authenticated socket is still accepted exactly at the deadline.
+			const remainingMs = getLiveReconnectDeadline(command) - ports.now();
+			if (remainingMs < 0) {
+				return 'expired';
+			}
+
+			if (selectReconnectAuthenticated(stateBeforeSubscribe)) {
 				return 'authenticated';
 			}
 
-			const remainingMs = getLiveReconnectDeadline(command) - ports.now();
-			if (remainingMs <= 0) {
+			if (remainingMs === 0) {
 				return 'expired';
 			}
 

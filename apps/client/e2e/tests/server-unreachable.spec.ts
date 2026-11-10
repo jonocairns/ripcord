@@ -45,7 +45,7 @@ test('voice restores after an online server outage reaches the disconnect screen
 			await expect(page.getByTitle('Leave voice')).toBeVisible({ timeout: 30_000 });
 			await expectMicrophoneFlow(page, 'outbound');
 			await expectMicrophoneFlow(watcher.page, 'inbound');
-			await expect(page.getByText(/failed to reconnect|something went wrong/i)).toHaveCount(0);
+			await expect(page.getByText(/reconnect failed|failed to reconnect|something went wrong/i)).toHaveCount(0);
 		},
 		attachDiagnostics: async () => {},
 		resumeOutage: () => restoreOutage?.(),
