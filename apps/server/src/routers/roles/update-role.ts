@@ -2,7 +2,7 @@ import { ActivityLogType, OWNER_ROLE_ID, Permission } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
-import { syncRolePermissions } from '../../db/mutations/roles';
+import { syncRolePermissionsSync } from '../../db/mutations/roles';
 import { publishRole } from '../../db/publishers';
 import { getRole } from '../../db/queries/roles';
 import { roles, userRoles } from '../../db/schema';
@@ -44,19 +44,28 @@ const updateRoleRoute = protectedProcedure
 			.from(userRoles)
 			.where(eq(userRoles.roleId, input.roleId));
 
-		const updatedRole = await db
-			.update(roles)
-			.set({
-				name: input.name,
-				color: input.color,
-			})
-			.where(eq(roles.id, input.roleId))
-			.returning()
-			.get();
+		const updatedRole = db.transaction((tx) => {
+			const updatedRole = tx
+				.update(roles)
+				.set({
+					name: input.name,
+					color: input.color,
+				})
+				.where(eq(roles.id, input.roleId))
+				.returning()
+				.get();
 
-		if (updatedRole.id !== OWNER_ROLE_ID) {
-			await syncRolePermissions(updatedRole.id, input.permissions);
-		}
+			invariant(updatedRole, {
+				code: 'NOT_FOUND',
+				message: 'Role not found',
+			});
+
+			if (updatedRole.id !== OWNER_ROLE_ID) {
+				syncRolePermissionsSync(tx, updatedRole.id, input.permissions);
+			}
+
+			return updatedRole;
+		});
 
 		await Promise.all([
 			publishRole(updatedRole.id, 'update'),
