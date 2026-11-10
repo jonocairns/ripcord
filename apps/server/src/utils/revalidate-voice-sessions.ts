@@ -1,76 +1,8 @@
-import { ChannelPermission, OWNER_ROLE_ID, Permission, ServerEvents } from '@sharkord/shared';
-import { eq } from 'drizzle-orm';
-import { db } from '../db';
-import { getAllChannelUserPermissions } from '../db/queries/channels';
-import { getUserById } from '../db/queries/users';
-import { channels } from '../db/schema';
-import { getUserRoles } from '../routers/users/get-user-roles';
+import { ChannelPermission, Permission, ServerEvents } from '@sharkord/shared';
+import { loadChannelGrants, loadUserGrants } from '../db/queries/permissions';
 import { VoiceRuntime } from '../runtimes/voice';
+import { hasChannelAccess, hasGlobalPermission } from './permission-policy';
 import { publishVoiceSidebarEvent } from './voice-sidebar-events';
-
-const hasPermission = async (userId: number, targetPermission: Permission): Promise<boolean> => {
-	const user = await getUserById(userId);
-
-	if (!user || user.banned) {
-		return false;
-	}
-
-	const roles = await getUserRoles(user.id);
-
-	if (roles.some((role) => role.id === OWNER_ROLE_ID)) {
-		return true;
-	}
-
-	return roles.some((role) => role.permissions.includes(targetPermission));
-};
-
-const hasChannelPermission = async (
-	userId: number,
-	channelId: number,
-	targetPermission: ChannelPermission,
-): Promise<boolean> => {
-	const channel = await db
-		.select({
-			private: channels.private,
-		})
-		.from(channels)
-		.where(eq(channels.id, channelId))
-		.limit(1)
-		.get();
-
-	if (!channel) {
-		return false;
-	}
-
-	if (!channel.private) {
-		return true;
-	}
-
-	const user = await getUserById(userId);
-
-	if (!user || user.banned) {
-		return false;
-	}
-
-	const roles = await getUserRoles(user.id);
-
-	if (roles.some((role) => role.id === OWNER_ROLE_ID)) {
-		return true;
-	}
-
-	const userChannelPermissions = await getAllChannelUserPermissions(userId);
-	const channelInfo = userChannelPermissions[channelId];
-
-	if (!channelInfo) {
-		return false;
-	}
-
-	if (!channelInfo.permissions[ChannelPermission.VIEW_CHANNEL]) {
-		return false;
-	}
-
-	return channelInfo.permissions[targetPermission] === true;
-};
 
 // Mirrors the permission checks performed by `joinVoiceRoute`:
 // `Permission.JOIN_VOICE_CHANNELS` + `ChannelPermission.JOIN`. SPEAK, WEBCAM,
@@ -78,12 +10,11 @@ const hasChannelPermission = async (
 // user with JOIN but without SPEAK is a legitimate listen-only participant and
 // must not be evicted by the revalidation loop.
 const canUserRemainInVoiceChannel = async (userId: number, channelId: number): Promise<boolean> => {
-	const [canJoinVoiceChannels, canJoinChannel] = await Promise.all([
-		hasPermission(userId, Permission.JOIN_VOICE_CHANNELS),
-		hasChannelPermission(userId, channelId, ChannelPermission.JOIN),
-	]);
-
-	return canJoinVoiceChannels && canJoinChannel;
+	const user = loadUserGrants(userId);
+	return (
+		hasGlobalPermission(user, Permission.JOIN_VOICE_CHANNELS) &&
+		hasChannelAccess(user, loadChannelGrants(userId, channelId), ChannelPermission.JOIN)
+	);
 };
 
 const revalidateActiveVoiceSessions = async (options?: {

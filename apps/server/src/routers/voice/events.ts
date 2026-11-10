@@ -1,6 +1,7 @@
 import { ServerEvents, type StreamKind } from '@sharkord/shared';
 import { observable } from '@trpc/server/observable';
 import { VoiceRuntime } from '../../runtimes/voice';
+import type { Events } from '../../utils/pubsub';
 import { protectedProcedure } from '../../utils/trpc';
 
 type TVoiceProducerEvent = {
@@ -33,7 +34,19 @@ const onUserLeaveVoiceRoute = protectedProcedure.subscription(async ({ ctx }) =>
 });
 
 const onUserUpdateVoiceStateRoute = protectedProcedure.subscription(async ({ ctx }) => {
-	return ctx.pubsub.subscribeFor(ctx.user.id, ServerEvents.USER_VOICE_STATE_UPDATE);
+	return observable<Events[ServerEvents.USER_VOICE_STATE_UPDATE]>((observer) => {
+		// tRPC attaches a subscription's listener only after this procedure's
+		// middleware finishes, while other procedures in the same frame (such as a
+		// voice restore) run concurrently and can publish own state first. That
+		// one-shot event would be lost, so subscribe, then replay current own state
+		// in the same synchronous step. Replay plus live delivery is idempotent.
+		const subscription = ctx.pubsub.subscribeFor(ctx.user.id, ServerEvents.USER_VOICE_STATE_UPDATE).subscribe(observer);
+		const runtime = VoiceRuntime.findRuntimeByUserId(ctx.user.id);
+		if (runtime) {
+			observer.next({ channelId: runtime.id, userId: ctx.user.id, state: runtime.getUserState(ctx.user.id) });
+		}
+		return () => subscription.unsubscribe();
+	});
 });
 
 const onVoiceSessionReplacedRoute = protectedProcedure.subscription(async ({ ctx }) => {

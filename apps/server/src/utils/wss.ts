@@ -1,9 +1,8 @@
 import type http from 'node:http';
 import {
 	ActivityLogType,
-	ChannelPermission,
+	type ChannelPermission,
 	DisconnectCode,
-	OWNER_ROLE_ID,
 	type Permission,
 	ServerEvents,
 	type TConnectionParams,
@@ -12,13 +11,10 @@ import {
 } from '@sharkord/shared';
 import { TRPCError } from '@trpc/server';
 import { applyWSSHandler, type CreateWSSContextFnOptions } from '@trpc/server/adapters/ws';
-import { eq } from 'drizzle-orm';
 import { WebSocket, WebSocketServer } from 'ws';
 import { config } from '../config';
-import { db } from '../db';
-import { getAllChannelUserPermissions } from '../db/queries/channels';
+import { loadChannelGrants, loadUserGrants } from '../db/queries/permissions';
 import { getUserById, getUserByToken } from '../db/queries/users';
-import { channels } from '../db/schema';
 import { reportServerError } from '../error-reporting';
 import { getClientIpOptions } from '../helpers/client-ip-options';
 import { consumeErrorTraceContext } from '../helpers/error-trace-context';
@@ -26,11 +22,11 @@ import { getWsInfo } from '../helpers/get-ws-info';
 import { logger } from '../logger';
 import { enqueueActivityLog } from '../queues/activity-log';
 import { appRouter } from '../routers';
-import { getUserRoles } from '../routers/users/get-user-roles';
 import { VoiceRuntime } from '../runtimes/voice';
 import { invariant } from './invariant';
+import { hasChannelAccess, hasGlobalPermission } from './permission-policy';
 import { pubsub } from './pubsub';
-import type { Context } from './trpc';
+import type { Context, TChannelPermissionChecker } from './trpc';
 import {
 	getOpenUserSockets,
 	getTrackedClients,
@@ -116,65 +112,19 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 		connectionWs.presenceStatus = decodedUser.presenceStatus;
 	}
 
-	const hasPermission = async (targetPermission: Permission | Permission[]) => {
-		const user = await getUserById(decodedUser.id);
+	const hasPermission = async (targetPermission: Permission | Permission[]) =>
+		hasGlobalPermission(loadUserGrants(decodedUser.id), targetPermission);
 
-		if (!user) return false;
-
-		const roles = await getUserRoles(user.id);
-
-		const hasOwnerRole = roles.some((r) => r.id === OWNER_ROLE_ID);
-
-		if (hasOwnerRole) return true; // owner always has all permissions
-
-		const permissionsSet = new Set<Permission>();
-
-		for (const role of roles) {
-			for (const permission of role.permissions) {
-				permissionsSet.add(permission);
-			}
-		}
-
-		if (Array.isArray(targetPermission)) {
-			return targetPermission.every((p) => permissionsSet.has(p));
-		}
-
-		return permissionsSet.has(targetPermission);
+	// A fresh snapshot per operation, never cached on the socket. Use the
+	// returned checker only for the current operation's related decisions.
+	const createChannelPermissionChecker = (channelId: number): TChannelPermissionChecker => {
+		const channel = loadChannelGrants(decodedUser.id, channelId);
+		const user = channel?.private ? loadUserGrants(decodedUser.id) : undefined;
+		return (permission) => hasChannelAccess(user, channel, permission);
 	};
 
-	const hasChannelPermission = async (channelId: number, targetPermission: ChannelPermission) => {
-		const channel = await db
-			.select({
-				private: channels.private,
-			})
-			.from(channels)
-			.where(eq(channels.id, channelId))
-			.limit(1)
-			.get();
-
-		if (!channel) return false;
-
-		if (!channel.private) return true;
-
-		const user = await getUserById(decodedUser.id);
-
-		if (!user) return false;
-
-		const roles = await getUserRoles(user.id);
-
-		const hasOwnerRole = roles.some((r) => r.id === OWNER_ROLE_ID);
-
-		if (hasOwnerRole) return true; // owner always has all permissions
-
-		const userChannelPermissions = await getAllChannelUserPermissions(decodedUser.id);
-
-		const channelInfo = userChannelPermissions[channelId];
-
-		if (!channelInfo) return false;
-		if (!channelInfo.permissions[ChannelPermission.VIEW_CHANNEL]) return false;
-
-		return channelInfo.permissions[targetPermission] === true;
-	};
+	const hasChannelPermission = async (channelId: number, targetPermission: ChannelPermission) =>
+		createChannelPermissionChecker(channelId)(targetPermission);
 
 	const isCurrentClient = (client: TTrackedWebSocket) =>
 		client.token === token && client.clientInstanceId === clientInstanceId;
@@ -339,6 +289,7 @@ const createContext = async ({ info, req, res }: CreateWSSContextFnOptions): Pro
 		getClientInstanceId,
 		hasPermission,
 		needsPermission,
+		createChannelPermissionChecker,
 		hasChannelPermission,
 		needsChannelPermission,
 		getOwnWs,
