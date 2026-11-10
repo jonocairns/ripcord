@@ -1,6 +1,18 @@
 import { expect, test } from 'bun:test';
 
 for (const mode of [
+	'rejoin-failure',
+	'rejoin-client-error',
+	'rejoin-retry-failure',
+	'rejoin-untyped-transport',
+	'rejoin-auth-failure',
+	'rejoin-forbidden',
+	'rejoin-refresh-rejected',
+	'rejoin-refresh-offline',
+	'rejoin-password',
+	'kicked',
+	'banned',
+	'logout',
 	'success',
 	'failure',
 	'connect-failure',

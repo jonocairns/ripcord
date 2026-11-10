@@ -64,6 +64,18 @@ The voice session machine should remain downstream of this application-session
 authentication gate. It may restore voice only after the latest WebSocket
 context has successfully completed `joinServer`.
 
+## When the final silent rejoin gives up
+
+If the last silent rejoin attempt fails for a recoverable reason (server error,
+transport failure, or a refresh that could not reach the server), the app tears
+down to the disconnect screen rather than the connect screen. Credentials and
+voice reconnect recovery are kept, so the disconnect screen's automatic retry
+rejoins the server and restores voice, the same as the grace-period teardown.
+Terminal outcomes (rejected credentials after refresh, kick, ban, logout) keep
+their existing behaviour and drop voice recovery. A password-required exit
+returns to the connect screen and leaves the voice intent in place, so entering
+the password within the reconnect window still restores voice.
+
 ## Acceptance coverage
 
 Add a Playwright fault-injection scenario that:
