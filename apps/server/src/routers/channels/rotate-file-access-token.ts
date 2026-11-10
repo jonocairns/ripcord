@@ -1,4 +1,4 @@
-import { ActivityLogType, Permission } from '@sharkord/shared';
+import { ActivityLogType, ChannelPermission, Permission } from '@sharkord/shared';
 import { randomUUIDv7 } from 'bun';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -24,6 +24,10 @@ const rotateFileAccessTokenRoute = protectedProcedure
 			code: 'NOT_FOUND',
 			message: 'Channel not found',
 		});
+
+		if (channel.private) {
+			await ctx.needsChannelPermission(channel.id, ChannelPermission.VIEW_CHANNEL);
+		}
 
 		const newToken = randomUUIDv7();
 
