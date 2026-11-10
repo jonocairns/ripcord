@@ -7,8 +7,10 @@ type TMessagePage = {
 
 type TLoadMessagePageDeps = {
 	query: () => Promise<TMessagePage>;
+	isCurrent?: () => boolean;
 	getLoadedMessages: () => TJoinedMessage[];
 	getFileLinkVersion: () => string;
+	applyLatestMessagePage?: (messages: TJoinedMessage[]) => void;
 	addMessages: (messages: TJoinedMessage[]) => void;
 	refreshFileAccessTokens: () => Promise<void>;
 };
@@ -16,10 +18,15 @@ type TLoadMessagePageDeps = {
 const loadMessagePage = async (deps: TLoadMessagePageDeps): Promise<number | null> => {
 	const fileLinkVersion = deps.getFileLinkVersion();
 	const { messages: rawPage, nextCursor } = await deps.query();
+	if (deps.isCurrent && !deps.isCurrent()) return nextCursor;
 	const existingIds = new Set(deps.getLoadedMessages().map((message) => message.id));
-	const page = [...rawPage].reverse().filter((message) => !existingIds.has(message.id));
+	const oldestFirst = [...rawPage].reverse();
+	const page = deps.applyLatestMessagePage
+		? oldestFirst
+		: oldestFirst.filter((message) => !existingIds.has(message.id));
 
-	deps.addMessages(page);
+	if (deps.applyLatestMessagePage) deps.applyLatestMessagePage(page);
+	else deps.addMessages(page);
 
 	// A rotation or rejoin refresh only reached files already loaded at the time.
 	// This page may still carry older links, so refresh after adding its files.

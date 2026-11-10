@@ -14,6 +14,7 @@ import {
 	getMessageFiles,
 	type TFileAccessToken,
 } from './file-access-tokens';
+import { recordMessageMutation } from './message-page-request';
 
 export const addMessages = (
 	channelId: number,
@@ -21,6 +22,9 @@ export const addMessages = (
 	opts: { prepend?: boolean } = {},
 	isSubscriptionMessage = false,
 ) => {
+	if (isSubscriptionMessage) {
+		for (const message of messages) recordMessageMutation(channelId, { message, insert: true });
+	}
 	const state = useServerStore.getState();
 	const selectedChannelId = selectedChannelIdSelector(state);
 
@@ -49,11 +53,16 @@ export const addMessages = (
 	}
 };
 
+export const applyLatestMessagePage = (channelId: number, messages: TJoinedMessage[]) =>
+	useServerStore.getState().applyLatestMessagePage({ channelId, messages });
+
 export const updateMessage = (channelId: number, message: TJoinedMessage) => {
+	recordMessageMutation(channelId, { message });
 	useServerStore.getState().updateMessage({ channelId, message });
 };
 
 export const deleteMessage = (channelId: number, messageId: number) => {
+	recordMessageMutation(channelId, { deletedId: messageId });
 	useServerStore.getState().deleteMessage({ channelId, messageId });
 };
 
