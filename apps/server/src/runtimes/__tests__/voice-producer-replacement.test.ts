@@ -303,13 +303,13 @@ describe('VoiceRuntime stream state reset on producer close', () => {
 		const screen = makeManualCloseProducer('screen');
 		runtime.addProducer(1, StreamKind.SCREEN, screen.producer);
 
-		const publishSpy = spyOn(pubsub, 'publish');
+		const publishSpy = spyOn(pubsub, 'publishFor');
 
 		screen.producer.close();
 		screen.fireCloseEvent();
 
 		expect(runtime.getUserState(1).sharingScreen).toBe(false);
-		expect(publishSpy).toHaveBeenCalledWith(ServerEvents.USER_VOICE_STATE_UPDATE, {
+		expect(publishSpy).toHaveBeenCalledWith([1], ServerEvents.USER_VOICE_STATE_UPDATE, {
 			channelId: runtime.id,
 			userId: 1,
 			state: expect.objectContaining({ sharingScreen: false }),
@@ -348,13 +348,13 @@ describe('VoiceRuntime stream state reset on producer close', () => {
 		const video = makeManualCloseProducer('video');
 		runtime.addProducer(1, StreamKind.VIDEO, video.producer);
 
-		const publishSpy = spyOn(pubsub, 'publish');
+		const publishSpy = spyOn(pubsub, 'publishFor');
 
 		video.producer.close();
 		video.fireCloseEvent();
 
 		expect(runtime.getUserState(1).webcamEnabled).toBe(false);
-		expect(publishSpy).toHaveBeenCalledWith(ServerEvents.USER_VOICE_STATE_UPDATE, {
+		expect(publishSpy).toHaveBeenCalledWith([1], ServerEvents.USER_VOICE_STATE_UPDATE, {
 			channelId: runtime.id,
 			userId: 1,
 			state: expect.objectContaining({ webcamEnabled: false }),
@@ -374,7 +374,7 @@ describe('VoiceRuntime stream state reset on producer close', () => {
 		const second = makeManualCloseProducer('second');
 		runtime.addProducer(1, StreamKind.SCREEN, second.producer);
 
-		const publishSpy = spyOn(pubsub, 'publish');
+		const publishSpy = spyOn(pubsub, 'publishFor');
 
 		first.fireCloseEvent();
 
@@ -392,7 +392,7 @@ describe('VoiceRuntime stream state reset on producer close', () => {
 		const first = makeSyncCloseProducer('first');
 		runtime.addProducer(1, StreamKind.SCREEN, first.producer);
 
-		const publishSpy = spyOn(pubsub, 'publish');
+		const publishSpy = spyOn(pubsub, 'publishFor');
 
 		const second = makeSyncCloseProducer('second');
 		runtime.addProducer(1, StreamKind.SCREEN, second.producer);
@@ -413,13 +413,13 @@ describe('VoiceRuntime stream state reset on producer close', () => {
 		const screen = makeManualCloseProducer('screen');
 		runtime.addProducer(1, StreamKind.SCREEN, screen.producer);
 
-		const publishSpy = spyOn(pubsub, 'publish');
+		const publishSpy = spyOn(pubsub, 'publishFor');
 
 		runtime.removeUser(1);
 		screen.fireCloseEvent();
 
 		expect(runtime.getUser(1)).toBeUndefined();
-		expect(publishSpy).not.toHaveBeenCalledWith(ServerEvents.USER_VOICE_STATE_UPDATE, expect.anything());
+		expect(publishSpy).not.toHaveBeenCalledWith([1], ServerEvents.USER_VOICE_STATE_UPDATE, expect.anything());
 
 		publishSpy.mockRestore();
 	});

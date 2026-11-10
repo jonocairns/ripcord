@@ -23,34 +23,34 @@ const isUserStillJoinedToVoiceChannel = (userId: number, channelId: number): boo
 	return runtime?.getUser(userId) !== undefined;
 };
 
-// these events are broadcast to ALL users (for UI population in the sidebar)
+// these events are sent to channel viewers and the subject user (for UI population in the sidebar)
 const onUserJoinVoiceRoute = protectedProcedure.subscription(async ({ ctx }) => {
-	return ctx.pubsub.subscribe(ServerEvents.USER_JOIN_VOICE);
+	return ctx.pubsub.subscribeFor(ctx.user.id, ServerEvents.USER_JOIN_VOICE);
 });
 
 const onUserLeaveVoiceRoute = protectedProcedure.subscription(async ({ ctx }) => {
-	return ctx.pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE);
+	return ctx.pubsub.subscribeFor(ctx.user.id, ServerEvents.USER_LEAVE_VOICE);
 });
 
 const onUserUpdateVoiceStateRoute = protectedProcedure.subscription(async ({ ctx }) => {
-	return ctx.pubsub.subscribe(ServerEvents.USER_VOICE_STATE_UPDATE);
+	return ctx.pubsub.subscribeFor(ctx.user.id, ServerEvents.USER_VOICE_STATE_UPDATE);
 });
 
 const onVoiceSessionReplacedRoute = protectedProcedure.subscription(async ({ ctx }) => {
 	return ctx.pubsub.subscribeFor(ctx.user.id, ServerEvents.VOICE_SESSION_REPLACED);
 });
 
-// these events are broadcast to ALL users (for external stream UI in the sidebar)
+// these events are sent to channel viewers and the subject user (for external stream UI in the sidebar)
 const onVoiceAddExternalStreamRoute = protectedProcedure.subscription(async ({ ctx }) => {
-	return ctx.pubsub.subscribe(ServerEvents.VOICE_ADD_EXTERNAL_STREAM);
+	return ctx.pubsub.subscribeFor(ctx.user.id, ServerEvents.VOICE_ADD_EXTERNAL_STREAM);
 });
 
 const onVoiceUpdateExternalStreamRoute = protectedProcedure.subscription(async ({ ctx }) => {
-	return ctx.pubsub.subscribe(ServerEvents.VOICE_UPDATE_EXTERNAL_STREAM);
+	return ctx.pubsub.subscribeFor(ctx.user.id, ServerEvents.VOICE_UPDATE_EXTERNAL_STREAM);
 });
 
 const onVoiceRemoveExternalStreamRoute = protectedProcedure.subscription(async ({ ctx }) => {
-	return ctx.pubsub.subscribe(ServerEvents.VOICE_REMOVE_EXTERNAL_STREAM);
+	return ctx.pubsub.subscribeFor(ctx.user.id, ServerEvents.VOICE_REMOVE_EXTERNAL_STREAM);
 });
 
 // these events are channel-scoped (only sent to users in the same voice channel)

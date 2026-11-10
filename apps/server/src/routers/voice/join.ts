@@ -5,6 +5,7 @@ import { logger } from '../../logger';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { type Context, protectedProcedure, rateLimitedProcedure } from '../../utils/trpc';
 import { clearVoiceRestoreBlockAfterKick } from '../../utils/voice-kick-guard';
+import { publishVoiceSidebarEvent } from '../../utils/voice-sidebar-events';
 import { getVoiceJoinTarget, prepareVoiceJoinBootstrap, voiceJoinInputSchema } from './bootstrap';
 import { createVoiceJoinService, type TVoiceJoinPresenceEvent, VoiceJoinSupersededError } from './join-service';
 import {
@@ -99,7 +100,7 @@ const createVoiceJoinRequestContext = (ctx: Context) => ({
 const publishVoiceJoinPresence = (ctx: Context, event: TVoiceJoinPresenceEvent) => {
 	switch (event.type) {
 		case 'leave':
-			ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
+			publishVoiceSidebarEvent(ServerEvents.USER_LEAVE_VOICE, {
 				channelId: event.channelId,
 				userId: event.userId,
 				reconnecting: event.reconnecting,
@@ -112,7 +113,7 @@ const publishVoiceJoinPresence = (ctx: Context, event: TVoiceJoinPresenceEvent) 
 			});
 			return;
 		case 'join':
-			ctx.pubsub.publish(ServerEvents.USER_JOIN_VOICE, {
+			publishVoiceSidebarEvent(ServerEvents.USER_JOIN_VOICE, {
 				channelId: event.channelId,
 				userId: event.userId,
 				state: event.state,

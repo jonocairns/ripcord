@@ -10,8 +10,14 @@ import { toPublicChannel } from '../helpers/to-public-channel';
 import { pluginManager } from '../plugins';
 import { pubsub } from '../utils/pubsub';
 import { invalidateUserAuthState } from '../utils/user-sessions';
+import { publishVoiceChannelSnapshot, publishVoiceChannelWithdrawal } from '../utils/voice-channel-visibility';
 import { db } from '.';
-import { getAffectedUserIdsForChannel, getAllChannelUserPermissions, getChannelsForUser } from './queries/channels';
+import {
+	getAffectedUserIdsForChannel,
+	getAllChannelUserPermissions,
+	getChannelViewerIdsSync,
+	getVisibleChannelIdsByUserSync,
+} from './queries/channels';
 import { getEmojiById } from './queries/emojis';
 import { getMessage } from './queries/messages';
 import { getRole } from './queries/roles';
@@ -156,20 +162,30 @@ const publishChannelFileAccessChanged = async (channelId: number) => {
 // can see it now and a delete if they cannot. Both are idempotent on clients,
 // so users whose access did not change are unaffected. Call it after
 // publishChannelPermissions: a client that loses the channel it has open
-// checks the new permissions while the channel is still in its store.
-const publishChannelVisibility = async (channelId: number, userIds: number[], previousChannel?: TChannel) => {
+// checks the new permissions while the channel is still in its store. Voice
+// convergence only reaches users whose access changed from the before snapshot.
+const publishChannelVisibility = async (
+	channelId: number,
+	userIds: number[],
+	previousViewerIds: ReadonlySet<number>,
+	previousChannel?: TChannel,
+) => {
 	if (userIds.length === 0) return;
 
 	const channel = await db.select().from(channels).where(eq(channels.id, channelId)).get();
 
 	if (!channel) return;
 
-	const viewerIds = new Set(await getChannelViewerIds(channelId));
+	const viewerIds = new Set(getChannelViewerIdsSync(channelId) ?? []);
 	const canView = userIds.filter((userId) => viewerIds.has(userId));
 	const cannotView = userIds.filter((userId) => !viewerIds.has(userId));
 
 	if (canView.length > 0) {
 		pubsub.publishFor(canView, ServerEvents.CHANNEL_CREATE, toPublicChannel(channel));
+		publishVoiceChannelSnapshot(
+			channelId,
+			canView.filter((userId) => !previousViewerIds.has(userId)),
+		);
 	}
 
 	if (cannotView.length > 0) {
@@ -183,38 +199,42 @@ const publishChannelVisibility = async (channelId: number, userIds: number[], pr
 			});
 			await publishChannelPermissions(cannotView);
 		}
+		publishVoiceChannelWithdrawal(
+			channelId,
+			cannotView.filter((userId) => previousViewerIds.has(userId)),
+		);
 		pubsub.publishFor(cannotView, ServerEvents.CHANNEL_DELETE, channelId);
 	}
 };
 
 // Same convergence for a change to the users themselves (role added, removed or
 // deleted), which can change their access to every private channel at once.
-const publishUserChannelVisibility = async (userIds: number[]) => {
+const publishUserChannelVisibility = (
+	userIds: number[],
+	previousVisibleByUser: ReadonlyMap<number, ReadonlySet<number>>,
+) => {
 	if (userIds.length === 0) return;
 
-	const allChannels = await db.select().from(channels);
-	const privateChannels = allChannels.filter((channel) => channel.private);
+	const privateChannels = db
+		.select()
+		.from(channels)
+		.all()
+		.filter((channel) => channel.private);
+	const visibleByUser = getVisibleChannelIdsByUserSync(userIds);
 
-	if (privateChannels.length === 0) return;
-
-	await Promise.all(
-		userIds.map(async (userId) => {
-			const visibleChannels = await getChannelsForUser(userId, allChannels);
-			const visibleChannelIds = new Set(visibleChannels.map((channel) => channel.id));
-
-			for (const channel of visibleChannels) {
-				if (!channel.private) continue;
-
+	for (const userId of userIds) {
+		const previousChannelIds = previousVisibleByUser.get(userId);
+		const visibleChannelIds = visibleByUser.get(userId);
+		for (const channel of privateChannels) {
+			if (visibleChannelIds?.has(channel.id)) {
 				pubsub.publishFor(userId, ServerEvents.CHANNEL_CREATE, toPublicChannel(channel));
+				if (!previousChannelIds?.has(channel.id)) publishVoiceChannelSnapshot(channel.id, [userId]);
+			} else {
+				if (previousChannelIds?.has(channel.id)) publishVoiceChannelWithdrawal(channel.id, [userId]);
+				pubsub.publishFor(userId, ServerEvents.CHANNEL_DELETE, channel.id);
 			}
-
-			for (const { id } of privateChannels) {
-				if (visibleChannelIds.has(id)) continue;
-
-				pubsub.publishFor(userId, ServerEvents.CHANNEL_DELETE, id);
-			}
-		}),
-	);
+		}
+	}
 };
 
 const publishSettings = async () => {

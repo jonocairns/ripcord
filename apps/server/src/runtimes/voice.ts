@@ -27,6 +27,7 @@ import { recordServerStreamEvent } from '../stream-observability';
 import { invariant } from '../utils/invariant';
 import { mediaSoupWorker, webRtcServer, webRtcServerListenInfo, webRtcServerListenInfos } from '../utils/mediasoup';
 import { pubsub } from '../utils/pubsub';
+import { publishVoiceSidebarEvent } from '../utils/voice-sidebar-events';
 import type {
 	TVoiceTransportPairDisposalCause,
 	TVoiceTransportPairObservationEvent,
@@ -598,7 +599,7 @@ class VoiceRuntime {
 
 		this.updateUserState(userId, flag === 'sharingScreen' ? { sharingScreen: false } : { webcamEnabled: false });
 
-		pubsub.publish(ServerEvents.USER_VOICE_STATE_UPDATE, {
+		publishVoiceSidebarEvent(ServerEvents.USER_VOICE_STATE_UPDATE, {
 			channelId: this.id,
 			userId,
 			state: this.getUserState(userId),
@@ -1673,7 +1674,7 @@ class VoiceRuntime {
 						video: !!internal.producers.videoProducer,
 					};
 
-					pubsub.publish(ServerEvents.VOICE_UPDATE_EXTERNAL_STREAM, {
+					publishVoiceSidebarEvent(ServerEvents.VOICE_UPDATE_EXTERNAL_STREAM, {
 						channelId: this.id,
 						streamId,
 						stream: existingStream,
@@ -1698,7 +1699,7 @@ class VoiceRuntime {
 		delete this.externalStreamsInternal[streamId];
 		delete this.state.externalStreams[streamId];
 
-		pubsub.publish(ServerEvents.VOICE_REMOVE_EXTERNAL_STREAM, {
+		publishVoiceSidebarEvent(ServerEvents.VOICE_REMOVE_EXTERNAL_STREAM, {
 			channelId: this.id,
 			streamId,
 		});
@@ -1780,7 +1781,7 @@ class VoiceRuntime {
 			};
 		}
 
-		pubsub.publish(ServerEvents.VOICE_UPDATE_EXTERNAL_STREAM, {
+		publishVoiceSidebarEvent(ServerEvents.VOICE_UPDATE_EXTERNAL_STREAM, {
 			channelId: this.id,
 			streamId,
 			stream: publicStream,

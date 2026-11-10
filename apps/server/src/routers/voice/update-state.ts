@@ -2,6 +2,7 @@ import { ChannelPermission, Permission, ServerEvents } from '@sharkord/shared';
 import { z } from 'zod';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { protectedProcedure } from '../../utils/trpc';
+import { publishVoiceSidebarEvent } from '../../utils/voice-sidebar-events';
 
 const updateVoiceStateRoute = protectedProcedure
 	.input(
@@ -49,7 +50,7 @@ const updateVoiceStateRoute = protectedProcedure
 
 		const newState = runtime.getUserState(ctx.user.id);
 
-		ctx.pubsub.publish(ServerEvents.USER_VOICE_STATE_UPDATE, {
+		publishVoiceSidebarEvent(ServerEvents.USER_VOICE_STATE_UPDATE, {
 			channelId,
 			userId: ctx.user.id,
 			state: newState,

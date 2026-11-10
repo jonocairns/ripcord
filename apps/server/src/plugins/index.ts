@@ -29,6 +29,7 @@ import { PLUGINS_PATH } from '../helpers/paths';
 import { logger } from '../logger';
 import { VoiceRuntime } from '../runtimes/voice';
 import { pubsub } from '../utils/pubsub';
+import { publishVoiceSidebarEvent } from '../utils/voice-sidebar-events';
 import { eventBus } from './event-bus';
 
 type PluginModule = {
@@ -614,7 +615,7 @@ class PluginManager {
 
 						const stream = channel.getState().externalStreams[streamId]!;
 
-						pubsub.publish(ServerEvents.VOICE_ADD_EXTERNAL_STREAM, {
+						publishVoiceSidebarEvent(ServerEvents.VOICE_ADD_EXTERNAL_STREAM, {
 							channelId: options.channelId,
 							streamId,
 							stream,

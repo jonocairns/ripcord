@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { publishChannelPermissions, publishChannelVisibility } from '../../db/publishers';
-import { getAffectedUserIdsForChannel } from '../../db/queries/channels';
+import { getAffectedUserIdsForChannel, getChannelViewerIdsSync } from '../../db/queries/channels';
 import { channelRolePermissions, channelUserPermissions } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
 import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sessions';
@@ -29,6 +29,8 @@ const deletePermissionsRoute = protectedProcedure
 
 		const affectedUserIds = await getAffectedUserIdsForChannel(input.channelId);
 
+		const previousViewerIds = new Set(getChannelViewerIdsSync(input.channelId) ?? []);
+
 		await db.transaction((tx) => {
 			if (input.userId) {
 				tx.delete(channelUserPermissions)
@@ -45,14 +47,15 @@ const deletePermissionsRoute = protectedProcedure
 			}
 		});
 
-		await Promise.all([
-			publishChannelPermissions(affectedUserIds),
-			revalidateActiveVoiceSessions({
-				userIds: affectedUserIds,
-				channelIds: [input.channelId],
-			}),
-		]);
-		await publishChannelVisibility(input.channelId, affectedUserIds);
+		// Order matters: permissions first (clients learn the channel is private
+		// before they lose it), then visibility, then eviction, so users losing
+		// access in the same change still receive the evicted member's leave.
+		await publishChannelPermissions(affectedUserIds);
+		await publishChannelVisibility(input.channelId, affectedUserIds, previousViewerIds);
+		await revalidateActiveVoiceSessions({
+			userIds: affectedUserIds,
+			channelIds: [input.channelId],
+		});
 
 		enqueueActivityLog({
 			type: ActivityLogType.DELETED_CHANNEL_PERMISSIONS,

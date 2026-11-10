@@ -5,6 +5,7 @@ import { config } from '../../config';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { IS_TEST } from '../../utils/env';
 import { protectedProcedure, t } from '../../utils/trpc';
+import { publishVoiceSidebarEvent } from '../../utils/voice-sidebar-events';
 import {
 	clearVoiceReconnectLabNextRestoreBehavior,
 	setVoiceReconnectLabNextRestoreBehavior,
@@ -94,7 +95,7 @@ const voiceReconnectLabRouter = t.router({
 		}
 
 		runtime.removeUser(ctx.user.id);
-		ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
+		publishVoiceSidebarEvent(ServerEvents.USER_LEAVE_VOICE, {
 			channelId: runtime.id,
 			userId: ctx.user.id,
 			reconnecting: true,

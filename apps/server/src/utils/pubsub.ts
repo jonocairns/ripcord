@@ -19,7 +19,7 @@ import type {
 import type { Unsubscribable } from '@trpc/server/observable';
 import { type Observable, observable } from '@trpc/server/observable';
 
-type Events = {
+export type Events = {
 	[ServerEvents.NEW_MESSAGE]: TJoinedMessage;
 	[ServerEvents.MESSAGE_UPDATE]: TJoinedMessage;
 	[ServerEvents.MESSAGE_DELETE]: {
