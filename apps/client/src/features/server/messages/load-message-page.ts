@@ -7,6 +7,7 @@ type TMessagePage = {
 
 type TLoadMessagePageDeps = {
 	query: () => Promise<TMessagePage>;
+	isCurrent?: () => boolean;
 	getLoadedMessages: () => TJoinedMessage[];
 	getFileLinkVersion: () => string;
 	applyLatestMessagePage?: (messages: TJoinedMessage[]) => void;
@@ -17,6 +18,7 @@ type TLoadMessagePageDeps = {
 const loadMessagePage = async (deps: TLoadMessagePageDeps): Promise<number | null> => {
 	const fileLinkVersion = deps.getFileLinkVersion();
 	const { messages: rawPage, nextCursor } = await deps.query();
+	if (deps.isCurrent && !deps.isCurrent()) return nextCursor;
 	const existingIds = new Set(deps.getLoadedMessages().map((message) => message.id));
 	const oldestFirst = [...rawPage].reverse();
 	const page = deps.applyLatestMessagePage

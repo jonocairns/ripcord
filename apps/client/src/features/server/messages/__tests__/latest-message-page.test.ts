@@ -11,24 +11,17 @@ describe('applyLatestMessagePage', () => {
 		const page = [message(1), message(2)];
 		expect(applyLatestMessagePage([], page)).toEqual({ messages: page, replaced: true });
 	});
-	it('merges an overlapping page without duplicates in createdAt order', () => {
-		const loaded = [message(9, 'older', 1), message(2)];
-		expect(applyLatestMessagePage(loaded, [message(2), message(3)])).toEqual({
-			messages: [loaded[0], message(2), message(3)],
-			replaced: false,
+	it('replaces even overlapping caches because membership does not prove continuity', () => {
+		const page = [message(41), message(60)];
+		expect(applyLatestMessagePage([message(1), message(20), message(41)], page)).toEqual({
+			messages: page,
+			replaced: true,
 		});
 	});
-	it('replaces an edited message in the page range', () => {
-		expect(applyLatestMessagePage([message(1), message(2), message(3)], [message(2, 'edited'), message(3)])).toEqual({
-			messages: [message(1), message(2, 'edited'), message(3)],
-			replaced: false,
-		});
-	});
-	it('drops a deleted message from the authoritative page range', () => {
-		expect(applyLatestMessagePage([message(1), message(2), message(3), message(4)], [message(2), message(4)])).toEqual({
-			messages: [message(1), message(2), message(4)],
-			replaced: false,
-		});
+	it('sorts timestamp ties by id deterministically', () => {
+		expect(applyLatestMessagePage([], [message(2, 'b', 1), message(1, 'a', 1)]).messages.map((m) => m.id)).toEqual([
+			1, 2,
+		]);
 	});
 	it('replaces the list when continuity cannot be proven', () => {
 		const page = [message(5), message(6)];
@@ -36,7 +29,7 @@ describe('applyLatestMessagePage', () => {
 	});
 	it('keeps identical page content unchanged', () => {
 		const page = [message(1), message(2)];
-		expect(applyLatestMessagePage(page, page)).toEqual({ messages: page, replaced: false });
+		expect(applyLatestMessagePage(page, page)).toEqual({ messages: page, replaced: true });
 	});
 	it('clears the loaded list for an empty authoritative page', () => {
 		expect(applyLatestMessagePage([message(1)], [])).toEqual({ messages: [], replaced: true });
@@ -74,19 +67,14 @@ describe('latest page in the message store', () => {
 		expect(useServerStore.getState().messagesMap[1]?.[0]?.id).toBe(15);
 	});
 
-	it('keeps explicitly paged history protected when merging and caps the live tail', () => {
+	it('resets protected history even for an overlap', () => {
 		useServerStore.setState({
-			messagesMap: { 1: [joinedMessage(1), joinedMessage(2), joinedMessage(3)] },
+			messagesMap: { 1: [joinedMessage(1), joinedMessage(2)] },
 			protectedMessagePrefixCounts: { 1: 2 },
 		});
-		const replaced = useServerStore.getState().applyLatestMessagePage({
-			channelId: 1,
-			messages: Array.from({ length: 1005 }, (_, index) => joinedMessage(index + 3)),
-		});
-		expect(replaced).toBe(false);
-		expect(useServerStore.getState().protectedMessagePrefixCounts[1]).toBe(2);
-		expect(useServerStore.getState().messagesMap[1]).toHaveLength(1002);
-		expect(useServerStore.getState().messagesMap[1]?.slice(0, 2)).toEqual([joinedMessage(1), joinedMessage(2)]);
+		useServerStore.getState().applyLatestMessagePage({ channelId: 1, messages: [joinedMessage(2), joinedMessage(3)] });
+		expect(useServerStore.getState().protectedMessagePrefixCounts[1]).toBeUndefined();
+		expect(useServerStore.getState().messagesMap[1]).toEqual([joinedMessage(2), joinedMessage(3)]);
 	});
 
 	it('applies duplicate first-page messages as authoritative and refreshes their invalidated files', async () => {
