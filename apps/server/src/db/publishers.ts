@@ -15,6 +15,7 @@ import { db } from '.';
 import {
 	getAffectedUserIdsForChannel,
 	getAllChannelUserPermissions,
+	getChannelUnreadCountSync,
 	getChannelViewerIdsSync,
 	getVisibleChannelIdsByUserSync,
 } from './queries/channels';
@@ -157,13 +158,21 @@ const publishChannelFileAccessChanged = async (channelId: number) => {
 	pubsub.publishFor(await getChannelViewerIds(channelId), ServerEvents.CHANNEL_FILE_ACCESS_CHANGED, { channelId });
 };
 
+const publishChannelReadState = (userId: number, channelId: number) => {
+	pubsub.publishFor(userId, ServerEvents.CHANNEL_READ_STATES_UPDATE, {
+		channelId,
+		count: getChannelUnreadCountSync(userId, channelId),
+	});
+};
+
 // After a change to who may view `channelId` (channel permission edits, the
 // channel turning private or public), sends each of `userIds` a create if they
 // can see it now and a delete if they cannot. Both are idempotent on clients,
 // so users whose access did not change are unaffected. Call it after
 // publishChannelPermissions: a client that loses the channel it has open
 // checks the new permissions while the channel is still in its store. Voice
-// convergence only reaches users whose access changed from the before snapshot.
+// convergence and unread snapshots only reach users whose access changed
+// from the before snapshot.
 const publishChannelVisibility = async (
 	channelId: number,
 	userIds: number[],
@@ -182,10 +191,11 @@ const publishChannelVisibility = async (
 
 	if (canView.length > 0) {
 		pubsub.publishFor(canView, ServerEvents.CHANNEL_CREATE, toPublicChannel(channel));
-		publishVoiceChannelSnapshot(
-			channelId,
-			canView.filter((userId) => !previousViewerIds.has(userId)),
-		);
+		const newViewerIds = canView.filter((userId) => !previousViewerIds.has(userId));
+		for (const userId of newViewerIds) {
+			publishChannelReadState(userId, channelId);
+		}
+		publishVoiceChannelSnapshot(channelId, newViewerIds);
 	}
 
 	if (cannotView.length > 0) {
@@ -228,7 +238,10 @@ const publishUserChannelVisibility = (
 		for (const channel of privateChannels) {
 			if (visibleChannelIds?.has(channel.id)) {
 				pubsub.publishFor(userId, ServerEvents.CHANNEL_CREATE, toPublicChannel(channel));
-				if (!previousChannelIds?.has(channel.id)) publishVoiceChannelSnapshot(channel.id, [userId]);
+				if (!previousChannelIds?.has(channel.id)) {
+					publishChannelReadState(userId, channel.id);
+					publishVoiceChannelSnapshot(channel.id, [userId]);
+				}
 			} else {
 				if (previousChannelIds?.has(channel.id)) publishVoiceChannelWithdrawal(channel.id, [userId]);
 				pubsub.publishFor(userId, ServerEvents.CHANNEL_DELETE, channel.id);
