@@ -5,13 +5,29 @@ import { parseMessageHtml } from '../serializer';
 const render = (content: string) => renderToStaticMarkup(<>{parseMessageHtml(content, () => {}, 1)}</>);
 
 describe('parseMessageHtml', () => {
-	test('renders sanitizer-allowed markup unchanged', () => {
+	test('renders allowed markup with safe link attributes', () => {
 		const html = render(
 			'<p><strong>bold</strong> <em>it</em> <code>x</code> <a href="https://example.com/page" target="_blank" rel="noopener">link</a></p>',
 		);
 
 		expect(html).toBe(
-			'<p><strong>bold</strong> <em>it</em> <code>x</code> <a href="https://example.com/page" target="_blank" rel="noopener">link</a></p>',
+			'<p><strong>bold</strong> <em>it</em> <code>x</code> <a href="https://example.com/page" target="_blank" rel="noopener noreferrer">link</a></p>',
+		);
+	});
+
+	test('drops styling classes from stored messages', () => {
+		const html = render(
+			'<span class="fixed inset-0 z-50 bg-black">x</span><br class="hard-break"><pre class="fixed"><code class="language-js">y</code></pre><img class="fixed inset-0 w-screen h-screen z-50" src="https://a.example/p.png"/>',
+		);
+
+		expect(html).not.toContain('class=');
+		expect(html).toContain('<span>x</span><br/><pre><code>y</code></pre>');
+		expect(html).toContain('<img src="https://a.example/p.png"/>');
+	});
+
+	test('replaces unsafe link attributes from stored messages', () => {
+		expect(render('<a href="https://ok.example" target="_top" rel="opener">x</a>')).toBe(
+			'<a href="https://ok.example" target="_blank" rel="noopener noreferrer">x</a>',
 		);
 	});
 
@@ -42,7 +58,7 @@ describe('parseMessageHtml', () => {
 	});
 
 	test('strips hrefs with disallowed schemes', () => {
-		expect(render('<a href="javascript:alert(1)">x</a>')).toBe('<a>x</a>');
+		expect(render('<a href="javascript:alert(1)">x</a>')).toBe('<a target="_blank" rel="noopener noreferrer">x</a>');
 	});
 
 	test('treats prototype property names as unknown tags', () => {
