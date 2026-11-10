@@ -14,6 +14,8 @@ export enum ActivityLogType {
 	USER_BANNED = 'USER_BANNED',
 	USER_UNBANNED = 'USER_UNBANNED',
 	USER_UPDATED_PASSWORD = 'USER_UPDATED_PASSWORD',
+	// Grants the owner role to the user identified by the activity entry.
+	USER_USED_SECRET_TOKEN = 'USER_USED_SECRET_TOKEN',
 	USER_RESET_PASSWORD = 'USER_RESET_PASSWORD',
 	USER_RESET_2FA = 'USER_RESET_2FA',
 	USER_DELETED = 'USER_DELETED',
@@ -78,6 +80,7 @@ export type TActivityLogDetailsMap = {
 	};
 	[ActivityLogType.USER_LEFT]: TEmptyActivityLogDetails;
 	[ActivityLogType.USER_UPDATED_PASSWORD]: TEmptyActivityLogDetails;
+	[ActivityLogType.USER_USED_SECRET_TOKEN]: TEmptyActivityLogDetails;
 	[ActivityLogType.USER_RESET_PASSWORD]: {
 		targetUserId: number;
 		resetBy: number;
