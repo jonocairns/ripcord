@@ -1,5 +1,5 @@
 import { getUrlFromServer } from './get-file-url';
-import { clearAuthToken, getRefreshToken, setAuthTokens } from './storage';
+import { clearAuthToken, getRefreshToken, getTokenOrigin, setAuthTokens } from './storage';
 
 type TRefreshResponse = {
 	token: string;
@@ -13,22 +13,25 @@ const REFRESH_TIMEOUT_MS = 10_000;
 
 let refreshAccessTokenPromise:
 	| {
+			origin: string;
 			refreshToken: string;
 			promise: Promise<boolean>;
 	  }
 	| undefined;
 
 const refreshAccessTokenOnce = async (): Promise<boolean> => {
-	const refreshToken = getRefreshToken();
+	const origin = getTokenOrigin();
+	if (!origin) return false;
+	const refreshToken = getRefreshToken(origin);
 
 	if (!refreshToken) {
 		return false;
 	}
 
-	const isSameRefreshToken = (): boolean => getRefreshToken() === refreshToken;
+	const isSameRefreshToken = (): boolean => getRefreshToken(origin) === refreshToken;
 
 	try {
-		const response = await fetch(`${getUrlFromServer()}/refresh`, {
+		const response = await fetch(`${origin}/refresh`, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
@@ -39,7 +42,7 @@ const refreshAccessTokenOnce = async (): Promise<boolean> => {
 
 		if (!response.ok) {
 			if ((response.status === 400 || response.status === 401) && isSameRefreshToken()) {
-				clearAuthToken();
+				clearAuthToken(origin);
 			}
 
 			return false;
@@ -49,7 +52,7 @@ const refreshAccessTokenOnce = async (): Promise<boolean> => {
 
 		if (!data.token || !data.refreshToken) {
 			if (isSameRefreshToken()) {
-				clearAuthToken();
+				clearAuthToken(origin);
 			}
 
 			return false;
@@ -59,7 +62,7 @@ const refreshAccessTokenOnce = async (): Promise<boolean> => {
 			return false;
 		}
 
-		setAuthTokens(data.token, data.refreshToken);
+		setAuthTokens(data.token, data.refreshToken, origin);
 		return true;
 	} catch (error) {
 		// Surface AbortError (timeout) and unexpected network/runtime failures
@@ -71,13 +74,15 @@ const refreshAccessTokenOnce = async (): Promise<boolean> => {
 };
 
 const refreshAccessToken = (): Promise<boolean> => {
-	const refreshToken = getRefreshToken();
+	const origin = getTokenOrigin();
+	if (!origin) return Promise.resolve(false);
+	const refreshToken = getRefreshToken(origin);
 
 	if (!refreshToken) {
 		return Promise.resolve(false);
 	}
 
-	if (refreshAccessTokenPromise?.refreshToken === refreshToken) {
+	if (refreshAccessTokenPromise?.origin === origin && refreshAccessTokenPromise.refreshToken === refreshToken) {
 		return refreshAccessTokenPromise.promise;
 	}
 
@@ -87,7 +92,7 @@ const refreshAccessToken = (): Promise<boolean> => {
 		}
 	});
 
-	refreshAccessTokenPromise = { refreshToken, promise };
+	refreshAccessTokenPromise = { origin, refreshToken, promise };
 
 	return promise;
 };

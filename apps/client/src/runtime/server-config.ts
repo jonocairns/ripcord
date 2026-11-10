@@ -163,6 +163,19 @@ let runtimeServerConfig: TServerRuntimeConfig = {
 	needsSetup: false,
 };
 
+type TServerOriginUpgrade = { fromOrigin: string; toOrigin: string };
+
+// Set when startup upgraded a persisted http:// server URL to https://, so the
+// caller can move that origin's stored credentials. Read once via
+// consumeServerOriginUpgrade().
+let pendingServerOriginUpgrade: TServerOriginUpgrade | undefined;
+
+const consumeServerOriginUpgrade = (): TServerOriginUpgrade | undefined => {
+	const upgrade = pendingServerOriginUpgrade;
+	pendingServerOriginUpgrade = undefined;
+	return upgrade;
+};
+
 const initializeRuntimeServerConfig = async () => {
 	if (!isDesktopRuntime()) {
 		runtimeServerConfig = getDefaultWebRuntimeConfig();
@@ -187,6 +200,7 @@ const initializeRuntimeServerConfig = async () => {
 	const upgraded = await upgradeServerUrlToHttps(normalized);
 
 	if (upgraded.url !== normalized.url) {
+		pendingServerOriginUpgrade = { fromOrigin: new URL(normalized.url).origin, toOrigin: new URL(upgraded.url).origin };
 		try {
 			await desktopBridge?.setServerUrl(upgraded.url);
 		} catch {
@@ -235,6 +249,7 @@ const updateDesktopServerUrl = async (serverUrl: string) => {
 };
 
 export {
+	consumeServerOriginUpgrade,
 	getRuntimeServerConfig,
 	initializeRuntimeServerConfig,
 	isDesktopServerSetupRequired,

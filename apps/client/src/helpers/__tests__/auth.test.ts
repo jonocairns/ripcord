@@ -28,16 +28,15 @@ const installStorageStubs = () => {
 };
 
 const seedTokens = (accessToken: string, refreshToken: string) => {
-	(globalThis as { localStorage: Storage }).localStorage.setItem('sharkord-auth-token', accessToken);
-	(globalThis as { localStorage: Storage }).localStorage.setItem('sharkord-refresh-token', refreshToken);
-	(globalThis as { sessionStorage: Storage }).sessionStorage.setItem('sharkord-token', accessToken);
+	localStorage.setItem(`sharkord-auth-token:${SERVER_URL}`, accessToken);
+	localStorage.setItem(`sharkord-refresh-token:${SERVER_URL}`, refreshToken);
+	sessionStorage.setItem(`sharkord-token:${SERVER_URL}`, accessToken);
 };
 
 const readStoredTokens = () => ({
 	access:
-		(globalThis as { localStorage: Storage }).localStorage.getItem('sharkord-auth-token') ??
-		(globalThis as { sessionStorage: Storage }).sessionStorage.getItem('sharkord-token'),
-	refresh: (globalThis as { localStorage: Storage }).localStorage.getItem('sharkord-refresh-token'),
+		localStorage.getItem(`sharkord-auth-token:${SERVER_URL}`) ?? sessionStorage.getItem(`sharkord-token:${SERVER_URL}`),
+	refresh: localStorage.getItem(`sharkord-refresh-token:${SERVER_URL}`),
 });
 
 const serverConfig = await import('@/runtime/server-config');
@@ -56,7 +55,7 @@ describe('refreshAccessToken — rotation race', () => {
 			needsSetup: false,
 		});
 		restoreRuntimeConfig = () => configSpy.mockRestore();
-		originalFetch = (globalThis as { fetch?: typeof fetch }).fetch;
+		originalFetch = globalThis.fetch;
 	});
 
 	afterEach(async () => {
@@ -171,7 +170,7 @@ describe('refreshAccessToken — rotation race', () => {
 		Reflect.set(globalThis, 'fetch', fetchMock);
 
 		const originalTimeout = AbortSignal.timeout;
-		AbortSignal.timeout = ((_ms: number) => originalTimeout.call(AbortSignal, 20)) as typeof AbortSignal.timeout;
+		AbortSignal.timeout = (_ms: number) => originalTimeout.call(AbortSignal, 20);
 
 		try {
 			const { refreshAccessToken } = await import('../auth');
@@ -237,7 +236,7 @@ describe('refreshAccessToken — rotation race', () => {
 
 		let resolveOldRefresh: ((response: Response) => void) | undefined;
 		const fetchMock = mock((_input: RequestInfo | URL, init?: RequestInit) => {
-			const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as { refreshToken?: string }) : {};
+			const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
 
 			if (body.refreshToken === 'refresh-old') {
 				return new Promise<Response>((resolve) => {
@@ -304,5 +303,64 @@ describe('refreshAccessToken — rotation race', () => {
 		expect(result).toBe(false);
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(readStoredTokens()).toEqual({ access: 'access-newer', refresh: 'refresh-newer' });
+	});
+	test('a refresh stays pinned to A after switching to B', async () => {
+		seedTokens('access-a', 'refresh-a');
+		let resolveRefresh: ((response: Response) => void) | undefined;
+		const fetchMock = mock(
+			(_input: RequestInfo | URL, _init?: RequestInit) =>
+				new Promise<Response>((resolve) => {
+					resolveRefresh = resolve;
+				}),
+		);
+		Reflect.set(globalThis, 'fetch', fetchMock);
+		const { refreshAccessToken } = await import('../auth');
+		const pending = refreshAccessToken();
+		spyOn(serverConfig, 'getRuntimeServerConfig').mockReturnValue({
+			source: 'desktop',
+			serverUrl: 'https://b.test',
+			serverHost: 'b.test',
+			isConfigured: true,
+			needsSetup: false,
+		});
+		expect(await refreshAccessToken()).toBe(false);
+		resolveRefresh?.(Response.json({ token: 'rotated-a', refreshToken: 'rotated-refresh-a' }));
+		expect(await pending).toBe(true);
+		expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([`${SERVER_URL}/refresh`]);
+		expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ refreshToken: 'refresh-a' }));
+		const { getAuthToken, getRefreshToken } = await import('../storage');
+		expect(getAuthToken()).toBeNull();
+		expect(getRefreshToken()).toBeNull();
+		expect(readStoredTokens()).toEqual({ access: 'rotated-a', refresh: 'rotated-refresh-a' });
+	});
+
+	test('equal refresh token strings on different origins do not share requests', async () => {
+		seedTokens('access-a', 'same-refresh');
+		let resolveA: ((response: Response) => void) | undefined;
+		const fetchMock = mock((input: RequestInfo | URL, _init?: RequestInit) => {
+			if (input === `${SERVER_URL}/refresh`)
+				return new Promise<Response>((resolve) => {
+					resolveA = resolve;
+				});
+			return Promise.resolve(Response.json({ token: 'new-b', refreshToken: 'new-refresh-b' }));
+		});
+		Reflect.set(globalThis, 'fetch', fetchMock);
+		const { refreshAccessToken } = await import('../auth');
+		const pendingA = refreshAccessToken();
+		spyOn(serverConfig, 'getRuntimeServerConfig').mockReturnValue({
+			source: 'desktop',
+			serverUrl: 'https://b.test',
+			serverHost: 'b.test',
+			isConfigured: true,
+			needsSetup: false,
+		});
+		const { setAuthTokens, getAuthToken } = await import('../storage');
+		setAuthTokens('access-b', 'same-refresh');
+		expect(await refreshAccessToken()).toBe(true);
+		resolveA?.(new Response(null, { status: 401 }));
+		expect(await pendingA).toBe(false);
+		expect(getAuthToken()).toBe('new-b');
+		expect(readStoredTokens()).toEqual({ access: null, refresh: null });
+		expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([`${SERVER_URL}/refresh`, 'https://b.test/refresh']);
 	});
 });

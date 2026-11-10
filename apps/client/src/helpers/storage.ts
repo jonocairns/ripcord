@@ -1,3 +1,6 @@
+import { getRuntimeServerConfig } from '@/runtime/server-config';
+import { getUrlFromServer } from './get-file-url';
+
 export enum LocalStorageKey {
 	AUTH_TOKEN = 'sharkord-auth-token',
 	REFRESH_TOKEN = 'sharkord-refresh-token',
@@ -54,64 +57,85 @@ const setLocalStorageItem = (key: LocalStorageKey, value: string): void => {
 	localStorage.setItem(key, value);
 };
 
-const removeLocalStorageItem = (key: LocalStorageKey): void => {
-	localStorage.removeItem(key);
+const getTokenOrigin = (): string | undefined => {
+	if (!getRuntimeServerConfig().isConfigured) return undefined;
+	return new URL(getUrlFromServer()).origin;
 };
 
-const getSessionStorageItem = (key: SessionStorageKey): string | null => {
-	return sessionStorage.getItem(key);
-};
+const tokenEntries = () => [
+	{ storage: localStorage, key: LocalStorageKey.AUTH_TOKEN },
+	{ storage: localStorage, key: LocalStorageKey.REFRESH_TOKEN },
+	{ storage: sessionStorage, key: SessionStorageKey.TOKEN },
+];
 
-const setSessionStorageItem = (key: SessionStorageKey, value: string): void => {
-	sessionStorage.setItem(key, value);
-};
-
-const removeSessionStorageItem = (key: SessionStorageKey): void => {
-	sessionStorage.removeItem(key);
-};
-
-const getAuthToken = (): string | null => {
-	return getSessionStorageItem(SessionStorageKey.TOKEN) || getLocalStorageItem(LocalStorageKey.AUTH_TOKEN);
-};
-
-const hydrateSessionToken = (): string | null => {
-	const sessionToken = getSessionStorageItem(SessionStorageKey.TOKEN);
-
-	if (sessionToken) {
-		return sessionToken;
+// Pre-per-origin tokens carry no record of which server issued them, so they
+// are adopted by whichever server is configured at first launch after the
+// update. That is the server the previous client was already sending them to.
+const migrateAuthTokens = () => {
+	const origin = getTokenOrigin();
+	for (const { storage, key } of tokenEntries()) {
+		const legacy = storage.getItem(key);
+		if (origin && legacy !== null && storage.getItem(`${key}:${origin}`) === null) {
+			storage.setItem(`${key}:${origin}`, legacy);
+		}
+		storage.removeItem(key);
 	}
+};
 
-	const localToken = getLocalStorageItem(LocalStorageKey.AUTH_TOKEN);
-
-	if (localToken) {
-		setSessionStorageItem(SessionStorageKey.TOKEN, localToken);
+// Only the automatic secure upgrade may move credentials between origins.
+const upgradeAuthTokenOrigin = (fromOrigin: string, toOrigin: string) => {
+	const from = new URL(fromOrigin);
+	const to = new URL(toOrigin);
+	if (from.protocol !== 'http:' || to.protocol !== 'https:' || from.host !== to.host) return;
+	for (const { storage, key } of tokenEntries()) {
+		const sourceKey = `${key}:${from.origin}`;
+		const targetKey = `${key}:${to.origin}`;
+		const token = storage.getItem(sourceKey);
+		if (token !== null && storage.getItem(targetKey) === null) {
+			storage.setItem(targetKey, token);
+		}
+		storage.removeItem(sourceKey);
 	}
-
-	return localToken;
 };
 
-const setAuthToken = (token: string): void => {
-	setSessionStorageItem(SessionStorageKey.TOKEN, token);
-	setLocalStorageItem(LocalStorageKey.AUTH_TOKEN, token);
+const getAuthToken = (origin = getTokenOrigin()): string | null => {
+	if (!origin || !getRuntimeServerConfig().isConfigured) return null;
+	return (
+		sessionStorage.getItem(`${SessionStorageKey.TOKEN}:${origin}`) ||
+		localStorage.getItem(`${LocalStorageKey.AUTH_TOKEN}:${origin}`)
+	);
 };
 
-const getRefreshToken = (): string | null => {
-	return getLocalStorageItem(LocalStorageKey.REFRESH_TOKEN);
+const hydrateSessionToken = (origin = getTokenOrigin()): string | null => {
+	const token = getAuthToken(origin);
+	if (origin && token) sessionStorage.setItem(`${SessionStorageKey.TOKEN}:${origin}`, token);
+	return token;
 };
 
-const setRefreshToken = (refreshToken: string): void => {
-	setLocalStorageItem(LocalStorageKey.REFRESH_TOKEN, refreshToken);
+const setAuthToken = (token: string, origin = getTokenOrigin()): void => {
+	if (!origin || !getRuntimeServerConfig().isConfigured) return;
+	sessionStorage.setItem(`${SessionStorageKey.TOKEN}:${origin}`, token);
+	localStorage.setItem(`${LocalStorageKey.AUTH_TOKEN}:${origin}`, token);
 };
 
-const setAuthTokens = (token: string, refreshToken: string): void => {
-	setAuthToken(token);
-	setRefreshToken(refreshToken);
+const getRefreshToken = (origin = getTokenOrigin()): string | null => {
+	if (!origin || !getRuntimeServerConfig().isConfigured) return null;
+	return localStorage.getItem(`${LocalStorageKey.REFRESH_TOKEN}:${origin}`);
 };
 
-const clearAuthToken = (): void => {
-	removeSessionStorageItem(SessionStorageKey.TOKEN);
-	removeLocalStorageItem(LocalStorageKey.AUTH_TOKEN);
-	removeLocalStorageItem(LocalStorageKey.REFRESH_TOKEN);
+const setRefreshToken = (refreshToken: string, origin = getTokenOrigin()): void => {
+	if (!origin || !getRuntimeServerConfig().isConfigured) return;
+	localStorage.setItem(`${LocalStorageKey.REFRESH_TOKEN}:${origin}`, refreshToken);
+};
+
+const setAuthTokens = (token: string, refreshToken: string, origin = getTokenOrigin()): void => {
+	setAuthToken(token, origin);
+	setRefreshToken(refreshToken, origin);
+};
+
+const clearAuthToken = (origin = getTokenOrigin()): void => {
+	if (!origin || !getRuntimeServerConfig().isConfigured) return;
+	for (const { storage, key } of tokenEntries()) storage.removeItem(`${key}:${origin}`);
 };
 
 export {
@@ -120,15 +144,14 @@ export {
 	getLocalStorageItem,
 	getLocalStorageItemAsJSON,
 	getRefreshToken,
-	getSessionStorageItem,
+	getTokenOrigin,
 	hydrateSessionToken,
+	migrateAuthTokens,
 	migrateStorage,
-	removeLocalStorageItem,
-	removeSessionStorageItem,
 	setAuthToken,
 	setAuthTokens,
 	setLocalStorageItem,
 	setLocalStorageItemAsJSON,
 	setRefreshToken,
-	setSessionStorageItem,
+	upgradeAuthTokenOrigin,
 };

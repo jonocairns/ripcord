@@ -9,7 +9,13 @@ import { Input } from '@/components/ui/input';
 import { connect } from '@/features/server/actions';
 import { useInfo } from '@/features/server/hooks';
 import { getFileUrl, getPublicAssetUrl, getUrlFromServer } from '@/helpers/get-file-url';
-import { getLocalStorageItem, LocalStorageKey, setAuthTokens, setLocalStorageItem } from '@/helpers/storage';
+import {
+	getLocalStorageItem,
+	getTokenOrigin,
+	LocalStorageKey,
+	setAuthTokens,
+	setLocalStorageItem,
+} from '@/helpers/storage';
 import { useForm } from '@/hooks/use-form';
 import { getRuntimeServerConfig, normalizeServerUrl, updateDesktopServerUrl } from '@/runtime/server-config';
 import { getLoginErrors } from './login-errors';
@@ -106,6 +112,9 @@ const Connect = memo(() => {
 
 		try {
 			const url = getUrlFromServer();
+			// The server URL can change before this request returns; keep the
+			// tokens with the server that issued them.
+			const tokenOrigin = getTokenOrigin();
 			const response = await fetch(`${url}/login`, {
 				method: 'POST',
 				headers: {
@@ -134,7 +143,10 @@ const Connect = memo(() => {
 				return;
 			}
 
-			setAuthTokens(data.token, data.refreshToken);
+			// Drop the result if the server changed while the request was in flight.
+			if (!tokenOrigin || getTokenOrigin() !== tokenOrigin) return;
+
+			setAuthTokens(data.token, data.refreshToken, tokenOrigin);
 			setLocalStorageItem(LocalStorageKey.IDENTITY, values.identity);
 
 			await connect();
@@ -155,6 +167,9 @@ const Connect = memo(() => {
 
 		try {
 			const url = getUrlFromServer();
+			// The server URL can change before this request returns; keep the
+			// tokens with the server that issued them.
+			const tokenOrigin = getTokenOrigin();
 			const response = await fetch(`${url}/verify-2fa`, {
 				method: 'POST',
 				headers: {
@@ -176,7 +191,10 @@ const Connect = memo(() => {
 
 			const data = parseVerify2faResponse(await response.json());
 
-			setAuthTokens(data.token, data.refreshToken);
+			// Drop the result if the server changed while the request was in flight.
+			if (!tokenOrigin || getTokenOrigin() !== tokenOrigin) return;
+
+			setAuthTokens(data.token, data.refreshToken, tokenOrigin);
 			setLocalStorageItem(LocalStorageKey.IDENTITY, values.identity);
 
 			await connect();

@@ -14,9 +14,9 @@ import { Routing } from './components/routing/index.tsx';
 import { ServerScreensProvider } from './components/server-screens/index.tsx';
 import { ThemeProvider } from './components/theme-provider/index.tsx';
 import { reportError } from './helpers/browser-logger.ts';
-import { LocalStorageKey, migrateStorage } from './helpers/storage.ts';
+import { LocalStorageKey, migrateAuthTokens, migrateStorage, upgradeAuthTokenOrigin } from './helpers/storage.ts';
 import './index.css';
-import { initializeRuntimeServerConfig } from './runtime/server-config.ts';
+import { consumeServerOriginUpgrade, initializeRuntimeServerConfig } from './runtime/server-config.ts';
 
 // Dark-only is a release policy, not a component-level styling requirement.
 // Remove this forced theme when the light palette is ready to ship.
@@ -27,6 +27,13 @@ const bootstrap = async () => {
 
 	try {
 		await initializeRuntimeServerConfig();
+		// Move credentials with an automatic http -> https upgrade first, then
+		// adopt any pre-per-origin tokens for the configured server.
+		const originUpgrade = consumeServerOriginUpgrade();
+		if (originUpgrade) {
+			upgradeAuthTokenOrigin(originUpgrade.fromOrigin, originUpgrade.toOrigin);
+		}
+		migrateAuthTokens();
 	} catch (error) {
 		reportError('Failed to initialize runtime server configuration', error);
 	}
