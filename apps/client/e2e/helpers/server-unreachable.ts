@@ -7,10 +7,13 @@ const installServerUnreachableFault = async (page: Page) => {
 	const pairs = new Set<{ socket: WebSocketRoute; server: WebSocketRoute }>();
 	const waiting: (() => void)[] = [];
 	let connectedCount = 0;
+	let attemptCount = 0;
+	const serverCloses: { code?: number; reason?: string }[] = [];
 
 	await page.routeWebSocket(
 		(url) => url.port === '4991',
 		async (socket) => {
+			attemptCount += 1;
 			let closed = false;
 			let server: WebSocketRoute | undefined;
 			let pair: { socket: WebSocketRoute; server: WebSocketRoute } | undefined;
@@ -29,6 +32,7 @@ const installServerUnreachableFault = async (page: Page) => {
 			pair = { socket, server };
 			pairs.add(pair);
 			server.onClose(async (code, reason) => {
+				serverCloses.push({ code, reason });
 				if (pair) pairs.delete(pair);
 				if (closed) return;
 				closed = true;
@@ -49,7 +53,10 @@ const installServerUnreachableFault = async (page: Page) => {
 				}),
 			);
 		},
+		// Historical unreleased handlers, including retired attempts awaiting open to close.
 		heldCount: () => waiting.length,
+		attemptCount: () => attemptCount,
+		serverCloses: () => [...serverCloses],
 		connectedCount: () => connectedCount,
 		openCount: () => pairs.size,
 		restoreNewest: () => waiting.pop()?.(),

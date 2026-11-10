@@ -49,6 +49,7 @@ let teardownTimer: ReturnType<typeof setTimeout> | null = null;
 let onWsReconnect: (() => void) | null = null;
 let cachedClientInstanceId: string | null = null;
 let deferredWsReconnectOnlineListener: (() => void) | null = null;
+let connectionEpoch = 0;
 const sessionAuthentication = createSessionAuthenticationGate();
 
 // How long to keep silently reconnecting before tearing the app down to the
@@ -137,6 +138,7 @@ const clearDeferredWsReconnectOnlineListener = () => {
 
 const retireTRPCClient = () => {
 	const client = wsClient;
+	connectionEpoch += 1;
 	wsClient = null;
 	trpc = null;
 	currentHost = null;
@@ -176,6 +178,7 @@ const initializeTRPC = (host: string) => {
 			if (wsClient !== client) {
 				return;
 			}
+			connectionEpoch += 1;
 			recordVoiceDiagnostic(
 				'Voice WebSocket closed',
 				[
@@ -361,8 +364,7 @@ const connectToTRPC = (host: string) => {
 		return trpc;
 	}
 
-	retireTRPCClient();
-	return initializeTRPC(host);
+	return reconnectTRPC(host);
 };
 
 const reconnectTRPC = (host: string) => {
@@ -396,6 +398,13 @@ const getTRPCClient = () => {
 	}
 
 	return trpc;
+};
+
+// Capture both client ownership and the socket incarnation within that client.
+const captureTRPCAttempt = () => {
+	const client = trpc;
+	const epoch = connectionEpoch;
+	return () => client !== null && client === trpc && epoch === connectionEpoch;
 };
 
 const getTRPCClientIfInitialized = () => trpc;
@@ -462,6 +471,7 @@ const setOnWsReconnect = (cb: (() => void) | null) => {
 
 export {
 	type AppRouter,
+	captureTRPCAttempt,
 	cleanup,
 	connectToTRPC,
 	debugCloseCurrentWs,

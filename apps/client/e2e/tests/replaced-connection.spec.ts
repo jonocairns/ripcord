@@ -1,4 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
+import { DisconnectCode } from '@sharkord/shared';
 import {
 	createPeer,
 	credentialsFor,
@@ -67,7 +68,10 @@ test('a connection replaced after the disconnect screen is closed and Leave voic
 			await fault.cut();
 			await expect(page.getByText('Connection lost', { exact: true })).toBeVisible({ timeout: 45_000 });
 			expect(await page.evaluate(() => navigator.onLine)).toBe(true);
-			await expect.poll(() => fault.heldCount()).toBe(2);
+			// Retired CONNECTING handlers may remain held until released to finish close.
+			// Release the newest (disconnect-screen) attempt, preserving older handlers.
+			await expect.poll(() => fault.heldCount()).toBeGreaterThanOrEqual(1);
+			await expect.poll(() => fault.attemptCount()).toBeGreaterThanOrEqual(3);
 			fault.restoreNewest();
 
 			await expect(page.getByText('VOICE CHANNELS')).toBeVisible({ timeout: 30_000 });
@@ -76,14 +80,18 @@ test('a connection replaced after the disconnect screen is closed and Leave voic
 			await expectMicrophoneFlow(watcher.page, 'inbound');
 			const before = fault.connectedCount();
 			fault.restore();
-			await expect.poll(() => fault.connectedCount()).toBe(before + 1);
+			// Prompt cancellation may avoid connecting the retired handler at all.
+			await expect.poll(() => fault.heldCount()).toBe(0);
+			expect.soft(fault.connectedCount() - before).toBeLessThanOrEqual(1);
 			// The retired client must close after its held connection is released.
-			await expect.poll(() => fault.openCount(), { timeout: 15_000 }).toBe(1);
+			await expect.soft.poll(() => fault.openCount(), { timeout: 15_000 }).toBe(1);
+			const settledAttempts = fault.attemptCount();
 			const { ownUserId } = await voiceMembership(page);
 			await page.getByTitle('Leave voice', { exact: true }).click();
 			await expect
 				.poll(async () => (await voiceMembership(watcher.page)).memberIds, { timeout: 15_000 })
 				.not.toContain(ownUserId);
+			expect.soft(fault.attemptCount()).toBe(settledAttempts);
 			await expect(
 				page.getByText(/reconnect failed|failed to reconnect|failed to leave voice|something went wrong/i),
 			).toHaveCount(0);
@@ -101,16 +109,17 @@ test('a connection replaced after the disconnect screen is closed and Leave voic
 
 test('a banned client stops connecting', async ({ browser }, testInfo) => {
 	const context = await browser.newContext();
-	await installPcHook(context);
 	const page = await context.newPage();
 	const credentials = credentialsFor(testInfo, 'producer');
 	const producer = { context, page, credentials };
 	try {
+		await installPcHook(context);
 		await suppressViteHmrReload(page);
 		const fault = await installServerUnreachableFault(page);
 		await login(page, credentials);
 		await moderatePeer(browser, producer, 'ban');
 		await expect(page.getByText('You have been banned', { exact: false })).toBeVisible();
+		expect(fault.serverCloses().some(({ code }) => code === DisconnectCode.BANNED)).toBe(true);
 		const before = fault.connectedCount();
 		// Absence check: observe long enough to detect the old reconnect loop.
 		await page.waitForTimeout(5_000);
