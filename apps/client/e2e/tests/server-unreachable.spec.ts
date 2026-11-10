@@ -112,6 +112,8 @@ test('failed silent rejoin shows the disconnect screen and retries with saved cr
 			},
 		);
 		await login(page, credentials);
+		await joinVoice(page);
+		await expectMicrophoneFlow(page, 'outbound');
 		rejectRejoin = true;
 		await dropAppWebSocket(page, { waitForReconnect: false });
 		await expect(page.getByRole('heading', { name: 'Connection lost', exact: true })).toBeVisible();
@@ -119,6 +121,9 @@ test('failed silent rejoin shows the disconnect screen and retries with saved cr
 		await expect(page.getByText('Trying to reconnect every 5 seconds.')).toBeVisible();
 		rejectRejoin = false;
 		await expect(page.getByText('VOICE CHANNELS')).toBeVisible({ timeout: 30_000 });
+		// The disconnect screen is a recovery path: the retry restores voice too.
+		await expect(page.getByTitle('Leave voice')).toBeVisible({ timeout: 30_000 });
+		await expectMicrophoneFlow(page, 'outbound');
 	} finally {
 		await disposePeer(peer);
 	}
