@@ -39,8 +39,8 @@ export const getAllChannelUserPermissions = async (
 				[ChannelPermission.SEND_MESSAGES]: allowed(ChannelPermission.SEND_MESSAGES),
 				[ChannelPermission.JOIN]: allowed(ChannelPermission.JOIN),
 				[ChannelPermission.SPEAK]: allowed(ChannelPermission.SPEAK),
-				[ChannelPermission.WEBCAM]: allowed(ChannelPermission.WEBCAM),
 				[ChannelPermission.SHARE_SCREEN]: allowed(ChannelPermission.SHARE_SCREEN),
+				[ChannelPermission.WEBCAM]: allowed(ChannelPermission.WEBCAM),
 			},
 		};
 	}

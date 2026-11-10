@@ -285,14 +285,14 @@ test('snapshot statement count is independent of private channel count', () => {
 });
 
 test('public viewer lookup prepares at most two statements', () => {
-	expect(statementCount(() => getChannelViewerIdsSync(2))).toBeLessThanOrEqual(2);
+	expect(statementCount(() => getChannelViewerIdsSync(2))).toBe(2);
 });
 for (const roleAllow of [false, true])
 	test(`private viewer lookup uses at most four statements, role allow=${roleAllow}`, () => {
 		privateChannel();
 		if (roleAllow) roleGrant(C.VIEW_CHANNEL, true);
 		// Base prepares four statements without a role row, five with a role allow.
-		expect(statementCount(() => getChannelViewerIdsSync(2))).toBeLessThanOrEqual(4);
+		expect(statementCount(() => getChannelViewerIdsSync(2))).toBe(4);
 	});
 test('empty private snapshot prepares no statements', () => {
 	expect(statementCount(() => getVisiblePrivateChannelIdsByUserSync([]))).toBe(0);
