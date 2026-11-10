@@ -19,6 +19,7 @@ import {
 	markTRPCSessionAuthenticated,
 	reconnectTRPC,
 	setOnWsReconnect,
+	TRPCClientUnavailableError,
 } from '@/lib/trpc';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
 import { openDialog } from '../dialogs/actions';
@@ -121,7 +122,7 @@ export const connect = async () => {
 				throw error;
 			}
 
-			cleanup({ ignoreSocketCloseEvent: true });
+			cleanup();
 			await attemptConnect();
 		} finally {
 			setConnecting(false);
@@ -142,6 +143,7 @@ export const joinServer = async (
 
 	try {
 		const data = await trpc.others.joinServer.query({ handshakeHash, password });
+		if (trpc !== getTRPCClientIfInitialized()) throw new TRPCClientUnavailableError();
 
 		logDebug('joinServer', data);
 
@@ -334,7 +336,7 @@ export const joinServer = async (
 					// fall through to teardown so the user sees the password prompt
 					// on next connect.
 					clearReconnectSnapshotEventBuffer();
-					cleanup({ ignoreSocketCloseEvent: true });
+					cleanup();
 					cleanupServerSubscriptions();
 				}
 			} catch (error) {
@@ -378,7 +380,7 @@ export const joinServer = async (
 
 							if (result === 'password-required') {
 								clearReconnectSnapshotEventBuffer();
-								cleanup({ ignoreSocketCloseEvent: true });
+								cleanup();
 								cleanupServerSubscriptions();
 								return;
 							}
@@ -401,7 +403,7 @@ export const joinServer = async (
 
 				clearReconnectSnapshotEventBuffer();
 				clearVoiceReconnectRecovery('app-teardown');
-				cleanup({ ignoreSocketCloseEvent: true });
+				cleanup();
 			}
 		})();
 	});
@@ -412,7 +414,7 @@ export const logoutFromServer = async () => {
 	setOnWsReconnect(null);
 	clearVoiceReconnectRecovery('logout');
 	await revokeRefreshToken();
-	cleanup({ clearAuth: true, ignoreSocketCloseEvent: true });
+	cleanup({ clearAuth: true });
 	cleanupServerSubscriptions();
 	setErrorReportingUser(undefined);
 };

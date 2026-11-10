@@ -40,7 +40,7 @@ const ServerPasswordDialog = memo(({ isOpen, close, handshakeHash }: TServerPass
 	}, [handshakeHash, values.password, close, setTrpcErrors]);
 
 	const onCancel = useCallback(() => {
-		cleanup({ ignoreSocketCloseEvent: true });
+		cleanup();
 		close();
 	}, [close]);
 

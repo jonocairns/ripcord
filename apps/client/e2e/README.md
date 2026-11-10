@@ -54,3 +54,5 @@ browser decodes the real image bytes and that file links download, survive a his
 message is deleted. Its private-channel case checks that attachment links need the channel token and that the open
 client re-signs them after a token rotation. Setup that a user would do through admin UI, such as creating a private
 channel, calls the app's own tRPC client through `helpers/trpc.ts` with that user's session.
+
+`replaced-connection.spec.ts` holds reconnect attempts through the disconnect screen, releases the newest connection first, then checks that the retired connection closes and Leave voice removes the producer from the watcher's membership. It also bans a connected client and observes five seconds to ensure the retired client stops reconnecting. Run it against unmodified main first: the live-connection count and banned reconnect-count assertions should fail.
