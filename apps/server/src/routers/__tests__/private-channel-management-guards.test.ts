@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { ChannelPermission, ChannelType, Permission } from '@sharkord/shared';
+import { ChannelPermission, ChannelType, Permission, ServerEvents } from '@sharkord/shared';
 import { asc, eq } from 'drizzle-orm';
-import { initTest } from '../../__tests__/helpers';
+import { createMockContext } from '../../__tests__/context';
+import { getMockedToken, initTest } from '../../__tests__/helpers';
 import { tdb } from '../../__tests__/setup';
-import { channelRolePermissions, channels, channelUserPermissions } from '../../db/schema';
+import { channelRolePermissions, channels, channelUserPermissions, rolePermissions } from '../../db/schema';
+import { pubsub } from '../../utils/pubsub';
+import { appRouter } from '..';
 
 const initModerator = async () => {
 	const { caller: ownerCaller, initialData } = await initTest(1);
@@ -24,6 +27,13 @@ const initCategory = async () => {
 	const privateId = await callers.ownerCaller.channels.add({ type: ChannelType.TEXT, name: 'P', categoryId: 1 });
 	await callers.ownerCaller.channels.update({ channelId: privateId, private: true });
 	const lastId = await callers.ownerCaller.channels.add({ type: ChannelType.TEXT, name: 'B', categoryId: 1 });
+	// Explicit positions make the hidden-id-first regression move P on main.
+	for (const [id, position] of [
+		[1, 1],
+		[privateId, 2],
+		[lastId, 3],
+	] as const)
+		tdb.update(channels).set({ position }).where(eq(channels.id, id)).run();
 	return { ...callers, privateId, lastId };
 };
 
@@ -41,6 +51,103 @@ const permissionRows = () => ({
 });
 
 describe('private channel management guards', () => {
+	for (const mutation of ['move', 'delete', 'add', 'privacy', 'revoke'] as const) {
+		test(`reorder uses current membership and authorization after suspended lookup: ${mutation}`, async () => {
+			const { ownerCaller, privateId, lastId } = await initCategory();
+			const ctx = await createMockContext({ customToken: await getMockedToken(2) });
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const caller = appRouter.createCaller({
+				...ctx,
+				needsPermission: async (permission) => {
+					await ctx.needsPermission(permission);
+					entered.resolve();
+					await release.promise;
+				},
+			});
+			const { handshakeHash } = await caller.others.handshake();
+			await caller.others.joinServer({ handshakeHash });
+			const request = caller.channels.reorder({ categoryId: 1, channelIds: [lastId, 1] });
+			await entered.promise;
+			let addedId: number | undefined;
+			if (mutation === 'move')
+				tdb.update(channels).set({ categoryId: 2, position: 7 }).where(eq(channels.id, lastId)).run();
+			if (mutation === 'delete') tdb.delete(channels).where(eq(channels.id, lastId)).run();
+			if (mutation === 'privacy') tdb.update(channels).set({ private: true }).where(eq(channels.id, lastId)).run();
+			if (mutation === 'revoke') tdb.delete(rolePermissions).run();
+			if (mutation === 'add') {
+				addedId = await ownerCaller.channels.add({ name: 'New', type: ChannelType.TEXT, categoryId: 1 });
+				tdb.update(channels).set({ position: 0 }).where(eq(channels.id, addedId)).run();
+			}
+			const before = categoryPositions(1);
+			release.resolve();
+			if (mutation === 'revoke') {
+				await expect(request).rejects.toMatchObject({ code: 'FORBIDDEN' });
+				expect(categoryPositions(1)).toEqual(before);
+				return;
+			}
+			await request;
+			if (mutation === 'add' && addedId === undefined) throw new Error('New member missing');
+			const expectedIds =
+				mutation === 'move' || mutation === 'delete'
+					? [1, privateId]
+					: mutation === 'add' && addedId !== undefined
+						? [lastId, 1, privateId, addedId]
+						: [1, privateId, lastId];
+			expect(categoryPositions(1)).toEqual(expectedIds.map((id, index) => ({ id, position: index + 1 })));
+			if (mutation === 'move') expect(categoryPositions(2)).toContainEqual({ id: lastId, position: 7 });
+		});
+	}
+
+	test('empty input normalizes ties deterministically and hidden channels at both ends keep ordinal slots without payload delivery', async () => {
+		const { ownerCaller, moderatorCaller, privateId, lastId } = await initCategory();
+		const endId = await ownerCaller.channels.add({ type: ChannelType.TEXT, name: 'Hidden end', categoryId: 1 });
+		await ownerCaller.channels.update({ channelId: endId, private: true });
+		for (const [id, position] of [
+			[privateId, 0],
+			[1, 2],
+			[lastId, 2],
+			[endId, 9],
+		] as const)
+			tdb.update(channels).set({ position }).where(eq(channels.id, id)).run();
+		const received: number[] = [];
+		const subscription = pubsub.subscribeFor(2, ServerEvents.CHANNEL_UPDATE).subscribe({
+			next: (channel) => {
+				received.push(channel.id);
+			},
+		});
+		try {
+			await moderatorCaller.channels.reorder({ categoryId: 1, channelIds: [] });
+			expect(categoryPositions(1)).toEqual(
+				[privateId, 1, lastId, endId].map((id, index) => ({ id, position: index + 1 })),
+			);
+			expect(received.sort((a, b) => a - b)).toEqual([1, lastId]);
+			received.length = 0;
+			await moderatorCaller.channels.reorder({ categoryId: 1, channelIds: [endId, lastId, lastId, privateId] });
+			expect(categoryPositions(1)).toEqual(
+				[privateId, lastId, 1, endId].map((id, index) => ({ id, position: index + 1 })),
+			);
+			expect(received.sort((a, b) => a - b)).toEqual([1, lastId]);
+		} finally {
+			subscription.unsubscribe();
+		}
+	});
+
+	test('public permission management requires global permission despite channel grants', async () => {
+		const { caller: owner } = await initTest(1);
+		await owner.channels.updatePermissions({ channelId: 1, userId: 2, permissions: Object.values(ChannelPermission) });
+		const { caller } = await initTest(2);
+		for (const operation of ['get', 'update', 'delete'] as const) {
+			const request =
+				operation === 'get'
+					? caller.channels.getPermissions({ channelId: 1 })
+					: operation === 'update'
+						? caller.channels.updatePermissions({ channelId: 1, userId: 2 })
+						: caller.channels.deletePermissions({ channelId: 1, userId: 2 });
+			await expect(request).rejects.toMatchObject({ code: 'FORBIDDEN' });
+		}
+	});
+
 	for (const includeHidden of [false, true]) {
 		test(`reorder preserves hidden slots with hidden id ${includeHidden ? 'included' : 'omitted'}`, async () => {
 			const { moderatorCaller, privateId, lastId } = await initCategory();
@@ -145,8 +252,8 @@ describe('private channel management guards', () => {
 
 	for (const operation of ['get', 'update', 'delete'] as const) {
 		test(`${operation} permissions reports missing channel`, async () => {
-			const { moderatorCaller } = await initModerator();
-			const input = { channelId: 999, userId: 2 };
+			const { moderatorCaller, memberRoleId } = await initModerator();
+			const input = { channelId: 999, roleId: memberRoleId };
 			const request =
 				operation === 'get'
 					? moderatorCaller.channels.getPermissions(input)
