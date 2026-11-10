@@ -24,6 +24,10 @@ ripcord is a self-hosted communication platform that brings the most important D
   <img src="./docs/settings.png" alt="ripcord settings view" width="800" />
 </p>
 
+## Server ownership
+
+See [server ownership and account recovery](docs/server-ownership.md) to claim ownership with the first-start secret token, recover user 1, and understand default-password rotation.
+
 ## Releases
 
 Ripcord uses Release Please to maintain a release PR from conventional commits. Merging it builds and publishes the server, Docker image, and desktop apps automatically. See [the release guide](docs/releases.md) for setup and failed-release recovery.

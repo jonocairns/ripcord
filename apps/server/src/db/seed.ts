@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import {
 	ChannelType,
 	DEFAULT_ROLE_PERMISSIONS,
@@ -19,7 +20,7 @@ import { randomUUIDv7 } from 'bun';
 import chalk from 'chalk';
 import { hashPassword } from '../helpers/password';
 import { logger } from '../logger';
-import { IS_DEVELOPMENT } from '../utils/env';
+import { IS_DEVELOPMENT, IS_PRODUCTION } from '../utils/env';
 import { db } from './index';
 import { categories, channels, messages, rolePermissions, roles, settings, userRoles, users } from './schema';
 
@@ -130,7 +131,7 @@ const seedDatabase = async () => {
 			identity: IS_DEVELOPMENT ? 'ripcord' : await sha256(randomUUIDv7()),
 			name: 'Ripcord',
 			avatarId: null,
-			password: await hashPassword('ripcord'),
+			password: await hashPassword(IS_PRODUCTION ? randomBytes(32).toString('base64url') : 'ripcord'),
 			bannerId: null,
 			bio: 'Hey, I am Ripcord!',
 			bannerColor: 'linear-gradient(90deg, rgba(67,49,215,1) 30%, rgba(182,1,116,1) 100%)',
@@ -187,13 +188,18 @@ const seedDatabase = async () => {
 		chalk.whiteBright(
 			'The access token below is used to gain admin privileges. Anyone with this token can take over the server.',
 		),
-		chalk.white('Please read the documentation on how to use this token.'),
+		chalk.white(
+			"Sign in with your own account in the web client, open the browser console, and run useToken('<token>').",
+		),
+		chalk.white('Replace <token> with the secret token below. See docs/server-ownership.md.'),
 		chalk.yellowBright('────────────────────────────────────────────────────'),
 		chalk.bold.greenBright(originalToken),
 		chalk.yellowBright('────────────────────────────────────────────────────'),
 	].join('\n');
 
-	console.log('\n%s\n', notice);
+	// Write straight to stdout: console.log is recorded as a Sentry breadcrumb
+	// and would ship this token with the next reported error.
+	process.stdout.write(`\n${notice}\n\n`);
 };
 
 export { seedDatabase };
