@@ -4,7 +4,7 @@ import { asc, eq } from 'drizzle-orm';
 import { createMockContext } from '../../__tests__/context';
 import { getMockedToken, initTest } from '../../__tests__/helpers';
 import { tdb } from '../../__tests__/setup';
-import { channelRolePermissions, channels, channelUserPermissions, rolePermissions } from '../../db/schema';
+import { channelRolePermissions, channels, channelUserPermissions, rolePermissions, users } from '../../db/schema';
 import { pubsub } from '../../utils/pubsub';
 import { appRouter } from '..';
 
@@ -96,6 +96,69 @@ describe('private channel management guards', () => {
 						: [1, privateId, lastId];
 			expect(categoryPositions(1)).toEqual(expectedIds.map((id, index) => ({ id, position: index + 1 })));
 			if (mutation === 'move') expect(categoryPositions(2)).toContainEqual({ id: lastId, position: 7 });
+		});
+	}
+
+	for (const userId of [1, 2]) {
+		test(`reorder rejects a ban during authorization lookup for user ${userId}`, async () => {
+			const { lastId } = await initCategory();
+			const ctx = await createMockContext({ customToken: await getMockedToken(userId) });
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const caller = appRouter.createCaller({
+				...ctx,
+				needsPermission: async (permission) => {
+					await ctx.needsPermission(permission);
+					entered.resolve();
+					await release.promise;
+				},
+			});
+			const { handshakeHash } = await caller.others.handshake();
+			await caller.others.joinServer({ handshakeHash });
+			const request = caller.channels.reorder({ categoryId: 1, channelIds: [lastId, 1] });
+			await entered.promise;
+			tdb.update(users).set({ banned: true }).where(eq(users.id, userId)).run();
+			const before = categoryPositions(1);
+			release.resolve();
+			await expect(request).rejects.toMatchObject({ code: 'FORBIDDEN' });
+			expect(categoryPositions(1)).toEqual(before);
+		});
+	}
+
+	for (const { roleAllow, userAllow } of [
+		{ roleAllow: true, userAllow: undefined },
+		{ roleAllow: true, userAllow: false },
+		{ roleAllow: false, userAllow: true },
+	]) {
+		test(`reorder respects private visibility with role allow ${roleAllow} and user allow ${userAllow}`, async () => {
+			const { moderatorCaller, privateId, lastId, memberRoleId } = await initCategory();
+			tdb
+				.insert(channelRolePermissions)
+				.values({
+					channelId: privateId,
+					roleId: memberRoleId,
+					permission: ChannelPermission.VIEW_CHANNEL,
+					allow: roleAllow,
+					createdAt: Date.now(),
+				})
+				.run();
+			if (userAllow !== undefined) {
+				tdb
+					.insert(channelUserPermissions)
+					.values({
+						channelId: privateId,
+						userId: 2,
+						permission: ChannelPermission.VIEW_CHANNEL,
+						allow: userAllow,
+						createdAt: Date.now(),
+					})
+					.run();
+			}
+			await moderatorCaller.channels.reorder({ categoryId: 1, channelIds: [privateId, lastId, 1] });
+			const visible = userAllow ?? roleAllow;
+			expect(categoryPositions(1)).toEqual(
+				(visible ? [privateId, lastId, 1] : [lastId, privateId, 1]).map((id, index) => ({ id, position: index + 1 })),
+			);
 		});
 	}
 
