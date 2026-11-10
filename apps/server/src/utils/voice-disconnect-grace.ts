@@ -16,6 +16,7 @@ type TVoiceDisconnectGraceTimer = {
 };
 
 type TVoiceDisconnectGraceScheduler = {
+	// Monotonic milliseconds, shared by all internal duration/deadline values.
 	now: () => number;
 	schedule: (callback: () => void, delayMs: number) => TVoiceDisconnectGraceTimer;
 };
@@ -74,7 +75,7 @@ type TScheduleFallbackDisconnectOptions = {
 };
 
 const defaultVoiceDisconnectGraceScheduler: TVoiceDisconnectGraceScheduler = {
-	now: Date.now,
+	now: () => performance.now(),
 	schedule: (callback, delayMs) => {
 		const timer = setTimeout(callback, delayMs);
 		return { cancel: () => clearTimeout(timer) };

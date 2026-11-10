@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { DisconnectCode } from '@sharkord/shared';
+import { logger } from '../../logger';
 import { VoiceRuntime } from '../../runtimes/voice';
 import {
 	clearPendingVoiceDisconnect,
@@ -61,6 +62,70 @@ afterEach(() => {
 });
 
 describe('voice disconnect grace', () => {
+	test('cancellation reports monotonic age and remaining TTL despite wall-clock jumps', () => {
+		let monotonicMs = 1_000;
+		let wallMs = 1_700_000_000_000;
+		const monotonic = spyOn(performance, 'now').mockImplementation(() => monotonicMs);
+		const wall = spyOn(Date, 'now').mockImplementation(() => wallMs);
+		const info = spyOn(logger, 'info').mockImplementation(() => logger);
+
+		try {
+			for (const wallJumpMs of [-30_000, 120_000]) {
+				schedulePendingVoiceDisconnect({
+					clientInstanceId: 'clock-client',
+					userId: 7,
+					channelId: 2,
+					ttlMs: 60_000,
+					finalize: () => {},
+				});
+				monotonicMs += 15_000;
+				wallMs += wallJumpMs;
+				expect(clearPendingVoiceDisconnect('clock-client', 7)).toBe(true);
+				expect(info).toHaveBeenLastCalledWith(
+					expect.objectContaining({ event: 'grace_cancelled', graceAgeMs: 15_000, ttlRemainingMs: 45_000 }),
+				);
+			}
+		} finally {
+			resetVoiceDisconnectGraceForTests();
+			info.mockRestore();
+			wall.mockRestore();
+			monotonic.mockRestore();
+		}
+	});
+
+	test.each([false, true])('expiry reports monotonic age with fallback=%s', async (fallback) => {
+		let monotonicMs = 1_000;
+		let wallMs = 1_700_000_000_000;
+		const monotonic = spyOn(performance, 'now').mockImplementation(() => monotonicMs);
+		const wall = spyOn(Date, 'now').mockImplementation(() => wallMs);
+		const info = spyOn(logger, 'info').mockImplementation(() => logger);
+
+		try {
+			// Use the default scheduler so this also pins its clock source. Only the
+			// clocks are fake; a short native timer exercises the expiry callback.
+			await new Promise<void>((resolve) => {
+				schedulePendingVoiceDisconnect({
+					clientInstanceId: fallback ? undefined : 'clock-client',
+					userId: 7,
+					channelId: 2,
+					ttlMs: 10,
+					fallbackTtlMs: 10,
+					finalize: resolve,
+				});
+				monotonicMs += 60_000;
+				wallMs -= 30_000;
+			});
+			expect(info).toHaveBeenLastCalledWith(
+				expect.objectContaining({ event: 'grace_expired', graceAgeMs: 60_000, ttlRemainingMs: 0 }),
+			);
+		} finally {
+			resetVoiceDisconnectGraceForTests();
+			info.mockRestore();
+			wall.mockRestore();
+			monotonic.mockRestore();
+		}
+	});
+
 	test('only preserves reconnect grace for recoverable closes', () => {
 		expect(shouldScheduleVoiceDisconnectGrace(DisconnectCode.UNEXPECTED)).toBe(true);
 		expect(shouldScheduleVoiceDisconnectGrace(DisconnectCode.SERVER_SHUTDOWN)).toBe(true);
