@@ -1,38 +1,17 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import type { TJoinedMessage } from '@sharkord/shared';
 import { useServerStore } from '../../slice';
-import { applyLatestMessagePage } from '../latest-message-page';
+import { sortLatestMessagePage } from '../latest-message-page';
 import { loadMessagePage } from '../load-message-page';
 
-const message = (id: number, content = `message ${id}`, createdAt = id) => ({ id, content, createdAt });
-
-describe('applyLatestMessagePage', () => {
-	it('replaces an empty list with the page', () => {
-		const page = [message(1), message(2)];
-		expect(applyLatestMessagePage([], page)).toEqual({ messages: page, replaced: true });
-	});
-	it('replaces even overlapping caches because membership does not prove continuity', () => {
-		const page = [message(41), message(60)];
-		expect(applyLatestMessagePage([message(1), message(20), message(41)], page)).toEqual({
-			messages: page,
-			replaced: true,
-		});
-	});
+describe('latest page ordering', () => {
 	it('sorts timestamp ties by id deterministically', () => {
-		expect(applyLatestMessagePage([], [message(2, 'b', 1), message(1, 'a', 1)]).messages.map((m) => m.id)).toEqual([
-			1, 2,
-		]);
-	});
-	it('replaces the list when continuity cannot be proven', () => {
-		const page = [message(5), message(6)];
-		expect(applyLatestMessagePage([message(1), message(2)], page)).toEqual({ messages: page, replaced: true });
-	});
-	it('keeps identical page content unchanged', () => {
-		const page = [message(1), message(2)];
-		expect(applyLatestMessagePage(page, page)).toEqual({ messages: page, replaced: true });
-	});
-	it('clears the loaded list for an empty authoritative page', () => {
-		expect(applyLatestMessagePage([message(1)], [])).toEqual({ messages: [], replaced: true });
+		expect(
+			sortLatestMessagePage([
+				{ id: 2, createdAt: 1 },
+				{ id: 1, createdAt: 1 },
+			]).map((m) => m.id),
+		).toEqual([1, 2]);
 	});
 });
 
@@ -57,11 +36,10 @@ describe('latest page in the message store', () => {
 			messagesMap: { 1: [joinedMessage(1)] },
 			protectedMessagePrefixCounts: { 1: 1 },
 		});
-		const replaced = useServerStore.getState().applyLatestMessagePage({
+		useServerStore.getState().applyLatestMessagePage({
 			channelId: 1,
 			messages: Array.from({ length: 1005 }, (_, index) => joinedMessage(index + 10)),
 		});
-		expect(replaced).toBe(true);
 		expect(useServerStore.getState().protectedMessagePrefixCounts[1]).toBeUndefined();
 		expect(useServerStore.getState().messagesMap[1]).toHaveLength(1000);
 		expect(useServerStore.getState().messagesMap[1]?.[0]?.id).toBe(15);

@@ -1,8 +1,22 @@
-import { beforeEach, describe, expect, it } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, mock } from 'bun:test';
 import type { TJoinedMessage } from '@sharkord/shared';
 import { useServerStore } from '../../slice';
-import { loadMessagePage } from '../load-message-page';
-import { createMessagePageRequest, recordMessageMutation, subscribeToMessageMutations } from '../message-page-request';
+import { createMessagePageLoader } from '../message-page-loader';
+
+let actions: typeof import('../actions');
+beforeAll(async () => {
+	// Keep browser/audio and network initialization outside these store/request tests.
+	mock.module('../../sounds/actions', () => ({ playSound: () => {} }));
+	mock.module('@/lib/trpc', () => ({
+		getWsClientInstanceId: () => undefined,
+		waitForTRPCSessionAuthentication: async () => {},
+		getTRPCClient: () => {
+			throw new Error('Unexpected network access');
+		},
+	}));
+	actions = await import('../actions');
+});
+afterAll(() => mock.restore());
 
 const message = (id: number, content = `${id}`): TJoinedMessage => ({
 	id,
@@ -26,54 +40,80 @@ const deferred = <T>() => {
 	return { promise, resolve, reject };
 };
 const setup = () => {
-	const requests = createMessagePageRequest();
-	const unsubscribe = subscribeToMessageMutations((channelId, mutation) => {
-		if (channelId === 1) requests.record(mutation);
-	});
-	let currentSession = true;
+	let session = {
+		channelId: 1,
+		messageSession: 1,
+		connected: true,
+		serverId: 'server-1',
+		nonce: 1,
+		client: {},
+		socketOpen: true,
+	};
 	let cursor: number | null = 1;
 	let fetching = false;
-	const start = () => {
-		const response = deferred<{ messages: TJoinedMessage[]; nextCursor: number | null }>();
-		const request = requests.begin(() => currentSession, true);
-		fetching = true;
-		const done = loadMessagePage({
-			query: () => response.promise,
-			isCurrent: request.isCurrent,
-			getLoadedMessages: () => useServerStore.getState().messagesMap[1] ?? [],
-			getFileLinkVersion: () => 'same',
-			applyLatestMessagePage: (page) => {
-				useServerStore.getState().applyLatestMessagePage({ channelId: 1, messages: request.reconcile(page) });
-			},
-			addMessages: () => {
-				throw new Error('Expected reconciliation');
-			},
-			refreshFileAccessTokens: async () => {},
-		})
-			.then((nextCursor) => {
-				if (request.isCurrent()) cursor = nextCursor;
-			})
-			.catch(() => {})
-			.finally(() => {
-				if (request.isCurrent()) fetching = false;
-				request.finish();
-			});
-		return { response, done };
+	let loading = true;
+	let hasMore = true;
+	const errors: unknown[] = [];
+	let response = deferred<{ messages: TJoinedMessage[]; nextCursor: number | null }>();
+	let queries = 0;
+	const loader = createMessagePageLoader({
+		channelId: 1,
+		getSession: () => session,
+		query: () => {
+			queries += 1;
+			return response.promise;
+		},
+		getLoadedMessages: () => useServerStore.getState().messagesMap[1] ?? [],
+		getFileLinkVersion: () => 'same',
+		applyLatestMessagePage: (page) => actions.applyLatestMessagePage(1, page),
+		addMessages: (page, prepend) => actions.addMessages(1, page, { prepend }),
+		refreshFileAccessTokens: async () => {},
+		setCursor: (value) => {
+			cursor = value;
+		},
+		setFetching: (value) => {
+			fetching = value;
+		},
+		setLoading: (value) => {
+			loading = value;
+		},
+		setHasMore: (value) => {
+			hasMore = value;
+		},
+		onError: (error) => {
+			errors.push(error);
+		},
+	});
+	const start = (reconcile = true) => {
+		response = deferred();
+		return { response, done: loader.fetch(reconcile ? null : cursor, 20, reconcile) };
 	};
 	return {
 		start,
-		requests,
-		unsubscribe,
+		requests: loader,
+		unsubscribe: loader.invalidate,
 		endSession: () => {
-			currentSession = false;
+			session = { ...session, messageSession: session.messageSession + 1 };
+		},
+		changeSession: (changes: Partial<typeof session>) => {
+			session = { ...session, ...changes };
 		},
 		cursor: () => cursor,
 		fetching: () => fetching,
+		loading: () => loading,
+		hasMore: () => hasMore,
+		queries: () => queries,
+		errors,
 	};
 };
+// This is the same action invoked by subscribeToMessageEvents for NEW_MESSAGE.
+const insert = (row: TJoinedMessage) => actions.addMessages(1, [row], {}, true);
 
 describe('deferred reconnect page reconciliation', () => {
-	beforeEach(() => useServerStore.getState().resetState());
+	beforeEach(() => {
+		useServerStore.getState().resetState();
+		useServerStore.setState({ ownUserId: 1 });
+	});
 	it('replays append, edit, delete and reaction rows in arrival order over the full raw page', async () => {
 		const h = setup();
 		const load = h.start();
@@ -82,15 +122,17 @@ describe('deferred reconnect page reconciliation', () => {
 			...message(2),
 			reactions: [{ file: null, fileId: null, messageId: 2, userId: 1, emoji: '👍', createdAt: 1 }],
 		};
-		recordMessageMutation(1, { message: message(4), insert: true });
-		recordMessageMutation(1, { message: message(100, 'old history edit') });
-		recordMessageMutation(1, { message: edited });
-		recordMessageMutation(1, { deletedId: 3 });
-		recordMessageMutation(1, { message: reaction });
+		insert(message(4));
+		actions.updateMessage(1, message(100, 'old history edit'));
+		actions.updateMessage(1, edited);
+		actions.deleteMessage(1, 3);
+		actions.updateMessage(1, reaction);
 		load.response.resolve({ messages: [message(3), message(2), message(1)], nextCursor: 99 });
 		await load.done;
 		expect(useServerStore.getState().messagesMap[1]).toEqual([edited, reaction, message(4)]);
 		expect(h.cursor()).toBe(99);
+		expect(h.hasMore()).toBe(true);
+		expect(h.loading()).toBe(false);
 		expect(h.fetching()).toBe(false);
 		h.unsubscribe();
 	});
@@ -101,7 +143,9 @@ describe('deferred reconnect page reconciliation', () => {
 		old.response.reject(new Error('obsolete'));
 		await old.done;
 		expect(h.fetching()).toBe(true);
-		recordMessageMutation(1, { message: message(3), insert: true });
+		expect(h.loading()).toBe(true);
+		expect(h.errors).toEqual([]);
+		insert(message(3));
 		latest.response.resolve({ messages: [message(2)], nextCursor: 2 });
 		await latest.done;
 		expect(useServerStore.getState().messagesMap[1]).toEqual([message(2), message(3)]);
@@ -124,6 +168,56 @@ describe('deferred reconnect page reconciliation', () => {
 		await load.done;
 		expect(useServerStore.getState().messagesMap[1]).toBeUndefined();
 		expect(h.cursor()).toBe(1);
+		h.unsubscribe();
+	});
+	it('allows a fresh mount load after effect cleanup invalidates a pending load', async () => {
+		const h = setup();
+		const old = h.start(false);
+		h.requests.invalidate();
+		const fresh = h.start(false);
+		expect(h.queries()).toBe(2);
+		old.response.resolve({ messages: [message(1)], nextCursor: 1 });
+		await old.done;
+		expect(h.fetching()).toBe(true);
+		fresh.response.resolve({ messages: [message(2)], nextCursor: null });
+		await fresh.done;
+		expect(useServerStore.getState().messagesMap[1]).toEqual([message(2)]);
+		expect(h.cursor()).toBeNull();
+		expect(h.hasMore()).toBe(false);
+		expect(h.fetching()).toBe(false);
+		h.unsubscribe();
+	});
+	it('blocks older-page loading immediately while a reconnect reload is in flight', async () => {
+		const h = setup();
+		const reload = h.start();
+		const older = h.start(false);
+		await older.done;
+		expect(h.queries()).toBe(1);
+		reload.response.resolve({ messages: [message(60)], nextCursor: 60 });
+		await reload.done;
+		expect(useServerStore.getState().messagesMap[1]).toEqual([message(60)]);
+		expect(h.cursor()).toBe(60);
+		expect(h.fetching()).toBe(false);
+		h.unsubscribe();
+	});
+	it.each([
+		{ channelId: 2 },
+		{ serverId: 'server-2' },
+		{ connected: false },
+		{ nonce: 2 },
+		{ client: {} },
+		{ socketOpen: false },
+	])('discards responses when session identity changes: %j', async (changes) => {
+		const h = setup();
+		const load = h.start();
+		h.changeSession(changes);
+		load.response.resolve({ messages: [message(1)], nextCursor: null });
+		await load.done;
+		expect(useServerStore.getState().messagesMap[1]).toBeUndefined();
+		expect(h.cursor()).toBe(1);
+		expect(h.fetching()).toBe(true);
+		expect(h.loading()).toBe(true);
+		expect(h.hasMore()).toBe(true);
 		h.unsubscribe();
 	});
 	it('retries after failure on the next bump', async () => {

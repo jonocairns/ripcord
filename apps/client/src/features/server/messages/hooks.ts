@@ -1,6 +1,5 @@
 import type { TJoinedMessage } from '@sharkord/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { logDebug } from '@/helpers/browser-logger';
 import { getTRPCClient, getTRPCClientIfInitialized, isTRPCSocketOpen } from '@/lib/trpc';
 import { getFileLinkVersion, subscribeToNonceBumps } from '../nonce-signals';
 import { serverRejoinNonceSelector } from '../selectors';
@@ -13,8 +12,7 @@ import {
 	refreshLoadedFileAccessTokens,
 } from './actions';
 import { FILE_ACCESS_TOKEN_CHECK_INTERVAL_MS } from './file-access-tokens';
-import { loadMessagePage } from './load-message-page';
-import { createMessagePageRequest, subscribeToMessageMutations } from './message-page-request';
+import { createMessagePageLoader } from './message-page-loader';
 import { messagesByChannelIdSelector } from './selectors';
 import { getMessageSession } from './subscriptions';
 
@@ -30,62 +28,41 @@ export const useMessages = (channelId: number) => {
 	messagesRef.current = messages;
 	const channelRef = useRef(channelId);
 	channelRef.current = channelId;
-	const requests = useMemo(() => createMessagePageRequest(), []);
 	const [fetching, setFetching] = useState(false);
 	const [loading, setLoading] = useState(messages.length === 0);
 	const [cursor, setCursor] = useState<number | null>(null);
 	const [hasMore, setHasMore] = useState(true);
 
-	const fetchMessages = useCallback(
-		async (cursorToFetch: number | null, limit: number, reconcile = false) => {
-			const state = useServerStore.getState();
-			const client = getTRPCClientIfInitialized();
-			const nonce = serverRejoinNonceSelector(state);
-			const session = getMessageSession();
-			const request = requests.begin(() => {
-				const current = useServerStore.getState();
-				return (
-					channelRef.current === channelId &&
-					session === getMessageSession() &&
-					current.connected &&
-					current.serverId === state.serverId &&
-					serverRejoinNonceSelector(current) === nonce &&
-					client === getTRPCClientIfInitialized() &&
-					isTRPCSocketOpen()
-				);
-			}, reconcile);
-			setFetching(true);
-			try {
-				const trpcClient = getTRPCClient();
-				const nextCursor = await loadMessagePage({
-					query: () => trpcClient.messages.get.query({ channelId, cursor: cursorToFetch, limit }),
-					isCurrent: request.isCurrent,
-					getLoadedMessages: () => messagesRef.current,
-					getFileLinkVersion,
-					applyLatestMessagePage: reconcile
-						? (page) => {
-								applyLatestMessagePage(channelId, request.reconcile(page));
-							}
-						: undefined,
-					addMessages: (page) => addMessages(channelId, page, { prepend: cursorToFetch !== null }),
-					refreshFileAccessTokens: () => refreshChannelFileAccessTokens(channelId),
-				});
-				if (request.isCurrent()) {
-					setCursor(nextCursor);
-					setHasMore(nextCursor !== null);
-				}
-			} catch (error) {
-				if (request.isCurrent()) logDebug('Message page load failed', error);
-			} finally {
-				if (request.isCurrent()) {
-					setFetching(false);
-					setLoading(false);
-				}
-				request.finish();
-			}
-		},
-		[channelId, requests],
-	);
+	const loaderRef = useRef<ReturnType<typeof createMessagePageLoader> | null>(null);
+	if (!loaderRef.current || loaderRef.current.channelId !== channelId)
+		loaderRef.current = createMessagePageLoader({
+			channelId,
+			getSession: () => {
+				const state = useServerStore.getState();
+				return {
+					channelId: channelRef.current,
+					messageSession: getMessageSession(),
+					connected: state.connected,
+					serverId: state.serverId,
+					nonce: serverRejoinNonceSelector(state),
+					client: getTRPCClientIfInitialized(),
+					socketOpen: isTRPCSocketOpen(),
+				};
+			},
+			query: (cursor, limit) => getTRPCClient().messages.get.query({ channelId, cursor, limit }),
+			getLoadedMessages: () => messagesRef.current,
+			getFileLinkVersion,
+			applyLatestMessagePage: (page) => applyLatestMessagePage(channelId, page),
+			addMessages: (page, prepend) => addMessages(channelId, page, { prepend }),
+			refreshFileAccessTokens: () => refreshChannelFileAccessTokens(channelId),
+			setFetching,
+			setLoading,
+			setCursor,
+			setHasMore,
+			onError: (error) => console.warn('Message page load failed', error),
+		});
+	const requests = loaderRef.current;
+	const fetchMessages = requests.fetch;
 
 	const loadMore = useCallback(async () => {
 		if (fetching || !hasMore) return;
@@ -93,9 +70,6 @@ export const useMessages = (channelId: number) => {
 	}, [fetching, hasMore, cursor, fetchMessages]);
 
 	useEffect(() => {
-		const unsubscribeEvents = subscribeToMessageMutations((eventChannelId, mutation) => {
-			if (eventChannelId === channelId) requests.record(mutation);
-		});
 		const unsubscribeState = useServerStore.subscribe((state, previous) => {
 			if (
 				state.serverId !== previous.serverId ||
@@ -111,11 +85,10 @@ export const useMessages = (channelId: number) => {
 		});
 		return () => {
 			requests.invalidate();
-			unsubscribeEvents();
 			unsubscribeState();
 			unsubscribeRejoins();
 		};
-	}, [channelId, fetchMessages, requests]);
+	}, [fetchMessages, requests]);
 
 	const isEmpty = useMemo(() => !messages.length && !fetching, [messages.length, fetching]);
 

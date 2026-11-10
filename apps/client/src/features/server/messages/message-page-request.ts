@@ -25,7 +25,7 @@ export const createMessagePageRequest = () => {
 						if ('deletedId' in event) messages.delete(event.deletedId);
 						else if (event.insert || messages.has(event.message.id)) messages.set(event.message.id, event.message);
 					}
-					return [...messages.values()].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id);
+					return [...messages.values()];
 				},
 				finish: () => {
 					if (requestGeneration === generation) journal = undefined;

@@ -158,6 +158,8 @@ export const joinServer = async (
 			unsubscribeFromServer = initSubscriptions();
 		}
 
+		// Do not await between setInitialData and initSubscriptions below: mounted
+		// message loaders must capture the new subscription session before responses run.
 		useServerStore.getState().setInitialData(data);
 		setDisconnectInfo(undefined);
 
