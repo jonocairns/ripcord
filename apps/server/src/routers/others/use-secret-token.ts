@@ -2,7 +2,7 @@ import { ActivityLogType, OWNER_ROLE_ID, sha256 } from '@sharkord/shared';
 import { z } from 'zod';
 import { db } from '../../db';
 import { publishChannelPermissions, publishUser, publishUserChannelVisibility } from '../../db/publishers';
-import { getVisibleChannelIdsByUserSync } from '../../db/queries/channels';
+import { getVisiblePrivateChannelIdsByUserSync } from '../../db/queries/channels';
 import { getSettings } from '../../db/queries/server';
 import { userRoles } from '../../db/schema';
 import { logger } from '../../logger';
@@ -34,7 +34,7 @@ const useSecretTokenRoute = rateLimitedProcedure(protectedProcedure, {
 			message: 'Invalid secret token',
 		});
 
-		const previousVisibleByUser = getVisibleChannelIdsByUserSync([ctx.userId]);
+		const previousVisibleByUser = getVisiblePrivateChannelIdsByUserSync([ctx.userId]);
 		db.insert(userRoles)
 			.values({
 				userId: ctx.userId,
