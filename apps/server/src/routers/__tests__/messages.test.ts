@@ -578,13 +578,17 @@ describe('messages router', () => {
 
 		expect(secondPage.messages.length).toBeGreaterThan(0);
 
-		// ensure no overlap between pages
-		const firstPageIds = firstPage.messages.map((m) => m.id);
-		const secondPageIds = secondPage.messages.map((m) => m.id);
+		// Messages sent in a tight loop can share a millisecond. A message whose
+		// timestamp is on the page boundary is deliberately returned on both pages
+		// (the client dedupes by id), so only boundary-timestamp messages may repeat.
+		const boundaryCreatedAt = firstPage.messages[firstPage.messages.length - 1]?.createdAt;
+		if (boundaryCreatedAt === undefined) throw new Error('First page is empty');
+		const firstPageIds = new Set(firstPage.messages.map((m) => m.id));
+		const repeated = secondPage.messages.filter((m) => firstPageIds.has(m.id));
 
-		const intersection = firstPageIds.filter((id) => secondPageIds.includes(id));
-
-		expect(intersection.length).toBe(0);
+		for (const message of repeated) {
+			expect(message.createdAt).toBe(boundaryCreatedAt);
+		}
 	});
 
 	test('should return empty messages for empty channel', async () => {
