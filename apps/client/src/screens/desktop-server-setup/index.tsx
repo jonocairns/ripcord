@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Group } from '@/components/ui/group';
 import { Input } from '@/components/ui/input';
+import { upgradeAuthTokenOrigin } from '@/helpers/storage';
 import { normalizeServerUrl, updateDesktopServerUrl } from '@/runtime/server-config';
 
 const DesktopServerSetup = memo(() => {
@@ -15,7 +16,7 @@ const DesktopServerSetup = memo(() => {
 
 		try {
 			const normalized = normalizeServerUrl(serverUrl);
-			await updateDesktopServerUrl(normalized.url);
+			await updateDesktopServerUrl(normalized.url, upgradeAuthTokenOrigin);
 			window.location.reload();
 		} catch (error) {
 			const message = error instanceof Error ? error.message : 'Failed to save server URL';

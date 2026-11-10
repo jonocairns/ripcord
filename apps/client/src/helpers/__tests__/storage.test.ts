@@ -161,3 +161,87 @@ describe('per-origin tokens', () => {
 		}
 	});
 });
+
+describe('saving a desktop server URL', () => {
+	let originalWindow: typeof globalThis.window;
+	let originalFetch: typeof globalThis.fetch;
+	const setServerUrl = mock(async (_url: string) => {});
+
+	beforeEach(() => {
+		installStorageStubs();
+		originalWindow = globalThis.window;
+		originalFetch = globalThis.fetch;
+		setServerUrl.mockReset();
+		setServerUrl.mockImplementation(async (_url: string) => {});
+		Reflect.set(globalThis, 'window', { sharkordDesktop: { setServerUrl } });
+		Reflect.set(
+			globalThis,
+			'fetch',
+			mock(async () => new Response()),
+		);
+	});
+
+	afterEach(() => {
+		Reflect.set(globalThis, 'window', originalWindow);
+		Reflect.set(globalThis, 'fetch', originalFetch);
+		mock.restore();
+	});
+
+	test.each([
+		['same host', A, A, 'https://a.example', true],
+		['same host and explicit port', 'http://a.example:4991', 'http://a.example:4991', 'https://a.example:4991', true],
+		['different host', A, 'http://b.example', B, false],
+		['different port', 'http://a.example:4991', 'http://a.example:4992', 'https://a.example:4992', false],
+		['changed default port', 'http://a.example:443', 'http://a.example:443', 'https://a.example', false],
+		['already HTTPS', 'https://a.example', 'https://a.example', 'https://a.example', false],
+		['private HTTP without upgrade', 'http://localhost:4991', 'http://localhost:4991', 'http://localhost:4991', false],
+		['HTTPS to private HTTP', 'https://localhost:4991', 'http://localhost:4991', 'http://localhost:4991', false],
+	])('%s preserves credentials only for an automatic same-host/port upgrade', async (_label, source, input, saved, moves) => {
+		for (const { storage, key, value } of entries()) storage.setItem(`${key}:${source}`, value);
+		await serverConfig.updateDesktopServerUrl(input, upgradeAuthTokenOrigin);
+		expect(setServerUrl).toHaveBeenCalledWith(saved);
+		for (const { storage, key, value } of entries()) {
+			expect(storage.getItem(`${key}:${source}`)).toBe(moves ? null : value);
+			if (source !== saved) expect(storage.getItem(`${key}:${saved}`)).toBe(moves ? value : null);
+		}
+	});
+
+	test('failed HTTPS probe leaves HTTP credentials in place', async () => {
+		Reflect.set(
+			globalThis,
+			'fetch',
+			mock(async () => {
+				throw new Error('TLS unavailable');
+			}),
+		);
+		for (const { storage, key, value } of entries()) storage.setItem(`${key}:${A}`, value);
+		await serverConfig.updateDesktopServerUrl(A, upgradeAuthTokenOrigin);
+		expect(setServerUrl).toHaveBeenCalledWith(A);
+		for (const { storage, key, value } of entries()) {
+			expect(storage.getItem(`${key}:${A}`)).toBe(value);
+			expect(storage.getItem(`${key}:https://a.example`)).toBeNull();
+		}
+	});
+
+	test('failed save does not move credentials', async () => {
+		setServerUrl.mockRejectedValueOnce(new Error('Save failed'));
+		for (const { storage, key, value } of entries()) storage.setItem(`${key}:${A}`, value);
+		await expect(serverConfig.updateDesktopServerUrl(A, upgradeAuthTokenOrigin)).rejects.toThrow('Save failed');
+		for (const { storage, key, value } of entries()) {
+			expect(storage.getItem(`${key}:${A}`)).toBe(value);
+			expect(storage.getItem(`${key}:https://a.example`)).toBeNull();
+		}
+	});
+
+	test('automatic upgrade preserves existing HTTPS credentials', async () => {
+		for (const { storage, key, value } of entries()) {
+			storage.setItem(`${key}:${A}`, value);
+			storage.setItem(`${key}:https://a.example`, 'existing');
+		}
+		await serverConfig.updateDesktopServerUrl(A, upgradeAuthTokenOrigin);
+		for (const { storage, key } of entries()) {
+			expect(storage.getItem(`${key}:${A}`)).toBeNull();
+			expect(storage.getItem(`${key}:https://a.example`)).toBe('existing');
+		}
+	});
+});
