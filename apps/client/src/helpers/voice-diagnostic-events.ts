@@ -109,6 +109,7 @@ const messages = [
 	'Voice WebSocket closed',
 	'Voice diagnostic',
 	'Voice provider unmounting, cleaning up resources',
+	'Voice rebuild restarted after a reconnect nonce change',
 	'Voice reconnect recovery gave up',
 	'Voice session command finished',
 	'Voice session command skipped: server connection unavailable',

@@ -8,7 +8,6 @@ import {
 	isVoiceReconnectPeerSuppressed,
 	markVoiceReconnectSessionAuthenticated,
 	markVoiceReconnectSessionUnauthenticated,
-	resolveVoiceRecoveryAction,
 	snapshotVoiceReconnectIntent,
 	type TPendingVoiceReconnect,
 	type TVoiceReconnectSuppression,
@@ -20,6 +19,7 @@ import {
 	selectReconnectAuthenticated,
 	selectReconnectingSince,
 	selectVoiceReconnectSuppression,
+	VOICE_RECONNECT_SUPPRESSION_MS,
 } from '../voice-session-machine';
 import {
 	dispatchVoiceSession,
@@ -34,6 +34,33 @@ const getReconnectingSince = (): number | undefined => selectVoiceSessionState(s
 const getReconnectAuthenticated = (): boolean => selectVoiceSessionState(selectReconnectAuthenticated);
 const getVoiceReconnectSuppression = (): TVoiceReconnectSuppression | undefined =>
 	selectVoiceSessionState(selectVoiceReconnectSuppression);
+
+const setVoiceReconnectSuppression = (suppression: TVoiceReconnectSuppression): void => {
+	const [capture] = dispatchVoiceSession({
+		type: 'WsDropped',
+		pending: { ...suppression, micMuted: false, soundMuted: false },
+		now: suppression.expiresAt - VOICE_RECONNECT_SUPPRESSION_MS,
+		online: true,
+		authenticated: false,
+	});
+	if (capture?.type !== 'CaptureRecoverySnapshot') throw new Error('expected recovery snapshot command');
+	const [auth] = dispatchVoiceSession({
+		...capture,
+		type: 'RecoveryStarted',
+		snapshot: { remoteUserStreams: {}, externalStreams: {} },
+	});
+	if (auth?.type !== 'WaitAuth') throw new Error('expected authentication command');
+	dispatchVoiceSession({ type: 'SocketAuthenticated' });
+	const [restore] = dispatchVoiceSession({ ...auth, type: 'AuthReady' });
+	if (restore?.type !== 'RestoreVoiceSession') throw new Error('expected restore command');
+	const [watch] = dispatchVoiceSession({ ...restore, type: 'RestoreSucceeded' });
+	if (watch?.type !== 'RestoreWatchIntent') throw new Error('expected watch restore command');
+	dispatchVoiceSession({
+		...watch,
+		type: 'WatchIntentRehydrated',
+		now: suppression.expiresAt - VOICE_RECONNECT_SUPPRESSION_MS,
+	});
+};
 
 describe('voice reconnect coordinator', () => {
 	beforeEach(() => {
@@ -216,6 +243,11 @@ describe('voice reconnect coordinator', () => {
 
 	describe('clearVoiceReconnectRecovery', () => {
 		it('atomically clears reconnect state', () => {
+			setVoiceReconnectSuppression({
+				channelId: 5,
+				peerUserIds: [10],
+				expiresAt: Date.now() + 10_000,
+			});
 			dispatchVoiceSession({
 				type: 'ReconnectIntentCaptured',
 				pending: {
@@ -227,14 +259,6 @@ describe('voice reconnect coordinator', () => {
 				},
 			});
 			ensureVoiceReconnectStarted();
-			dispatchVoiceSession({
-				type: 'ReconnectSuppressionChanged',
-				suppression: {
-					channelId: 5,
-					peerUserIds: [10],
-					expiresAt: Date.now() + 10_000,
-				},
-			});
 
 			clearVoiceReconnectRecovery('user-left-voice');
 
@@ -250,110 +274,6 @@ describe('voice reconnect coordinator', () => {
 			expect(getPendingVoiceReconnect()).toBeUndefined();
 			expect(getReconnectingSince()).toBeUndefined();
 			expect(getVoiceReconnectSuppression()).toBeUndefined();
-		});
-	});
-
-	describe('resolveVoiceRecoveryAction', () => {
-		it('returns none when no pending reconnect exists', () => {
-			expect(resolveVoiceRecoveryAction()).toEqual({ kind: 'none' });
-		});
-
-		it('returns session-present when voiceMap still shows the user in the channel', () => {
-			useServerStore.setState({
-				ownUserId: 1,
-				voiceMap: {
-					5: {
-						users: {
-							1: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: false },
-						},
-					},
-				},
-			});
-
-			dispatchVoiceSession({
-				type: 'ReconnectIntentCaptured',
-				pending: {
-					channelId: 5,
-					micMuted: false,
-					soundMuted: false,
-					peerUserIds: [],
-					expiresAt: Date.now() + VOICE_RECONNECT_INTENT_TTL_MS,
-				},
-			});
-
-			expect(resolveVoiceRecoveryAction()).toEqual({ kind: 'session-present', channelId: 5 });
-		});
-
-		it('returns session-missing when voiceMap does not show the user', () => {
-			useServerStore.setState({
-				ownUserId: 1,
-				voiceMap: {
-					5: {
-						users: {
-							10: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: false },
-						},
-					},
-				},
-			});
-
-			dispatchVoiceSession({
-				type: 'ReconnectIntentCaptured',
-				pending: {
-					channelId: 5,
-					micMuted: false,
-					soundMuted: false,
-					peerUserIds: [10],
-					expiresAt: Date.now() + VOICE_RECONNECT_INTENT_TTL_MS,
-				},
-			});
-
-			expect(resolveVoiceRecoveryAction()).toEqual({ kind: 'session-missing', channelId: 5 });
-		});
-
-		it('returns session-missing when the channel has no state at all', () => {
-			useServerStore.setState({
-				ownUserId: 1,
-				voiceMap: {},
-			});
-
-			dispatchVoiceSession({
-				type: 'ReconnectIntentCaptured',
-				pending: {
-					channelId: 5,
-					micMuted: false,
-					soundMuted: false,
-					peerUserIds: [],
-					expiresAt: Date.now() + VOICE_RECONNECT_INTENT_TTL_MS,
-				},
-			});
-
-			expect(resolveVoiceRecoveryAction()).toEqual({ kind: 'session-missing', channelId: 5 });
-		});
-
-		it('returns none when pendingVoiceReconnect has expired', () => {
-			useServerStore.setState({
-				ownUserId: 1,
-				voiceMap: {
-					5: {
-						users: {
-							1: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: false },
-						},
-					},
-				},
-			});
-
-			dispatchVoiceSession({
-				type: 'ReconnectIntentCaptured',
-				pending: {
-					channelId: 5,
-					micMuted: false,
-					soundMuted: false,
-					peerUserIds: [],
-					expiresAt: Date.now() - 1,
-				},
-			});
-
-			expect(resolveVoiceRecoveryAction()).toEqual({ kind: 'none' });
 		});
 	});
 
@@ -485,13 +405,10 @@ describe('voice reconnect coordinator', () => {
 
 	describe('isVoiceReconnectPeerSuppressed', () => {
 		it('returns true only for peers in the same channel before suppression expiry', () => {
-			dispatchVoiceSession({
-				type: 'ReconnectSuppressionChanged',
-				suppression: {
-					channelId: 7,
-					peerUserIds: [10, 20],
-					expiresAt: Date.now() + 10_000,
-				},
+			setVoiceReconnectSuppression({
+				channelId: 7,
+				peerUserIds: [10, 20],
+				expiresAt: Date.now() + 10_000,
 			});
 
 			expect(isVoiceReconnectPeerSuppressed(7, 10)).toBe(true);
@@ -500,13 +417,10 @@ describe('voice reconnect coordinator', () => {
 		});
 
 		it('returns false after suppression expiry', () => {
-			dispatchVoiceSession({
-				type: 'ReconnectSuppressionChanged',
-				suppression: {
-					channelId: 7,
-					peerUserIds: [10],
-					expiresAt: Date.now() - 1,
-				},
+			setVoiceReconnectSuppression({
+				channelId: 7,
+				peerUserIds: [10],
+				expiresAt: Date.now() - 1,
 			});
 
 			expect(isVoiceReconnectPeerSuppressed(7, 10)).toBe(false);

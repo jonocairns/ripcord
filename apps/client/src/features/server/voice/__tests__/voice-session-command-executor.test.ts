@@ -513,7 +513,7 @@ describe('voice session command executor', () => {
 		const commandObserver = createRecordingCommandObserver();
 
 		// The machine moved on before the command could run (terminal teardown).
-		dispatchVoiceSession({ type: 'Terminated', reason: 'kicked', channelId: 5 });
+		dispatchVoiceSession({ type: 'RecoveryCleared', reason: 'kicked' });
 
 		let rebuildCalls = 0;
 		const executor = createExecutor(

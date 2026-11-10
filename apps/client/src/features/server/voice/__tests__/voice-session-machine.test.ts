@@ -127,8 +127,8 @@ describe('voice session machine', () => {
 		state = voiceSessionResultState(reduceVoiceSession(state, { type: 'JoinSucceeded', channelId: 5 }));
 		expect(selectVoiceSessionConnectionStatus(state)).toBe('connected');
 
-		state = voiceSessionResultState(reduceVoiceSession(state, { type: 'Terminated', reason: 'kicked', channelId: 5 }));
-		expect(selectVoiceSessionConnectionStatus(state)).toBe('failed');
+		state = voiceSessionResultState(reduceVoiceSession(state, { type: 'RecoveryCleared', reason: 'kicked' }));
+		expect(selectVoiceSessionConnectionStatus(state)).toBe('disconnected');
 	});
 
 	it('defers transport failure while ws reconnect owns recovery', () => {

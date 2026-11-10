@@ -42,11 +42,6 @@ type TClearReason =
 	| 'desktop-quit'
 	| 'app-teardown';
 
-type TVoiceRecoveryAction =
-	| { kind: 'none' }
-	| { kind: 'session-present'; channelId: number }
-	| { kind: 'session-missing'; channelId: number };
-
 const getMachinePendingVoiceReconnect = (): TPendingVoiceReconnect | undefined =>
 	selectVoiceSessionState(selectPendingVoiceReconnect);
 
@@ -184,28 +179,7 @@ const isVoiceReconnectPeerSuppressed = (channelId: number, userId: number): bool
 	return voiceReconnectSuppression.channelId === channelId && voiceReconnectSuppression.peerUserIds.includes(userId);
 };
 
-const resolveVoiceRecoveryAction = (): TVoiceRecoveryAction => {
-	const pendingVoiceReconnect = getValidPendingVoiceReconnect();
-
-	if (!pendingVoiceReconnect) {
-		return { kind: 'none' };
-	}
-
-	const serverState = useServerStore.getState();
-	const { ownUserId, voiceMap } = serverState;
-	const { channelId } = pendingVoiceReconnect;
-
-	const channelState = voiceMap[channelId];
-	const stillInVoice = ownUserId !== undefined && channelState?.users[ownUserId] !== undefined;
-
-	if (stillInVoice) {
-		return { kind: 'session-present', channelId };
-	}
-
-	return { kind: 'session-missing', channelId };
-};
-
-export type { TClearReason, TPendingVoiceReconnect, TVoiceReconnectSuppression, TVoiceRecoveryAction };
+export type { TClearReason, TPendingVoiceReconnect, TVoiceReconnectSuppression };
 export {
 	captureVoiceReconnectIntentForCurrentSession,
 	clearVoiceReconnectRecovery,
@@ -215,7 +189,6 @@ export {
 	isVoiceReconnectRecoveryActive,
 	markVoiceReconnectSessionAuthenticated,
 	markVoiceReconnectSessionUnauthenticated,
-	resolveVoiceRecoveryAction,
 	snapshotVoiceReconnectIntent,
 	updateVoiceReconnectIntentState,
 	VOICE_RECONNECT_INTENT_TTL_MS,

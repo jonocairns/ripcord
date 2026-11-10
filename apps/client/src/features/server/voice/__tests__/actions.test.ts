@@ -9,6 +9,7 @@ import {
 	selectPendingVoiceReconnect,
 	selectReconnectingSince,
 	selectVoiceReconnectSuppression,
+	VOICE_RECONNECT_SUPPRESSION_MS,
 } from '../voice-session-machine';
 import { dispatchVoiceSession, resetVoiceSessionState, selectVoiceSessionState } from '../voice-session-store';
 
@@ -146,7 +147,30 @@ const startVoiceReconnect = (now: number): void => {
 };
 
 const setVoiceReconnectSuppression = (suppression: TVoiceReconnectSuppression): void => {
-	dispatchVoiceSession({ type: 'ReconnectSuppressionChanged', suppression });
+	const [capture] = dispatchVoiceSession({
+		type: 'WsDropped',
+		pending: { ...suppression, micMuted: false, soundMuted: false },
+		now: suppression.expiresAt - VOICE_RECONNECT_SUPPRESSION_MS,
+		online: true,
+		authenticated: false,
+	});
+	if (capture?.type !== 'CaptureRecoverySnapshot') throw new Error('expected recovery snapshot command');
+	const [auth] = dispatchVoiceSession({
+		...capture,
+		type: 'RecoveryStarted',
+		snapshot: { remoteUserStreams: {}, externalStreams: {} },
+	});
+	if (auth?.type !== 'WaitAuth') throw new Error('expected authentication command');
+	dispatchVoiceSession({ type: 'SocketAuthenticated' });
+	const [restore] = dispatchVoiceSession({ ...auth, type: 'AuthReady' });
+	if (restore?.type !== 'RestoreVoiceSession') throw new Error('expected restore command');
+	const [watch] = dispatchVoiceSession({ ...restore, type: 'RestoreSucceeded' });
+	if (watch?.type !== 'RestoreWatchIntent') throw new Error('expected watch restore command');
+	dispatchVoiceSession({
+		...watch,
+		type: 'WatchIntentRehydrated',
+		now: suppression.expiresAt - VOICE_RECONNECT_SUPPRESSION_MS,
+	});
 };
 
 const getPendingVoiceReconnect = (): TPendingVoiceReconnect | undefined =>
@@ -767,6 +791,11 @@ describe('voice actions', () => {
 				sharingScreen: true,
 			},
 		});
+		setVoiceReconnectSuppression({
+			channelId: 7,
+			peerUserIds: [10],
+			expiresAt: Date.now() + 10_000,
+		});
 		setPendingVoiceReconnect({
 			channelId: 7,
 			micMuted: true,
@@ -775,11 +804,6 @@ describe('voice actions', () => {
 			expiresAt: Date.now() + 10_000,
 		});
 		startVoiceReconnect(Date.now());
-		setVoiceReconnectSuppression({
-			channelId: 7,
-			peerUserIds: [10],
-			expiresAt: Date.now() + 10_000,
-		});
 
 		const result = await flushVoiceForDesktopQuit();
 
@@ -935,6 +959,11 @@ describe('voice actions', () => {
 				sharingScreen: true,
 			},
 		});
+		setVoiceReconnectSuppression({
+			channelId: 7,
+			peerUserIds: [10],
+			expiresAt: Date.now() + 10_000,
+		});
 		setPendingVoiceReconnect({
 			channelId: 7,
 			micMuted: false,
@@ -943,11 +972,6 @@ describe('voice actions', () => {
 			expiresAt: Date.now() + 10_000,
 		});
 		startVoiceReconnect(Date.now());
-		setVoiceReconnectSuppression({
-			channelId: 7,
-			peerUserIds: [10],
-			expiresAt: Date.now() + 10_000,
-		});
 
 		clearOwnVoiceSessionAfterReconnectFailure('restore-terminal-error');
 

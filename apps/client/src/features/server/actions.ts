@@ -37,7 +37,6 @@ import {
 	clearVoiceReconnectRecovery,
 	ensureVoiceReconnectStarted,
 	getValidPendingVoiceReconnect,
-	resolveVoiceRecoveryAction,
 } from './voice/reconnect-coordinator';
 import { resolveWsRejoinFailureAction } from './ws-rejoin-failure-policy';
 
@@ -316,10 +315,6 @@ export const joinServer = async (
 				});
 				ensureVoiceReconnectStarted();
 			}
-
-			logDebug('Voice recovery action resolved', {
-				recoveryAction: resolveVoiceRecoveryAction(),
-			});
 
 			return 'joined';
 		};
