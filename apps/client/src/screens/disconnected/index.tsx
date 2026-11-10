@@ -8,7 +8,7 @@ import { connect, setDisconnectInfo } from '@/features/server/actions';
 import { isReconnectPausedDisconnectCode } from '@/features/server/disconnect-utils';
 import type { TDisconnectInfo } from '@/features/server/types';
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
-import { getAuthToken, getRefreshToken } from '@/helpers/storage';
+import { getAuthToken, getRefreshToken, upgradeAuthTokenOrigin } from '@/helpers/storage';
 import { isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
 import { getRuntimeServerConfig, normalizeServerUrl, updateDesktopServerUrl } from '@/runtime/server-config';
 
@@ -162,7 +162,7 @@ const Disconnected = memo(({ info }: TDisconnectedProps) => {
 
 		try {
 			const normalized = normalizeServerUrl(desktopServerUrl);
-			await updateDesktopServerUrl(normalized.url);
+			await updateDesktopServerUrl(normalized.url, upgradeAuthTokenOrigin);
 			toast.success('Desktop server URL saved');
 			window.location.reload();
 		} catch (error) {

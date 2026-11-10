@@ -15,6 +15,7 @@ import {
 	LocalStorageKey,
 	setAuthTokens,
 	setLocalStorageItem,
+	upgradeAuthTokenOrigin,
 } from '@/helpers/storage';
 import { useForm } from '@/hooks/use-form';
 import { getRuntimeServerConfig, normalizeServerUrl, updateDesktopServerUrl } from '@/runtime/server-config';
@@ -218,7 +219,7 @@ const Connect = memo(() => {
 
 		try {
 			const normalized = normalizeServerUrl(desktopServerUrl);
-			await updateDesktopServerUrl(normalized.url);
+			await updateDesktopServerUrl(normalized.url, upgradeAuthTokenOrigin);
 			window.location.reload();
 		} catch (error) {
 			const message = error instanceof Error ? error.message : 'Could not save server URL';
