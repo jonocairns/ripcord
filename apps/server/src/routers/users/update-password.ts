@@ -21,7 +21,11 @@ const updatePasswordRoute = passwordCheckProcedure
 	)
 	.mutation(async ({ ctx, input }) => {
 		const now = Date.now();
-		const user = db.select({ password: users.password }).from(users).where(eq(users.id, ctx.userId)).get();
+		const user = db
+			.select({ password: users.password, tokenVersion: users.tokenVersion })
+			.from(users)
+			.where(eq(users.id, ctx.userId))
+			.get();
 
 		invariant(user, {
 			code: 'NOT_FOUND',
@@ -41,11 +45,27 @@ const updatePasswordRoute = passwordCheckProcedure
 		const hashedNewPassword = await hashPassword(input.newPassword);
 
 		const newTokenVersion = db.transaction((tx) => {
-			const currentUser = tx.select({ password: users.password }).from(users).where(eq(users.id, ctx.userId)).get();
+			const currentUser = tx
+				.select({ password: users.password, tokenVersion: users.tokenVersion })
+				.from(users)
+				.where(eq(users.id, ctx.userId))
+				.get();
 
-			invariant(currentUser?.password === user.password, {
+			invariant(currentUser, {
+				code: 'NOT_FOUND',
+				message: 'User not found',
+			});
+
+			invariant(currentUser.password === user.password, {
 				code: 'CONFLICT',
 				message: 'Your password was changed in another session. Please try again.',
+			});
+
+			// Compare with the version this session authenticated with, not just the
+			// earlier read, so a revocation landing before that read is still caught.
+			invariant(currentUser.tokenVersion === ctx.sessionTokenVersion, {
+				code: 'CONFLICT',
+				message: 'Your session changed while updating the password. Please sign in and try again.',
 			});
 
 			const userUpdateData = {
@@ -60,6 +80,11 @@ const updatePasswordRoute = passwordCheckProcedure
 				.where(eq(users.id, ctx.userId))
 				.returning({ tokenVersion: users.tokenVersion })
 				.get();
+
+			invariant(updatedUser, {
+				code: 'NOT_FOUND',
+				message: 'User not found',
+			});
 
 			tx.update(refreshTokens)
 				.set({
