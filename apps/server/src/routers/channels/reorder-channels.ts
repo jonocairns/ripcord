@@ -17,18 +17,18 @@ const reorderChannelsRoute = protectedProcedure
 	.mutation(async ({ input, ctx }) => {
 		await ctx.needsPermission(Permission.MANAGE_CHANNELS);
 
-		await db.transaction(async (tx) => {
+		await db.transaction((tx) => {
 			for (let i = 0; i < input.channelIds.length; i++) {
 				const channelId = input.channelIds[i]!;
 				const newPosition = i + 1;
 
-				await tx
-					.update(channels)
+				tx.update(channels)
 					.set({
 						position: newPosition,
 						updatedAt: Date.now(),
 					})
-					.where(eq(channels.id, channelId));
+					.where(eq(channels.id, channelId))
+					.run();
 			}
 		});
 

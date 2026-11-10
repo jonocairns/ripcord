@@ -12,27 +12,31 @@ const fallbackUsersToDefaultRole = async (roleId: number) => {
 		message: 'Default role not found',
 	});
 
-	await db.transaction(async (tx) => {
-		const affectedUsers = await tx
+	await db.transaction((tx) => {
+		const affectedUsers = tx
 			.select({ userId: userRoles.userId })
 			.from(userRoles)
-			.where(eq(userRoles.roleId, roleId));
+			.where(eq(userRoles.roleId, roleId))
+			.all();
 
-		await tx.delete(userRoles).where(eq(userRoles.roleId, roleId));
+		tx.delete(userRoles).where(eq(userRoles.roleId, roleId)).run();
 
 		for (const { userId } of affectedUsers) {
-			const hasDefaultRole = await tx
+			const hasDefaultRole = tx
 				.select()
 				.from(userRoles)
 				.where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, defaultRole.id)))
-				.limit(1);
+				.limit(1)
+				.all();
 
 			if (hasDefaultRole.length === 0) {
-				await tx.insert(userRoles).values({
-					userId,
-					roleId: defaultRole.id,
-					createdAt: Date.now(),
-				});
+				tx.insert(userRoles)
+					.values({
+						userId,
+						roleId: defaultRole.id,
+						createdAt: Date.now(),
+					})
+					.run();
 			}
 		}
 	});

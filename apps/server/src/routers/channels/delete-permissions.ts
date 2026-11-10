@@ -29,19 +29,19 @@ const deletePermissionsRoute = protectedProcedure
 
 		const affectedUserIds = await getAffectedUserIdsForChannel(input.channelId);
 
-		await db.transaction(async (tx) => {
+		await db.transaction((tx) => {
 			if (input.userId) {
-				await tx
-					.delete(channelUserPermissions)
+				tx.delete(channelUserPermissions)
 					.where(
 						and(eq(channelUserPermissions.channelId, input.channelId), eq(channelUserPermissions.userId, input.userId)),
-					);
+					)
+					.run();
 			} else if (input.roleId) {
-				await tx
-					.delete(channelRolePermissions)
+				tx.delete(channelRolePermissions)
 					.where(
 						and(eq(channelRolePermissions.channelId, input.channelId), eq(channelRolePermissions.roleId, input.roleId)),
-					);
+					)
+					.run();
 			}
 		});
 
