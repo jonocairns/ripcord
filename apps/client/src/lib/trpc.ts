@@ -200,7 +200,7 @@ const initializeTRPC = (host: string) => {
 			if (!terminal) lastDrop = { code: cause.code, reason: cause.reason, wasClean: cause.wasClean, wasConnected };
 			run(connection.dispatch({ type: 'socket-closed', terminal, now: performance.now() }));
 
-			if (!shouldRestoreVoiceAfterDisconnect(cause.code)) {
+			if (terminal) {
 				// Tear down immediately for intentional server-side disconnects
 				if (cause.code === DisconnectCode.KICKED) {
 					clearVoiceReconnectRecovery('kicked');
