@@ -1,10 +1,13 @@
-import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import nodeFs from 'node:fs';
 import fs from 'node:fs/promises';
+import http from 'node:http';
 import path from 'node:path';
 import { type TTempFile, UploadHeaders } from '@sharkord/shared';
-import { login, uploadFile } from '../../__tests__/helpers';
+import { eq } from 'drizzle-orm';
+import { getMockedToken, login, uploadFile } from '../../__tests__/helpers';
 import { tdb, testsBaseUrl } from '../../__tests__/setup';
-import { settings } from '../../db/schema';
+import { settings, users } from '../../db/schema';
 import { TMP_PATH } from '../../helpers/paths';
 
 type TUploadErrorResponse = {
@@ -286,4 +289,89 @@ describe('/upload', () => {
 		expect(data.size).toBe(8);
 		expect(await fs.exists(data.path)).toBe(true);
 	});
+	test('rejects a banned user with a valid access token', async () => {
+		const bannedToken = await getMockedToken(2);
+		await tdb.update(users).set({ banned: true }).where(eq(users.id, 2));
+		const response = await uploadFile(getMockFile('blocked'), bannedToken);
+		expect(response.status).toBe(403);
+		expect(await response.json()).toEqual({ error: 'User is banned' });
+	});
+
+	test('rejects the 61st upload attempt and leaves other users unaffected', async () => {
+		// Rejected permission checks count too, without staging 60 temporary files.
+		await tdb.update(settings).set({ storageUploadEnabled: false });
+		for (let i = 0; i < 60; i++) {
+			const response = await uploadFile(getMockFile('rate limit'), token);
+			expect(response.status).toBe(403);
+			await response.text();
+		}
+		const response = await uploadFile(getMockFile('rate limit'), token);
+		expect(response.status).toBe(429);
+		expect(Number(response.headers.get('retry-after'))).toBeGreaterThan(0);
+		expect(await response.json()).toEqual({ error: 'Too many uploads. Please try again shortly.' });
+		const otherResponse = await uploadFile(getMockFile('other user'), await getMockedToken(2));
+		expect(otherResponse.status).toBe(403);
+		await otherResponse.text();
+	});
+
+	for (const abort of [false, true]) {
+		test(`releases a concurrent upload slot after ${abort ? 'an abort' : 'completion'}`, async () => {
+			const originalCreateWriteStream = nodeFs.createWriteStream;
+			const closedStreams: Promise<void>[] = [];
+			let onStreamOpened = () => {};
+			const streamSpy = spyOn(nodeFs, 'createWriteStream').mockImplementation((...args) => {
+				const stream = originalCreateWriteStream(...args);
+				closedStreams.push(new Promise<void>((resolve) => stream.once('close', resolve)));
+				onStreamOpened();
+				return stream;
+			});
+			const requests: http.ClientRequest[] = [];
+			try {
+				const pending = [];
+				for (let i = 0; i < 4; i++) {
+					const opened = new Promise<void>((resolve) => {
+						onStreamOpened = resolve;
+					});
+					const req = http.request(`${testsBaseUrl}/upload`, {
+						method: 'POST',
+						headers: {
+							'Content-Length': '2',
+							[UploadHeaders.CONTENT_LENGTH]: '2',
+							[UploadHeaders.ORIGINAL_NAME]: 'pending.txt',
+							[UploadHeaders.TOKEN]: token,
+						},
+					});
+					requests.push(req);
+					const response = new Promise<number | undefined>((resolve) => {
+						req.on('response', (res) => {
+							res.resume();
+							res.on('end', () => resolve(res.statusCode));
+						});
+						req.on('error', () => resolve(undefined));
+					});
+					req.write('a');
+					await opened;
+					pending.push({ req, response });
+				}
+				const blocked = await uploadFile(getMockFile('blocked'), token);
+				expect(blocked.status).toBe(429);
+				expect(blocked.headers.get('retry-after')).toBeTruthy();
+				expect(await blocked.json()).toEqual({ error: 'Too many uploads. Please try again shortly.' });
+				const first = pending.shift();
+				if (!first) throw new Error('Missing pending upload');
+				if (abort) first.req.destroy();
+				else first.req.end('b');
+				expect(await first.response).toBe(abort ? undefined : 200);
+				if (abort) await closedStreams[0];
+				const replacement = await uploadFile(getMockFile('replacement'), token);
+				expect(replacement.status).toBe(200);
+				await replacement.text();
+				for (const upload of pending) upload.req.end('b');
+				for (const upload of pending) expect(await upload.response).toBe(200);
+			} finally {
+				for (const req of requests) req.destroy();
+				streamSpy.mockRestore();
+			}
+		});
+	}
 });

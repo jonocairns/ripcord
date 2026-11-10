@@ -289,6 +289,20 @@ describe('/login', () => {
 		expect(createdUsers).toHaveLength(1);
 	});
 
+	test('does not disclose a ban reason before password verification', async () => {
+		await tdb
+			.update(users)
+			.set({ banned: true, banReason: 'Private ban reason' })
+			.where(eq(users.identity, 'testuser'));
+		const response = await login('testuser', 'wrong-password');
+		expect(response.status).toBe(400);
+		const data = await response.json();
+		if (!data || typeof data !== 'object' || !('errors' in data)) throw new Error('Missing login errors');
+		expect(data.errors).toEqual({ password: 'Invalid password' });
+		expect(JSON.stringify(data)).not.toContain('Private ban reason');
+		expect(JSON.stringify(data)).not.toContain('banned');
+	});
+
 	test('should fail login for banned user', async () => {
 		await tdb
 			.update(users)

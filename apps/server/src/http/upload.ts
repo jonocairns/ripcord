@@ -7,6 +7,11 @@ import { getUserByToken } from '../db/queries/users';
 import { logger } from '../logger';
 import { getUserRoles } from '../routers/users/get-user-roles';
 import { fileManager, TemporaryFileCapacityError } from '../utils/file-manager';
+import { createRateLimiter, getRateLimitRetrySeconds } from '../utils/rate-limiters/rate-limiter';
+
+const uploadLimiter = createRateLimiter({ maxRequests: 60, windowMs: 60_000, retainActiveEntries: true });
+const activeUploads = new Map<number, number>();
+const MAX_CONCURRENT_UPLOADS = 4;
 
 const zHeaders = z.object({
 	[UploadHeaders.TOKEN]: z.string(),
@@ -31,6 +36,25 @@ const uploadFileRouteHandler = async (req: http.IncomingMessage, res: http.Serve
 		req.resume();
 		res.writeHead(401, { 'Content-Type': 'application/json' });
 		res.end(JSON.stringify({ error: 'Unauthorized' }));
+		return;
+	}
+
+	if (user.banned) {
+		req.resume();
+		res.writeHead(403, { 'Content-Type': 'application/json' });
+		res.end(JSON.stringify({ error: 'User is banned' }));
+		return;
+	}
+
+	const rateLimit = uploadLimiter.consume(`user:${user.id}`);
+	const rejectUpload = (retryAfterSeconds: number) => {
+		req.resume();
+		res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': retryAfterSeconds });
+		res.end(JSON.stringify({ error: 'Too many uploads. Please try again shortly.' }));
+	};
+
+	if (!rateLimit.allowed) {
+		rejectUpload(getRateLimitRetrySeconds(rateLimit.retryAfterMs));
 		return;
 	}
 
@@ -72,6 +96,20 @@ const uploadFileRouteHandler = async (req: http.IncomingMessage, res: http.Serve
 	}
 
 	const safePath = await fileManager.getSafeUploadPath(originalName);
+	// Check after the awaited setup so simultaneous requests cannot overbook slots.
+	if (res.destroyed) return;
+	const activeCount = activeUploads.get(user.id) ?? 0;
+	if (activeCount >= MAX_CONCURRENT_UPLOADS) {
+		rejectUpload(1);
+		return;
+	}
+
+	activeUploads.set(user.id, activeCount + 1);
+	res.once('close', () => {
+		const remaining = (activeUploads.get(user.id) ?? 1) - 1;
+		if (remaining === 0) activeUploads.delete(user.id);
+		else activeUploads.set(user.id, remaining);
+	});
 	const fileStream = fs.createWriteStream(safePath);
 	let streamedSize = 0;
 	let abortedForSize = false;
