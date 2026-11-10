@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.5.4](https://github.com/jonocairns/ripcord/compare/v2.5.3...v2.5.4) (2026-11-10)
+
+
+### Bug Fixes
+
+* **ci:** stop manual Claude review runs from executing fork code ([#376](https://github.com/jonocairns/ripcord/issues/376)) ([9ee89bf](https://github.com/jonocairns/ripcord/commit/9ee89bfe9c0814c5070d0106d72e16faa45e36d1))
+* keep each server's sign-in tokens separate in the desktop app ([#380](https://github.com/jonocairns/ripcord/issues/380)) ([734fa9f](https://github.com/jonocairns/ripcord/commit/734fa9f5e8db4a71689cad434a1f657bb7b5781d))
+* limit message length, reaction size, link previews and socket frames ([#381](https://github.com/jonocairns/ripcord/issues/381)) ([1f3cb24](https://github.com/jonocairns/ripcord/commit/1f3cb2482d59a0a02c9756618124d33411df3e40))
+* rate limit password checks and uploads and hide ban reasons until sign-in ([#379](https://github.com/jonocairns/ripcord/issues/379)) ([2598f25](https://github.com/jonocairns/ripcord/commit/2598f25f3d52832397e447f87acc7bb2f27139ee))
+* stop moderators reading private channels and fix storage overflow cleanup ([#378](https://github.com/jonocairns/ripcord/issues/378)) ([da6762f](https://github.com/jonocairns/ripcord/commit/da6762fdd036253d343ece88814e90d2fca4eea9))
+* stop skipping a message at every history page boundary ([#375](https://github.com/jonocairns/ripcord/issues/375)) ([3c1b5f5](https://github.com/jonocairns/ripcord/commit/3c1b5f51035369fc40f8bd49ed34e30231180d39))
+* stop the seeded owner account from using a known password ([#382](https://github.com/jonocairns/ripcord/issues/382)) ([1c189e5](https://github.com/jonocairns/ripcord/commit/1c189e5a99ac610660f74ac049d304f8e86536b8))
+* strip classes and unsafe link attributes from message HTML ([#377](https://github.com/jonocairns/ripcord/issues/377)) ([842bdfb](https://github.com/jonocairns/ripcord/commit/842bdfb1a2d6f87b83d58edd7ef158a7ed36d31f))
+
 ## [2.5.3](https://github.com/jonocairns/ripcord/compare/v2.5.2...v2.5.3) (2026-10-24)
 
 
