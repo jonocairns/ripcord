@@ -55,6 +55,11 @@ class PluginManager {
 	private pluginStates: PluginStatesMap = {};
 	private settingDefinitions = new Map<string, TPluginSettingDefinition[]>();
 	private settingValues = new Map<string, Record<string, unknown>>();
+	private streamRemovers = new Map<string, Set<() => void>>();
+	// One token per load. Releasing a plugin drops its token, so a context left
+	// over from a failed or unloaded load (a stray timer or unawaited promise)
+	// cannot register anything new.
+	private contextTokens = new Map<string, object>();
 
 	private loadPluginStates = async () => {
 		try {
@@ -357,11 +362,44 @@ class PluginManager {
 		}
 	};
 
+	private releasePluginResources = (pluginId: string) => {
+		this.contextTokens.delete(pluginId);
+
+		// Each step runs even if an earlier one throws, so one failure cannot leave
+		// the plugin half-released.
+		const steps: Array<[string, () => void]> = [
+			['event handlers', () => eventBus.unload(pluginId)],
+			['commands', () => this.unregisterPluginCommands(pluginId)],
+			[
+				'settings',
+				() => {
+					this.settingDefinitions.delete(pluginId);
+					this.settingValues.delete(pluginId);
+				},
+			],
+		];
+
+		for (const remove of [...(this.streamRemovers.get(pluginId) ?? [])]) {
+			steps.push(['external stream', remove]);
+		}
+
+		for (const [label, step] of steps) {
+			try {
+				step();
+			} catch (error) {
+				this.logPlugin(pluginId, 'error', `Failed to release plugin ${label}:`, error);
+			}
+		}
+
+		this.streamRemovers.delete(pluginId);
+	};
+
 	public unload = async (pluginId: string) => {
 		const pluginModule = this.loadedPlugins.get(pluginId);
 
 		if (!pluginModule) {
 			this.logPlugin(pluginId, 'debug', `Plugin ${pluginId} is not loaded; nothing to unload.`);
+			this.releasePluginResources(pluginId);
 			return;
 		}
 
@@ -375,10 +413,7 @@ class PluginManager {
 			}
 		}
 
-		eventBus.unload(pluginId);
-		this.unregisterPluginCommands(pluginId);
-		this.settingDefinitions.delete(pluginId);
-		this.settingValues.delete(pluginId);
+		this.releasePluginResources(pluginId);
 		this.loadedPlugins.delete(pluginId);
 		this.loadErrors.delete(pluginId);
 
@@ -454,7 +489,7 @@ class PluginManager {
 
 			this.logPlugin(pluginId, 'error', `Failed to load plugin ${pluginId}: ${errorMessage}`);
 
-			await this.unload(pluginId);
+			this.releasePluginResources(pluginId);
 		}
 	};
 
@@ -571,6 +606,19 @@ class PluginManager {
 	};
 
 	private createContext = (pluginId: string): PluginContext => {
+		const token = {};
+		this.contextTokens.set(pluginId, token);
+		const isReleased = (what: string): boolean => {
+			if (this.contextTokens.get(pluginId) === token) return false;
+			this.logPlugin(pluginId, 'error', `Ignored ${what}: this plugin load was released.`);
+			return true;
+		};
+		const assertLive = (what: string) => {
+			if (isReleased(what)) {
+				throw new Error(`Cannot ${what}: plugin ${pluginId} is not loaded.`);
+			}
+		};
+
 		return {
 			path: this.getPluginPath(pluginId),
 			log: (...message: unknown[]) => {
@@ -584,6 +632,7 @@ class PluginManager {
 			},
 			events: {
 				on: (event, handler) => {
+					if (isReleased('event handler registration')) return;
 					eventBus.register(pluginId, event, handler);
 				},
 			},
@@ -599,6 +648,7 @@ class PluginManager {
 						return channel.getRouter();
 					},
 					createStream: (options: TCreateStreamOptions): TExternalStreamHandle => {
+						assertLive('create an external stream');
 						const channel = VoiceRuntime.findById(options.channelId);
 
 						if (!channel) {
@@ -645,17 +695,30 @@ class PluginManager {
 							`Created external stream '${options.title}' (key: ${options.key}, id: ${streamId}) with tracks: audio=${!!options.producers.audio}, video=${!!options.producers.video}`,
 						);
 
+						const remove = () => {
+							channel.removeExternalStream(streamId);
+							const removers = this.streamRemovers.get(pluginId);
+							removers?.delete(remove);
+							if (removers?.size === 0) {
+								this.streamRemovers.delete(pluginId);
+							}
+
+							this.logPlugin(
+								pluginId,
+								'debug',
+								`Removed external stream '${options.title}' (key: ${options.key}, id: ${streamId})`,
+							);
+						};
+						let removers = this.streamRemovers.get(pluginId);
+						if (!removers) {
+							removers = new Set();
+							this.streamRemovers.set(pluginId, removers);
+						}
+						removers.add(remove);
+
 						return {
 							streamId,
-							remove: () => {
-								channel.removeExternalStream(streamId);
-
-								this.logPlugin(
-									pluginId,
-									'debug',
-									`Removed external stream '${options.title}' (key: ${options.key}, id: ${streamId})`,
-								);
-							},
+							remove,
 							update: (updateOptions) => {
 								channel.updateExternalStream(streamId, updateOptions);
 
@@ -672,6 +735,7 @@ class PluginManager {
 			},
 			commands: {
 				register: <TArgs = void>(command: CommandDefinition<TArgs>) => {
+					if (isReleased(`command registration '${command.name}'`)) return;
 					if (!this.commands.has(pluginId)) {
 						this.commands.set(pluginId, []);
 					}
@@ -702,6 +766,7 @@ class PluginManager {
 			},
 			settings: {
 				register: (definitions) => {
+					assertLive('register settings');
 					return this.registerSettings(pluginId, definitions) as ReturnType<PluginContext['settings']['register']>;
 				},
 			},
