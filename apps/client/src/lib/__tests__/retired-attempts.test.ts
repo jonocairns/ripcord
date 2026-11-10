@@ -1,6 +1,15 @@
 import { expect, test } from 'bun:test';
 
-for (const mode of ['success', 'failure', 'connect-failure', 'connect-refresh', 'handshake-success']) {
+for (const mode of [
+	'success',
+	'failure',
+	'connect-failure',
+	'connect-refresh',
+	'handshake-success',
+	'initial-reopen',
+	'close-refresh',
+	'refresh-replacement-drop',
+]) {
 	test(`retired connection lifecycle: ${mode}`, async () => {
 		const child = Bun.spawn(
 			[process.execPath, new URL('./fixtures/retired-attempts.ts', import.meta.url).pathname, mode],

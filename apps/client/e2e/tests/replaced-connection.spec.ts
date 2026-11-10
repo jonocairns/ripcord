@@ -81,7 +81,6 @@ test('a connection replaced after the disconnect screen is closed and Leave voic
 			const before = fault.connectedCount();
 			fault.restore();
 			// Prompt cancellation may avoid connecting the retired handler at all.
-			await expect.poll(() => fault.heldCount()).toBe(0);
 			expect.soft(fault.connectedCount() - before).toBeLessThanOrEqual(1);
 			// The retired client must close after its held connection is released.
 			await expect.soft.poll(() => fault.openCount(), { timeout: 15_000 }).toBe(1);

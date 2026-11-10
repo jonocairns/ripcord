@@ -178,7 +178,6 @@ const initializeTRPC = (host: string) => {
 			if (wsClient !== client) {
 				return;
 			}
-			connectionEpoch += 1;
 			recordVoiceDiagnostic(
 				'Voice WebSocket closed',
 				[
@@ -400,7 +399,7 @@ const getTRPCClient = () => {
 	return trpc;
 };
 
-// Capture both client ownership and the socket incarnation within that client.
+// Attempts survive socket reopen; only retirement invalidates client ownership.
 const captureTRPCAttempt = () => {
 	const client = trpc;
 	const epoch = connectionEpoch;
