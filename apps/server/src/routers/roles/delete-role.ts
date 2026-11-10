@@ -47,14 +47,14 @@ const deleteRoleRoute = protectedProcedure
 		await fallbackUsersToDefaultRole(role.id);
 		await db.delete(roles).where(eq(roles.id, role.id));
 
-		await Promise.all([
-			publishRole(role.id, 'delete'),
-			publishChannelPermissions(affectedUserIds),
-			revalidateActiveVoiceSessions({
-				userIds: affectedUserIds,
-			}),
-		]);
+		// Order matters: permissions first (clients learn the channel is private
+		// before they lose it), then visibility, then eviction, so users losing
+		// access in the same change still receive the evicted member's leave.
+		await Promise.all([publishRole(role.id, 'delete'), publishChannelPermissions(affectedUserIds)]);
 		await publishUserChannelVisibility(affectedUserIds, previousVisibleByUser);
+		await revalidateActiveVoiceSessions({
+			userIds: affectedUserIds,
+		});
 		enqueueActivityLog({
 			type: ActivityLogType.DELETED_ROLE,
 			userId: ctx.user.id,

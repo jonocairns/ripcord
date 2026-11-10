@@ -73,14 +73,15 @@ const updatePermissionsRoute = protectedProcedure
 
 		const affectedUserIds = await getAffectedUserIdsForChannel(input.channelId);
 
-		await Promise.all([
-			publishChannelPermissions(affectedUserIds),
-			revalidateActiveVoiceSessions({
-				userIds: affectedUserIds,
-				channelIds: [input.channelId],
-			}),
-		]);
+		// Order matters: permissions first (clients learn the channel is private
+		// before they lose it), then visibility, then eviction, so users losing
+		// access in the same change still receive the evicted member's leave.
+		await publishChannelPermissions(affectedUserIds);
 		await publishChannelVisibility(input.channelId, affectedUserIds, previousViewerIds);
+		await revalidateActiveVoiceSessions({
+			userIds: affectedUserIds,
+			channelIds: [input.channelId],
+		});
 
 		enqueueActivityLog({
 			type: ActivityLogType.UPDATED_CHANNEL_PERMISSIONS,
