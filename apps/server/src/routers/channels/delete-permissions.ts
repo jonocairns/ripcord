@@ -1,11 +1,12 @@
-import { ActivityLogType, Permission } from '@sharkord/shared';
+import { ActivityLogType, ChannelPermission, Permission } from '@sharkord/shared';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { publishChannelPermissions, publishChannelVisibility } from '../../db/publishers';
 import { getAffectedUserIdsForChannel, getChannelViewerIdsSync } from '../../db/queries/channels';
-import { channelRolePermissions, channelUserPermissions } from '../../db/schema';
+import { channelRolePermissions, channels, channelUserPermissions } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
+import { invariant } from '../../utils/invariant';
 import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sessions';
 import { protectedProcedure } from '../../utils/trpc';
 
@@ -26,6 +27,16 @@ const deletePermissionsRoute = protectedProcedure
 	)
 	.mutation(async ({ input, ctx }) => {
 		await ctx.needsPermission(Permission.MANAGE_CHANNEL_PERMISSIONS);
+
+		const channel = await db
+			.select({ id: channels.id, private: channels.private })
+			.from(channels)
+			.where(eq(channels.id, input.channelId))
+			.get();
+		invariant(channel, { code: 'NOT_FOUND', message: 'Channel not found' });
+		if (channel.private) {
+			await ctx.needsChannelPermission(channel.id, ChannelPermission.VIEW_CHANNEL);
+		}
 
 		const affectedUserIds = await getAffectedUserIdsForChannel(input.channelId);
 

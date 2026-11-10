@@ -257,6 +257,8 @@ describe('channels router', () => {
 			categoryId: 1,
 		});
 
+		const channel2Before = await caller.channels.get({ channelId: 2 });
+
 		await caller.channels.reorder({
 			categoryId: 1,
 			channelIds: [4, 3, 1, 2],
@@ -272,7 +274,7 @@ describe('channels router', () => {
 		expect(channel4.position).toBe(1);
 		expect(channel3.position).toBe(2);
 		expect(channel1.position).toBe(3);
-		expect(channel2.position).toBe(4);
+		expect(channel2.position).toBe(channel2Before.position);
 	});
 
 	test('should set channel permissions for a role', async () => {
