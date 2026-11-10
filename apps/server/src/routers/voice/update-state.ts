@@ -24,11 +24,10 @@ const updateVoiceStateRoute = protectedProcedure
 		const { seq, ...stateInput } = input;
 		const validatedInput = { ...stateInput };
 
-		const [canSpeak, canUseWebcam, canShareScreen] = await Promise.all([
-			ctx.hasChannelPermission(channelId, ChannelPermission.SPEAK),
-			ctx.hasChannelPermission(channelId, ChannelPermission.WEBCAM),
-			ctx.hasChannelPermission(channelId, ChannelPermission.SHARE_SCREEN),
-		]);
+		const can = ctx.createChannelPermissionChecker(channelId);
+		const canSpeak = can(ChannelPermission.SPEAK);
+		const canUseWebcam = can(ChannelPermission.WEBCAM);
+		const canShareScreen = can(ChannelPermission.SHARE_SCREEN);
 
 		if (!canSpeak) {
 			delete validatedInput.micMuted;

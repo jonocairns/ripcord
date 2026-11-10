@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import type http from 'node:http';
-import { OWNER_ROLE_ID, Permission, UploadHeaders } from '@sharkord/shared';
+import { Permission, UploadHeaders } from '@sharkord/shared';
 import z from 'zod';
+import { loadUserGrants } from '../db/queries/permissions';
 import { getSettings } from '../db/queries/server';
 import { getUserByToken } from '../db/queries/users';
 import { logger } from '../logger';
-import { getUserRoles } from '../routers/users/get-user-roles';
 import { fileManager, TemporaryFileCapacityError } from '../utils/file-manager';
+import { hasGlobalPermission } from '../utils/permission-policy';
 import { createRateLimiter, getRateLimitRetrySeconds } from '../utils/rate-limiters/rate-limiter';
 
 const uploadLimiter = createRateLimiter({ maxRequests: 60, windowMs: 60_000, retainActiveEntries: true });
@@ -58,9 +59,7 @@ const uploadFileRouteHandler = async (req: http.IncomingMessage, res: http.Serve
 		return;
 	}
 
-	const roles = await getUserRoles(user.id);
-	const hasOwnerRole = roles.some((role) => role.id === OWNER_ROLE_ID);
-	const hasUploadPermission = hasOwnerRole || roles.some((role) => role.permissions.includes(Permission.UPLOAD_FILES));
+	const hasUploadPermission = hasGlobalPermission(loadUserGrants(user.id), Permission.UPLOAD_FILES);
 
 	if (!hasUploadPermission) {
 		req.resume();
