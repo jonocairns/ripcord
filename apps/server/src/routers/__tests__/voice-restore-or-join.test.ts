@@ -238,7 +238,7 @@ describe('voice.restoreOrJoin', () => {
 
 		const joinEvents: Array<{ channelId: number; userId: number }> = [];
 		const sessionReplacedEvents: number[] = [];
-		const joinSub = pubsub.subscribe(ServerEvents.USER_JOIN_VOICE).subscribe({
+		const joinSub = pubsub.subscribeFor(1, ServerEvents.USER_JOIN_VOICE).subscribe({
 			next: (event) => {
 				joinEvents.push({
 					channelId: event.channelId,
@@ -298,12 +298,12 @@ describe('voice.restoreOrJoin', () => {
 		const joinEvents: number[] = [];
 		const leaveEvents: number[] = [];
 		const sessionReplacedEvents: number[] = [];
-		const joinSub = pubsub.subscribe(ServerEvents.USER_JOIN_VOICE).subscribe({
+		const joinSub = pubsub.subscribeFor(1, ServerEvents.USER_JOIN_VOICE).subscribe({
 			next: (event) => {
 				joinEvents.push(event.channelId);
 			},
 		});
-		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
+		const leaveSub = pubsub.subscribeFor(1, ServerEvents.USER_LEAVE_VOICE).subscribe({
 			next: (event) => {
 				leaveEvents.push(event.channelId);
 			},
@@ -371,7 +371,7 @@ describe('voice.restoreOrJoin', () => {
 			micMuted: boolean;
 			soundMuted: boolean;
 		}> = [];
-		const stateSub = pubsub.subscribe(ServerEvents.USER_VOICE_STATE_UPDATE).subscribe({
+		const stateSub = pubsub.subscribeFor(1, ServerEvents.USER_VOICE_STATE_UPDATE).subscribe({
 			next: (event) => {
 				stateEvents.push({
 					channelId: event.channelId,
@@ -515,7 +515,7 @@ describe('voice.restoreOrJoin', () => {
 			userId: number;
 			reconnecting?: boolean;
 		}[] = [];
-		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
+		const leaveSub = pubsub.subscribeFor(1, ServerEvents.USER_LEAVE_VOICE).subscribe({
 			next: (event) => {
 				leaveEvents.push(event);
 			},
@@ -890,13 +890,13 @@ describe('voice session incarnation ownership', () => {
 		const failure = new Error('target allocation failed');
 		const preparePairSpy = spyOn(secondaryRuntime, 'prepareTransportPair').mockRejectedValue(failure);
 		const events: string[] = [];
-		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
+		const leaveSub = pubsub.subscribeFor(1, ServerEvents.USER_LEAVE_VOICE).subscribe({
 			next: () => events.push('leave'),
 		});
 		const replacedSub = pubsub.subscribeFor(1, ServerEvents.VOICE_SESSION_REPLACED).subscribe({
 			next: () => events.push('session-replaced'),
 		});
-		const joinSub = pubsub.subscribe(ServerEvents.USER_JOIN_VOICE).subscribe({
+		const joinSub = pubsub.subscribeFor(1, ServerEvents.USER_JOIN_VOICE).subscribe({
 			next: () => events.push('join'),
 		});
 
@@ -1104,7 +1104,7 @@ describe('voice session incarnation ownership', () => {
 		attachTrackedSession(ctxB, sessionB, trackedSessions);
 
 		const leaveEvents: number[] = [];
-		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
+		const leaveSub = pubsub.subscribeFor(1, ServerEvents.USER_LEAVE_VOICE).subscribe({
 			next: (event) => {
 				leaveEvents.push(event.channelId);
 			},
@@ -1200,7 +1200,7 @@ describe('voice session incarnation ownership', () => {
 		VoiceRuntime.findById(PRIMARY_VOICE_CHANNEL_ID)?.removeUser(1);
 
 		const leaveEvents: number[] = [];
-		const leaveSub = pubsub.subscribe(ServerEvents.USER_LEAVE_VOICE).subscribe({
+		const leaveSub = pubsub.subscribeFor(1, ServerEvents.USER_LEAVE_VOICE).subscribe({
 			next: (event) => {
 				leaveEvents.push(event.channelId);
 			},

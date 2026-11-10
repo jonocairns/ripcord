@@ -10,6 +10,7 @@ import { toPublicChannel } from '../helpers/to-public-channel';
 import { pluginManager } from '../plugins';
 import { pubsub } from '../utils/pubsub';
 import { invalidateUserAuthState } from '../utils/user-sessions';
+import { publishVoiceChannelSnapshot, publishVoiceChannelWithdrawal } from '../utils/voice-channel-visibility';
 import { db } from '.';
 import { getAffectedUserIdsForChannel, getAllChannelUserPermissions, getChannelsForUser } from './queries/channels';
 import { getEmojiById } from './queries/emojis';
@@ -170,6 +171,7 @@ const publishChannelVisibility = async (channelId: number, userIds: number[], pr
 
 	if (canView.length > 0) {
 		pubsub.publishFor(canView, ServerEvents.CHANNEL_CREATE, toPublicChannel(channel));
+		publishVoiceChannelSnapshot(channelId, canView);
 	}
 
 	if (cannotView.length > 0) {
@@ -183,6 +185,7 @@ const publishChannelVisibility = async (channelId: number, userIds: number[], pr
 			});
 			await publishChannelPermissions(cannotView);
 		}
+		publishVoiceChannelWithdrawal(channelId, cannotView);
 		pubsub.publishFor(cannotView, ServerEvents.CHANNEL_DELETE, channelId);
 	}
 };
@@ -206,11 +209,13 @@ const publishUserChannelVisibility = async (userIds: number[]) => {
 				if (!channel.private) continue;
 
 				pubsub.publishFor(userId, ServerEvents.CHANNEL_CREATE, toPublicChannel(channel));
+				publishVoiceChannelSnapshot(channel.id, [userId]);
 			}
 
 			for (const { id } of privateChannels) {
 				if (visibleChannelIds.has(id)) continue;
 
+				publishVoiceChannelWithdrawal(id, [userId]);
 				pubsub.publishFor(userId, ServerEvents.CHANNEL_DELETE, id);
 			}
 		}),

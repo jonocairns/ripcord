@@ -166,8 +166,14 @@ const joinServerRoute = rateLimitedProcedure(t.procedure, {
 			ctx.saveUserIp(ctx.user.id, connectionInfo.ip);
 		}
 
+		const visibleChannelIds = new Set(channelsForUser.map((channel) => channel.id));
 		const voiceMap = VoiceRuntime.getVoiceMap();
 		const externalStreamsMap = VoiceRuntime.getExternalStreamsMap();
+		for (const map of [voiceMap, externalStreamsMap, readStates]) {
+			for (const channelId of Object.keys(map)) {
+				if (!visibleChannelIds.has(Number(channelId))) delete map[Number(channelId)];
+			}
+		}
 
 		await db.update(users).set({ lastLoginAt: Date.now() }).where(eq(users.id, ctx.user.id));
 

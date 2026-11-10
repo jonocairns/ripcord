@@ -7,6 +7,7 @@ import { logger } from '../../logger';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { invariant } from '../../utils/invariant';
 import { protectedProcedure } from '../../utils/trpc';
+import { publishVoiceSidebarEvent } from '../../utils/voice-sidebar-events';
 import { getVoiceSessionAttemptOwner, voiceSessionAttemptRegistry } from './session-attempt-registry';
 
 const leaveVoiceRoute = protectedProcedure
@@ -108,7 +109,7 @@ const leaveVoiceRoute = protectedProcedure
 
 		runtime.removeUser(ctx.user.id);
 
-		ctx.pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
+		publishVoiceSidebarEvent(ServerEvents.USER_LEAVE_VOICE, {
 			channelId,
 			userId: ctx.user.id,
 		});

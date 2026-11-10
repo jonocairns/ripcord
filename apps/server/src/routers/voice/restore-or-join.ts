@@ -7,6 +7,7 @@ import { VoiceRestoreAttemptSupersededError, VoiceRuntime } from '../../runtimes
 import { type Context, protectedProcedure, rateLimitedProcedure } from '../../utils/trpc';
 import { getPendingVoiceReconnectChannelIdsOwnedElsewhere } from '../../utils/voice-disconnect-grace';
 import { isVoiceRestoreBlockedAfterKick } from '../../utils/voice-kick-guard';
+import { publishVoiceSidebarEvent } from '../../utils/voice-sidebar-events';
 import { getVoiceJoinTarget, prepareVoiceJoinBootstrap, voiceJoinInputSchema } from './bootstrap';
 import { consumeVoiceReconnectLabNextRestoreBehavior } from './reconnect-lab-state';
 import {
@@ -133,10 +134,10 @@ const toVoiceRestoreConnection = (connection: unknown): TVoiceRestoreConnection 
 	};
 };
 
-const publishVoiceRestorePresence = (ctx: Context, event: TVoiceRestorePresenceEvent) => {
+const publishVoiceRestorePresence = (_ctx: Context, event: TVoiceRestorePresenceEvent) => {
 	switch (event.type) {
 		case 'join':
-			ctx.pubsub.publish(ServerEvents.USER_JOIN_VOICE, {
+			publishVoiceSidebarEvent(ServerEvents.USER_JOIN_VOICE, {
 				channelId: event.channelId,
 				userId: event.userId,
 				state: event.state,
@@ -144,7 +145,7 @@ const publishVoiceRestorePresence = (ctx: Context, event: TVoiceRestorePresenceE
 			});
 			return;
 		case 'state-update':
-			ctx.pubsub.publish(ServerEvents.USER_VOICE_STATE_UPDATE, {
+			publishVoiceSidebarEvent(ServerEvents.USER_VOICE_STATE_UPDATE, {
 				channelId: event.channelId,
 				userId: event.userId,
 				state: event.state,

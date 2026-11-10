@@ -45,6 +45,7 @@ import {
 	shouldScheduleVoiceDisconnectGrace,
 } from './voice-disconnect-grace';
 import { blockVoiceRestoreAfterKick } from './voice-kick-guard';
+import { publishVoiceSidebarEvent } from './voice-sidebar-events';
 
 let wss: WebSocketServer | undefined;
 
@@ -433,7 +434,7 @@ const createWsServer = async (server: http.Server) => {
 							return;
 						}
 
-						pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
+						publishVoiceSidebarEvent(ServerEvents.USER_LEAVE_VOICE, {
 							channelId,
 							userId,
 						});

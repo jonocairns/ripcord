@@ -6,7 +6,7 @@ import { getUserById } from '../db/queries/users';
 import { channels } from '../db/schema';
 import { getUserRoles } from '../routers/users/get-user-roles';
 import { VoiceRuntime } from '../runtimes/voice';
-import { pubsub } from './pubsub';
+import { publishVoiceSidebarEvent } from './voice-sidebar-events';
 
 const hasPermission = async (userId: number, targetPermission: Permission): Promise<boolean> => {
 	const user = await getUserById(userId);
@@ -113,7 +113,7 @@ const revalidateActiveVoiceSessions = async (options?: {
 
 			runtime.removeUser(activeUser.userId);
 
-			pubsub.publish(ServerEvents.USER_LEAVE_VOICE, {
+			publishVoiceSidebarEvent(ServerEvents.USER_LEAVE_VOICE, {
 				channelId: runtime.id,
 				userId: activeUser.userId,
 			});
