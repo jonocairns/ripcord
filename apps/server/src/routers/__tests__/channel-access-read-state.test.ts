@@ -110,3 +110,14 @@ for (const path of ['channel override', 'role add']) {
 		});
 	}
 }
+
+test('making a private channel public sends the current unread count after create', async () => {
+	const { owner } = await setup();
+	await db.insert(messages).values({ channelId: 1, userId: 1, content: 'Unread', createdAt: 1 });
+	const member = observe(2);
+
+	await owner.channels.update({ channelId: 1, private: false });
+
+	expect(member.updates).toEqual([{ channelId: 1, count: 1 }]);
+	expect(member.order).toEqual([ServerEvents.CHANNEL_CREATE, ServerEvents.CHANNEL_READ_STATES_UPDATE]);
+});

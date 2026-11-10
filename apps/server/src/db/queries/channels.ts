@@ -296,8 +296,8 @@ export const getVisibleChannelIdsByUserSync = (userIds: number[]): Map<number, S
 	return visibleByUser;
 };
 
-const getChannelsReadStatesForUser = async (userId: number, channelId?: number): Promise<TReadStateMap> => {
-	const results = await db
+const selectUnreadCounts = (userId: number, channelId?: number) =>
+	db
 		.select({
 			channelId: messages.channelId,
 			unreadCount: sql<number>`
@@ -316,6 +316,14 @@ const getChannelsReadStatesForUser = async (userId: number, channelId?: number):
 		)
 		.where(channelId ? eq(messages.channelId, channelId) : undefined)
 		.groupBy(messages.channelId);
+
+// Synchronous so visibility publishers can send the count without yielding
+// between resolving access and publishing it.
+export const getChannelUnreadCountSync = (userId: number, channelId: number): number =>
+	selectUnreadCounts(userId, channelId).get()?.unreadCount ?? 0;
+
+const getChannelsReadStatesForUser = async (userId: number, channelId?: number): Promise<TReadStateMap> => {
+	const results = await selectUnreadCounts(userId, channelId);
 
 	const readStateMap: TReadStateMap = {};
 

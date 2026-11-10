@@ -15,7 +15,7 @@ import { db } from '.';
 import {
 	getAffectedUserIdsForChannel,
 	getAllChannelUserPermissions,
-	getChannelsReadStatesForUser,
+	getChannelUnreadCountSync,
 	getChannelViewerIdsSync,
 	getVisibleChannelIdsByUserSync,
 } from './queries/channels';
@@ -158,12 +158,10 @@ const publishChannelFileAccessChanged = async (channelId: number) => {
 	pubsub.publishFor(await getChannelViewerIds(channelId), ServerEvents.CHANNEL_FILE_ACCESS_CHANGED, { channelId });
 };
 
-const publishChannelReadState = async (userId: number, channelId: number) => {
-	const readStates = await getChannelsReadStatesForUser(userId, channelId);
-
+const publishChannelReadState = (userId: number, channelId: number) => {
 	pubsub.publishFor(userId, ServerEvents.CHANNEL_READ_STATES_UPDATE, {
 		channelId,
-		count: readStates[channelId] ?? 0,
+		count: getChannelUnreadCountSync(userId, channelId),
 	});
 };
 
@@ -195,7 +193,7 @@ const publishChannelVisibility = async (
 		pubsub.publishFor(canView, ServerEvents.CHANNEL_CREATE, toPublicChannel(channel));
 		const newViewerIds = canView.filter((userId) => !previousViewerIds.has(userId));
 		for (const userId of newViewerIds) {
-			await publishChannelReadState(userId, channelId);
+			publishChannelReadState(userId, channelId);
 		}
 		publishVoiceChannelSnapshot(channelId, newViewerIds);
 	}
@@ -221,7 +219,7 @@ const publishChannelVisibility = async (
 
 // Same convergence for a change to the users themselves (role added, removed or
 // deleted), which can change their access to every private channel at once.
-const publishUserChannelVisibility = async (
+const publishUserChannelVisibility = (
 	userIds: number[],
 	previousVisibleByUser: ReadonlyMap<number, ReadonlySet<number>>,
 ) => {
@@ -241,7 +239,7 @@ const publishUserChannelVisibility = async (
 			if (visibleChannelIds?.has(channel.id)) {
 				pubsub.publishFor(userId, ServerEvents.CHANNEL_CREATE, toPublicChannel(channel));
 				if (!previousChannelIds?.has(channel.id)) {
-					await publishChannelReadState(userId, channel.id);
+					publishChannelReadState(userId, channel.id);
 					publishVoiceChannelSnapshot(channel.id, [userId]);
 				}
 			} else {
