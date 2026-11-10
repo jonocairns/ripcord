@@ -33,23 +33,20 @@ import {
 } from '@/helpers/stream-observability';
 import { stopClientTracing } from '@/helpers/telemetry/backend';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
+import { createConnectionStore, type TConnectionCommand } from './connection-state';
 import { createSessionAuthenticationGate } from './session-authentication-gate';
 import { streamDiagnosticsLink } from './stream-diagnostics-link';
 import { tracingLink } from './tracing-link';
-import {
-	getWsReconnectOpenAction,
-	shouldDeferAppTeardownWhileOffline,
-	shouldResumeDeferredWsReconnect,
-} from './ws-reconnect-gate';
 
 let wsClient: ReturnType<typeof createWSClient> | null = null;
 let trpc: ReturnType<typeof createTRPCProxyClient<AppRouter>> | null = null;
 let currentHost: string | null = null;
-let teardownTimer: ReturnType<typeof setTimeout> | null = null;
-let onWsReconnect: (() => void) | null = null;
+let graceTimerHandle: ReturnType<typeof setTimeout> | null = null;
+let serverRejoinHandler: (() => void) | null = null;
 let cachedClientInstanceId: string | null = null;
 let deferredWsReconnectOnlineListener: (() => void) | null = null;
-let connectionEpoch = 0;
+const connection = createConnectionStore();
+let lastDrop: { code: number; reason: string; wasClean: boolean; wasConnected: boolean } | null = null;
 const sessionAuthentication = createSessionAuthenticationGate();
 
 // How long to keep silently reconnecting before tearing the app down to the
@@ -138,20 +135,15 @@ const clearDeferredWsReconnectOnlineListener = () => {
 
 const retireTRPCClient = () => {
 	const client = wsClient;
-	connectionEpoch += 1;
 	wsClient = null;
 	trpc = null;
 	currentHost = null;
-	onWsReconnect = null;
+	serverRejoinHandler = null;
 	// Clear ownership before close() can notify callbacks; it disables retries synchronously.
 	void client?.close().catch(() => {});
 };
 
 const initializeTRPC = (host: string) => {
-	pauseStreamObservability();
-	pauseDiagnosticDelivery();
-	stopClientTracing();
-	sessionAuthentication.invalidate();
 	const runtimeServerUrl = getRuntimeServerConfig().serverUrl;
 	const serverProtocol = runtimeServerUrl ? new URL(runtimeServerUrl).protocol : window.location.protocol;
 	const protocol = serverProtocol === 'https:' ? 'wss' : 'ws';
@@ -203,15 +195,10 @@ const initializeTRPC = (host: string) => {
 				},
 				'warn',
 			);
-			sessionAuthentication.invalidate();
-			pauseStreamObservability();
-			pauseDiagnosticDelivery();
-			stopClientTracing();
-
-			clearDeferredWsReconnectOnlineListener();
-
-			const state = useServerStore.getState();
-			const wasConnected = state.connected;
+			const wasConnected = useServerStore.getState().connected;
+			const terminal = !shouldRestoreVoiceAfterDisconnect(cause.code);
+			if (!terminal) lastDrop = { code: cause.code, reason: cause.reason, wasClean: cause.wasClean, wasConnected };
+			run(connection.dispatch({ type: 'socket-closed', terminal, now: performance.now() }));
 
 			if (!shouldRestoreVoiceAfterDisconnect(cause.code)) {
 				// Tear down immediately for intentional server-side disconnects
@@ -232,43 +219,6 @@ const initializeTRPC = (host: string) => {
 				});
 				return;
 			}
-
-			// The reconnected socket will start unauthenticated; block voice recovery
-			// from issuing restoreOrJoin until joinServer re-authenticates it.
-			markVoiceReconnectSessionUnauthenticated();
-
-			if (captureVoiceReconnectIntentForCurrentSession()) {
-				ensureVoiceReconnectStarted();
-			}
-
-			// Give tRPC's internal retry a grace period before tearing down.
-			// If tRPC reconnects (onOpen fires), the teardown is cancelled.
-			const runTeardown = () => {
-				// Stay paused while offline: the disconnect screen cannot help while
-				// the network is unavailable. Preserve deferred recovery and the
-				// teardownTimer signal so the next online open re-authenticates.
-				if (shouldDeferAppTeardownWhileOffline(isVoiceReconnectOnline())) {
-					teardownTimer = setTimeout(runTeardown, RETRY_GRACE_PERIOD_MS);
-					return;
-				}
-
-				teardownTimer = null;
-				cleanup();
-				if (wasConnected) {
-					playSound(SoundType.SERVER_DISCONNECTED);
-				}
-				setDisconnectInfo({
-					code: cause.code,
-					reason: cause.reason,
-					wasClean: cause.wasClean,
-					time: new Date(),
-				});
-			};
-
-			if (teardownTimer) {
-				clearTimeout(teardownTimer);
-			}
-			teardownTimer = setTimeout(runTeardown, RETRY_GRACE_PERIOD_MS);
 		},
 		onOpen: () => {
 			if (wsClient !== client) {
@@ -281,64 +231,16 @@ const initializeTRPC = (host: string) => {
 			}
 			recordDesktopDiagnostic('websocket_opened', {
 				clientInstanceId: getWsClientInstanceId(),
-				reconnecting: teardownTimer !== null,
+				reconnecting: connection.getState().resumePending,
 			});
-			pauseStreamObservability();
-			pauseDiagnosticDelivery();
-			stopClientTracing();
-			sessionAuthentication.invalidate();
-			const resumeReconnect = () => {
-				const pendingTeardownTimer = teardownTimer;
-
-				if (
-					!shouldResumeDeferredWsReconnect({
-						hasTeardownTimer: pendingTeardownTimer !== null,
-						isSocketOpen: wsClient?.connection?.ws?.readyState === WebSocket.OPEN,
-					})
-				) {
-					return;
-				}
-
-				if (pendingTeardownTimer) {
-					clearTimeout(pendingTeardownTimer);
-				}
-				teardownTimer = null;
-
-				// The WS reconnected after a disconnect. The new server-side context
-				// is unauthenticated (authenticated: false in createContext), so we
-				// need to re-run handshake → joinServer to restore auth, subscriptions,
-				// and voice state.
-				onWsReconnect?.();
-			};
-
-			switch (
-				getWsReconnectOpenAction({
-					hasTeardownTimer: teardownTimer !== null,
-					isReconnectOnline: isVoiceReconnectOnline(),
-				})
-			) {
-				case 'ignore':
-					return;
-				case 'defer': {
-					clearDeferredWsReconnectOnlineListener();
-
-					if (typeof window === 'undefined') {
-						return;
-					}
-
-					deferredWsReconnectOnlineListener = () => {
-						clearDeferredWsReconnectOnlineListener();
-						resumeReconnect();
-					};
-
-					window.addEventListener('online', deferredWsReconnectOnlineListener, { once: true });
-					return;
-				}
-				case 'resume':
-					clearDeferredWsReconnectOnlineListener();
-					resumeReconnect();
-					return;
-			}
+			run(
+				connection.dispatch({
+					type: 'socket-opened',
+					online: isVoiceReconnectOnline(),
+					socketOpen: isTRPCSocketOpen(),
+					now: performance.now(),
+				}),
+			);
 		},
 		connectionParams: async (): Promise<TConnectionParams> => {
 			return {
@@ -367,14 +269,7 @@ const connectToTRPC = (host: string) => {
 };
 
 const reconnectTRPC = (host: string) => {
-	clearDeferredWsReconnectOnlineListener();
-
-	if (teardownTimer) {
-		clearTimeout(teardownTimer);
-		teardownTimer = null;
-	}
-
-	retireTRPCClient();
+	run(connection.dispatch({ type: 'client-started' }));
 
 	return initializeTRPC(host);
 };
@@ -402,25 +297,22 @@ const getTRPCClient = () => {
 // Attempts survive socket reopen; only retirement invalidates client ownership.
 const captureTRPCAttempt = () => {
 	const client = trpc;
-	const epoch = connectionEpoch;
-	return () => client !== null && client === trpc && epoch === connectionEpoch;
+	const epoch = connection.getState().clientEpoch;
+	return () => client !== null && client === trpc && epoch === connection.getState().clientEpoch;
 };
 
 const getTRPCClientIfInitialized = () => trpc;
 
 const markTRPCSessionAuthenticated = (client: ReturnType<typeof createTRPCProxyClient<AppRouter>>) => {
 	if (client === trpc && isTRPCSocketOpen()) {
-		sessionAuthentication.authenticate();
-		markVoiceReconnectSessionAuthenticated();
-		authenticateStreamObservability();
-		authenticateDiagnosticDelivery();
+		run(connection.dispatch({ type: 'session-authenticated' }));
 	}
 };
 
 const waitForTRPCSessionAuthentication = (signal: AbortSignal): Promise<void> => {
 	if (!trpc) return Promise.reject(new TRPCClientUnavailableError());
 	// close() changes readyState before its close event invalidates the gate.
-	if (!isTRPCSocketOpen()) sessionAuthentication.invalidate();
+	if (!isTRPCSocketOpen()) run(connection.dispatch({ type: 'socket-observed-closed', now: performance.now() }));
 	return sessionAuthentication.wait(signal);
 };
 
@@ -440,19 +332,7 @@ const debugCloseCurrentWs = (opts: { code?: number; reason?: string } = {}) => {
 };
 
 const cleanup = (opts: { clearAuth?: boolean } = {}) => {
-	clearStreamObservability();
-	clearDiagnosticDelivery();
-	stopClientTracing();
-	setErrorReportingIdentity();
-	sessionAuthentication.cancel(new TRPCClientUnavailableError());
-	clearDeferredWsReconnectOnlineListener();
-
-	if (teardownTimer) {
-		clearTimeout(teardownTimer);
-		teardownTimer = null;
-	}
-
-	retireTRPCClient();
+	run(connection.dispatch({ type: 'cleaned-up', reason: new TRPCClientUnavailableError() }));
 
 	resetServerScreens();
 	resetServerState();
@@ -464,23 +344,105 @@ const cleanup = (opts: { clearAuth?: boolean } = {}) => {
 	}
 };
 
-const setOnWsReconnect = (cb: (() => void) | null) => {
-	onWsReconnect = cb;
+const armServerRejoin = (handler: () => void) => {
+	serverRejoinHandler = handler;
+	run(connection.dispatch({ type: 'join-completed' }));
+};
+const disarmServerRejoin = () => {
+	run(connection.dispatch({ type: 'rejoin-disarmed' }));
+};
+
+const run = (commands: TConnectionCommand[]) => {
+	for (const command of commands) {
+		switch (command.type) {
+			case 'invalidate-session':
+				sessionAuthentication.invalidate();
+				break;
+			case 'authenticate-session':
+				sessionAuthentication.authenticate();
+				break;
+			case 'cancel-session':
+				sessionAuthentication.cancel(command.reason);
+				break;
+			case 'pause-telemetry':
+				pauseStreamObservability();
+				pauseDiagnosticDelivery();
+				stopClientTracing();
+				break;
+			case 'authenticate-telemetry':
+				authenticateStreamObservability();
+				authenticateDiagnosticDelivery();
+				break;
+			case 'clear-telemetry':
+				clearStreamObservability();
+				clearDiagnosticDelivery();
+				stopClientTracing();
+				setErrorReportingIdentity();
+				break;
+			case 'clear-online-listener':
+				clearDeferredWsReconnectOnlineListener();
+				break;
+			case 'await-online':
+				clearDeferredWsReconnectOnlineListener();
+				if (typeof window === 'undefined') break;
+				deferredWsReconnectOnlineListener = () => {
+					run(connection.dispatch({ type: 'online', socketOpen: isTRPCSocketOpen() }));
+				};
+				window.addEventListener('online', deferredWsReconnectOnlineListener, { once: true });
+				break;
+			case 'arm-grace-timer':
+				if (graceTimerHandle) clearTimeout(graceTimerHandle);
+				graceTimerHandle = setTimeout(() => {
+					graceTimerHandle = null;
+					run(connection.dispatch({ type: 'grace-expired', online: isVoiceReconnectOnline() }));
+				}, RETRY_GRACE_PERIOD_MS);
+				break;
+			case 'clear-grace-timer':
+				if (graceTimerHandle) {
+					clearTimeout(graceTimerHandle);
+					graceTimerHandle = null;
+				}
+				break;
+			case 'retire-client':
+				retireTRPCClient();
+				break;
+			case 'voice-socket-dropped':
+				markVoiceReconnectSessionUnauthenticated();
+				if (captureVoiceReconnectIntentForCurrentSession()) ensureVoiceReconnectStarted();
+				break;
+			case 'voice-session-authenticated':
+				markVoiceReconnectSessionAuthenticated();
+				break;
+			case 'run-rejoin':
+				serverRejoinHandler?.();
+				break;
+			case 'teardown-to-disconnect-screen': {
+				const drop = lastDrop;
+				cleanup();
+				if (drop) {
+					if (drop.wasConnected) playSound(SoundType.SERVER_DISCONNECTED);
+					setDisconnectInfo({ code: drop.code, reason: drop.reason, wasClean: drop.wasClean, time: new Date() });
+				}
+				break;
+			}
+		}
+	}
 };
 
 export {
 	type AppRouter,
+	armServerRejoin,
 	captureTRPCAttempt,
 	cleanup,
 	connectToTRPC,
 	debugCloseCurrentWs,
+	disarmServerRejoin,
 	getTRPCClient,
 	getTRPCClientIfInitialized,
 	getWsClientInstanceId,
 	isTRPCSocketOpen,
 	markTRPCSessionAuthenticated,
 	reconnectTRPC,
-	setOnWsReconnect,
 	TRPCClientUnavailableError,
 	waitForTRPCSessionAuthentication,
 };

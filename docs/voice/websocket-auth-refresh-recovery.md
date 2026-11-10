@@ -6,7 +6,7 @@ auth-refresh branch still has a narrower reconnect ownership gap.
 ## Remaining gap
 
 Normal application WebSocket recovery installs a callback with
-`setOnWsReconnect()` in `apps/client/src/features/server/actions.ts`. Each socket
+`armServerRejoin()` in `apps/client/src/features/server/actions.ts`. Each socket
 open starts a new silent server rejoin generation, which authenticates the new
 server-side WebSocket context before voice recovery continues.
 

@@ -11,16 +11,17 @@ import { getAuthToken, getRefreshToken } from '@/helpers/storage';
 import { configureStreamObservability, getStreamClientSessionId } from '@/helpers/stream-observability';
 import { configureTraceBackend } from '@/helpers/telemetry/backend';
 import {
+	armServerRejoin,
 	captureTRPCAttempt,
 	cleanup,
 	connectToTRPC,
+	disarmServerRejoin,
 	getTRPCClient,
 	getTRPCClientIfInitialized,
 	getWsClientInstanceId,
 	isTRPCSocketOpen,
 	markTRPCSessionAuthenticated,
 	reconnectTRPC,
-	setOnWsReconnect,
 	TRPCClientUnavailableError,
 } from '@/lib/trpc';
 import { getRuntimeServerConfig } from '@/runtime/server-config';
@@ -270,190 +271,191 @@ export const joinServer = async (
 	// Register the WS reconnect handler so that if tRPC silently reconnects
 	// (e.g. server restart, brief network drop), we re-authenticate and
 	// restore subscriptions + voice on the new server-side context.
-	setOnWsReconnect(() => {
-		logDebug('WS reconnected, re-joining server');
+	armServerRejoin(rejoinAfterSocketReopen);
+};
 
-		// tRPC automatically replays existing subscriptions when the socket
-		// reconnects, but the new server-side WS context starts unauthenticated.
-		// Tear them down immediately so they do not all fail before joinServer
-		// has a chance to restore the session.
-		cleanupServerSubscriptions();
+const rejoinAfterSocketReopen = () => {
+	logDebug('WS reconnected, re-joining server');
 
-		wsReconnectGeneration += 1;
-		const generation = wsReconnectGeneration;
-		let ownsConnection = captureTRPCAttempt();
-		const isCurrent = () => !didGenerationChange(generation) && ownsConnection();
+	// tRPC automatically replays existing subscriptions when the socket
+	// reconnects, but the new server-side WS context starts unauthenticated.
+	// Tear them down immediately so they do not all fail before joinServer
+	// has a chance to restore the session.
+	cleanupServerSubscriptions();
 
-		const attemptSilentRejoin = async (
-			trpcClient?: ReturnType<typeof connectToTRPC>,
-		): Promise<'joined' | 'password-required' | 'cancelled'> => {
-			const trpc = trpcClient ?? getTRPCClient();
-			const { hasPassword, handshakeHash } = await trpc.others.handshake.query();
+	wsReconnectGeneration += 1;
+	const generation = wsReconnectGeneration;
+	let ownsConnection = captureTRPCAttempt();
+	const isCurrent = () => !didGenerationChange(generation) && ownsConnection();
 
-			if (!isCurrent()) {
-				return 'cancelled';
-			}
+	const attemptSilentRejoin = async (
+		trpcClient?: ReturnType<typeof connectToTRPC>,
+	): Promise<'joined' | 'password-required' | 'cancelled'> => {
+		const trpc = trpcClient ?? getTRPCClient();
+		const { hasPassword, handshakeHash } = await trpc.others.handshake.query();
 
-			if (hasPassword) {
-				return 'password-required';
-			}
+		if (!isCurrent()) {
+			return 'cancelled';
+		}
 
-			await joinServer(handshakeHash, undefined, trpc, { reconnect: true, isCurrent });
+		if (hasPassword) {
+			return 'password-required';
+		}
 
-			if (!isCurrent()) {
-				return 'cancelled';
-			}
+		await joinServer(handshakeHash, undefined, trpc, { reconnect: true, isCurrent });
 
-			const state = useServerStore.getState();
-			if (state.currentVoiceChannelId !== undefined) {
-				// Keep the local channel sticky across WS reconnects even if the
-				// server-side voice session is gone. A restarted server cannot restore
-				// the mediasoup session from voiceMap, so the VoiceProvider needs the
-				// original channel id to turn the next transport rebuild into a fresh
-				// voice.join instead of forcing a manual rejoin.
-				const channelState = state.voiceMap[state.currentVoiceChannelId];
-				const ownUserId = state.ownUserId;
-				const stillInVoice = ownUserId !== undefined && channelState?.users[ownUserId] !== undefined;
+		if (!isCurrent()) {
+			return 'cancelled';
+		}
 
-				if (stillInVoice) {
-					logDebug('WS reconnect restored voice session', {
-						channelId: state.currentVoiceChannelId,
-					});
-				} else {
-					logDebug('WS reconnect restored server connection without a voice session; recovery will rejoin', {
-						channelId: state.currentVoiceChannelId,
-					});
-				}
+		const state = useServerStore.getState();
+		if (state.currentVoiceChannelId !== undefined) {
+			// Keep the local channel sticky across WS reconnects even if the
+			// server-side voice session is gone. A restarted server cannot restore
+			// the mediasoup session from voiceMap, so the VoiceProvider needs the
+			// original channel id to turn the next transport rebuild into a fresh
+			// voice.join instead of forcing a manual rejoin.
+			const channelState = state.voiceMap[state.currentVoiceChannelId];
+			const ownUserId = state.ownUserId;
+			const stillInVoice = ownUserId !== undefined && channelState?.users[ownUserId] !== undefined;
 
-				// Recreate channel-scoped voice subscriptions against the latest WS
-				// session. If the server lost the voice session, the provider will
-				// fall back to a fresh voice.join when transport recovery runs.
-				state.bumpVoiceSessionReconnectNonce();
-			}
-
-			const pendingVoiceReconnect = getValidPendingVoiceReconnect();
-
-			if (pendingVoiceReconnect) {
-				logDebug('Voice reconnect recovery scheduled', {
-					channelId: pendingVoiceReconnect.channelId,
+			if (stillInVoice) {
+				logDebug('WS reconnect restored voice session', {
+					channelId: state.currentVoiceChannelId,
 				});
-				ensureVoiceReconnectStarted();
+			} else {
+				logDebug('WS reconnect restored server connection without a voice session; recovery will rejoin', {
+					channelId: state.currentVoiceChannelId,
+				});
 			}
 
-			return 'joined';
-		};
+			// Recreate channel-scoped voice subscriptions against the latest WS
+			// session. If the server lost the voice session, the provider will
+			// fall back to a fresh voice.join when transport recovery runs.
+			state.bumpVoiceSessionReconnectNonce();
+		}
 
-		void (async () => {
-			try {
-				const result = await attemptSilentRejoin();
-				if (!isCurrent()) return;
+		const pendingVoiceReconnect = getValidPendingVoiceReconnect();
 
-				if (result === 'cancelled') {
-					return;
-				}
+		if (pendingVoiceReconnect) {
+			logDebug('Voice reconnect recovery scheduled', {
+				channelId: pendingVoiceReconnect.channelId,
+			});
+			ensureVoiceReconnectStarted();
+		}
 
-				if (result === 'password-required') {
-					// Can't silently reconnect to a password-protected server —
-					// fall through to teardown so the user sees the password prompt
-					// on next connect.
-					clearReconnectSnapshotEventBuffer();
-					cleanup();
-					cleanupServerSubscriptions();
-				}
-			} catch (error) {
-				if (!isCurrent()) return;
-				const isAuthError =
-					error instanceof TRPCClientError && (!error.data?.code || error.data.code === 'UNAUTHORIZED');
-				const failureAction = resolveWsRejoinFailureAction({
-					generationChanged: didGenerationChange(generation),
-					isAuthError,
-					isSocketOpen: isTRPCSocketOpen(),
-				});
+		return 'joined';
+	};
 
-				if (failureAction === 'cancel-stale') {
-					return;
-				}
+	void (async () => {
+		try {
+			const result = await attemptSilentRejoin();
+			if (!isCurrent()) return;
 
-				if (failureAction === 'wait-for-reconnect') {
-					logDebug('WS dropped during server rejoin; waiting for the next reconnect');
-					return;
-				}
+			if (result === 'cancelled') {
+				return;
+			}
 
-				let showDisconnectScreen = !isTerminalRejoinError(error);
-
-				if (failureAction === 'refresh-auth') {
-					const refreshed = await refreshAccessToken();
-
-					if (!isCurrent()) {
-						return;
-					}
-
-					// Rejected refresh credentials are cleared by refreshAccessToken; a
-					// transient refresh failure leaves saved auth available for recovery.
-					showDisconnectScreen = Boolean(getAuthToken() || getRefreshToken());
-
-					if (refreshed) {
-						logDebug('Token refreshed after WS reconnect, retrying join');
-
-						try {
-							const host = getHostFromServer();
-							const trpc = reconnectTRPC(host);
-							ownsConnection = captureTRPCAttempt();
-							const result = await attemptSilentRejoin(trpc);
-
-							if (!isCurrent() || result === 'joined' || result === 'cancelled') {
-								return;
-							}
-
-							if (result === 'password-required') {
-								clearReconnectSnapshotEventBuffer();
-								cleanup();
-								cleanupServerSubscriptions();
-								return;
-							}
-						} catch (retryError) {
-							if (!isCurrent()) {
-								return;
-							}
-
-							showDisconnectScreen = !isTerminalRejoinError(retryError);
-
-							logDebug('Failed to rejoin after token refresh, tearing down', {
-								error: retryError,
-							});
-						}
-					}
-				} else {
-					logDebug('Failed to rejoin after WS reconnect, tearing down', {
-						error,
-					});
-				}
-
+			if (result === 'password-required') {
+				// Can't silently reconnect to a password-protected server —
+				// fall through to teardown so the user sees the password prompt
+				// on next connect.
 				clearReconnectSnapshotEventBuffer();
-				// The disconnect screen is a recovery path: keep voice recovery so the
-				// next successful join restores voice, as the grace-period teardown does.
-				// Terminal exits (auth/password) still drop it.
-				if (!showDisconnectScreen) {
-					clearVoiceReconnectRecovery('app-teardown');
-				}
 				cleanup();
-				if (showDisconnectScreen) {
-					// cleanup resets disconnectInfo, so publish the recovery screen afterwards.
-					setDisconnectInfo({
-						code: DisconnectCode.UNEXPECTED,
-						reason: 'Failed to rejoin the server after reconnecting.',
-						wasClean: false,
-						time: new Date(),
-					});
-				}
+				cleanupServerSubscriptions();
 			}
-		})();
-	});
+		} catch (error) {
+			if (!isCurrent()) return;
+			const isAuthError = error instanceof TRPCClientError && (!error.data?.code || error.data.code === 'UNAUTHORIZED');
+			const failureAction = resolveWsRejoinFailureAction({
+				generationChanged: didGenerationChange(generation),
+				isAuthError,
+				isSocketOpen: isTRPCSocketOpen(),
+			});
+
+			if (failureAction === 'cancel-stale') {
+				return;
+			}
+
+			if (failureAction === 'wait-for-reconnect') {
+				logDebug('WS dropped during server rejoin; waiting for the next reconnect');
+				return;
+			}
+
+			let showDisconnectScreen = !isTerminalRejoinError(error);
+
+			if (failureAction === 'refresh-auth') {
+				const refreshed = await refreshAccessToken();
+
+				if (!isCurrent()) {
+					return;
+				}
+
+				// Rejected refresh credentials are cleared by refreshAccessToken; a
+				// transient refresh failure leaves saved auth available for recovery.
+				showDisconnectScreen = Boolean(getAuthToken() || getRefreshToken());
+
+				if (refreshed) {
+					logDebug('Token refreshed after WS reconnect, retrying join');
+
+					try {
+						const host = getHostFromServer();
+						const trpc = reconnectTRPC(host);
+						ownsConnection = captureTRPCAttempt();
+						const result = await attemptSilentRejoin(trpc);
+
+						if (!isCurrent() || result === 'joined' || result === 'cancelled') {
+							return;
+						}
+
+						if (result === 'password-required') {
+							clearReconnectSnapshotEventBuffer();
+							cleanup();
+							cleanupServerSubscriptions();
+							return;
+						}
+					} catch (retryError) {
+						if (!isCurrent()) {
+							return;
+						}
+
+						showDisconnectScreen = !isTerminalRejoinError(retryError);
+
+						logDebug('Failed to rejoin after token refresh, tearing down', {
+							error: retryError,
+						});
+					}
+				}
+			} else {
+				logDebug('Failed to rejoin after WS reconnect, tearing down', {
+					error,
+				});
+			}
+
+			clearReconnectSnapshotEventBuffer();
+			// The disconnect screen is a recovery path: keep voice recovery so the
+			// next successful join restores voice, as the grace-period teardown does.
+			// Terminal exits (auth/password) still drop it.
+			if (!showDisconnectScreen) {
+				clearVoiceReconnectRecovery('app-teardown');
+			}
+			cleanup();
+			if (showDisconnectScreen) {
+				// cleanup resets disconnectInfo, so publish the recovery screen afterwards.
+				setDisconnectInfo({
+					code: DisconnectCode.UNEXPECTED,
+					reason: 'Failed to rejoin the server after reconnecting.',
+					wasClean: false,
+					time: new Date(),
+				});
+			}
+		}
+	})();
 };
 
 export const logoutFromServer = async () => {
 	wsReconnectGeneration += 1;
-	setOnWsReconnect(null);
+	disarmServerRejoin();
 	clearVoiceReconnectRecovery('logout');
 	await revokeRefreshToken();
 	cleanup({ clearAuth: true });
