@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.7](https://github.com/jonocairns/ripcord/compare/v2.5.6...v2.5.7) (2026-11-10)
+
+
+### Bug Fixes
+
+* replay own voice state when subscriptions attach and re-land the permission policy ([#404](https://github.com/jonocairns/ripcord/issues/404)) ([b4bacf8](https://github.com/jonocairns/ripcord/commit/b4bacf88e4e73ba1919d9b7088717c1c88eb44f7))
+
 ## [2.5.6](https://github.com/jonocairns/ripcord/compare/v2.5.5...v2.5.6) (2026-11-10)
 
 
