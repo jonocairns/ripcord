@@ -79,7 +79,7 @@ World events trigger transitions, including:
 - join requested/succeeded/failed
 - WebSocket dropped, authenticated, or unauthenticated
 - transport failed or nonce changed
-- reconnect intent captured, recovery started, or recovery cleared
+- reconnect intent captured, `ReconnectStarted`, or recovery cleared
 
 The machine emits effect commands such as:
 

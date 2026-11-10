@@ -129,6 +129,13 @@ describe('voice session machine', () => {
 
 		state = voiceSessionResultState(reduceVoiceSession(state, { type: 'RecoveryCleared', reason: 'kicked' }));
 		expect(selectVoiceSessionConnectionStatus(state)).toBe('disconnected');
+
+		// A real failure (JoinFailed is dispatched by the runtime) projects as 'failed'.
+		state = voiceSessionResultState(reduceVoiceSession(state, { type: 'JoinRequested', channelId: 5 }));
+		state = voiceSessionResultState(
+			reduceVoiceSession(state, { type: 'JoinFailed', reason: 'join-failed', channelId: 5 }),
+		);
+		expect(selectVoiceSessionConnectionStatus(state)).toBe('failed');
 	});
 
 	it('defers transport failure while ws reconnect owns recovery', () => {
