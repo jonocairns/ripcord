@@ -1,10 +1,11 @@
-import { ActivityLogType, Permission } from '@sharkord/shared';
+import { ActivityLogType, ChannelPermission, Permission } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
 import { publishChannel, publishChannelVisibility } from '../../db/publishers';
 import { channels, users } from '../../db/schema';
 import { enqueueActivityLog } from '../../queues/activity-log';
+import { invariant } from '../../utils/invariant';
 import { revalidateActiveVoiceSessions } from '../../utils/revalidate-voice-sessions';
 import { protectedProcedure } from '../../utils/trpc';
 
@@ -22,10 +23,16 @@ const updateChannelRoute = protectedProcedure
 	.mutation(async ({ ctx, input }) => {
 		await ctx.needsPermission(Permission.MANAGE_CHANNELS);
 
-		const previousChannel =
-			input.private !== undefined
-				? await db.select().from(channels).where(eq(channels.id, input.channelId)).get()
-				: undefined;
+		const previousChannel = await db.select().from(channels).where(eq(channels.id, input.channelId)).get();
+
+		invariant(previousChannel, {
+			code: 'NOT_FOUND',
+			message: 'Channel not found',
+		});
+
+		if (previousChannel.private) {
+			await ctx.needsChannelPermission(previousChannel.id, ChannelPermission.VIEW_CHANNEL);
+		}
 
 		const updatedChannel = await db
 			.update(channels)

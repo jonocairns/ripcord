@@ -4,7 +4,8 @@ import path from 'node:path';
 import { StorageOverflowAction } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { tdb } from '../../__tests__/setup';
-import { files, settings } from '../../db/schema';
+import { getExceedingOldFiles } from '../../db/queries/files';
+import { files, messageFiles, messages, settings } from '../../db/schema';
 import { PUBLIC_PATH, TMP_PATH, UPLOADS_PATH } from '../../helpers/paths';
 import { fileManager } from '../file-manager';
 
@@ -352,58 +353,81 @@ describe('file manager', () => {
 			.execute();
 	});
 
-	test('should delete old files when storage limit exceeded with DELETE_OLD_FILES', async () => {
-		const oldFileName = `old-${Date.now()}.txt`;
-		const newFileName = `new-${Date.now()}.txt`;
-		const oldFilePath = path.join(UPLOADS_PATH, oldFileName);
+	test('overflow deletes only the oldest attachment using the quota rather than the per-file limit', async () => {
+		const save = async (name: string, createdAt: number, attachment: boolean) => {
+			const filePath = path.join(UPLOADS_PATH, name);
+			await fs.writeFile(filePath, '0123456789');
+			const tempFile = await fileManager.addTemporaryFile({ filePath, size: 10, originalName: name, userId: 1 });
+			const file = await fileManager.saveFile(tempFile.id, 1);
+			tempFilesToCleanup.push(path.join(PUBLIC_PATH, file.name));
+			await tdb.update(files).set({ createdAt }).where(eq(files.id, file.id));
+			if (attachment) {
+				const message = await tdb
+					.insert(messages)
+					.values({ channelId: 1, userId: 1, content: 'file', createdAt })
+					.returning()
+					.get();
+				await tdb.insert(messageFiles).values({ messageId: message.id, fileId: file.id, createdAt });
+			}
+			return file;
+		};
 
-		await fs.writeFile(oldFilePath, 'old content');
-
-		const oldStats = await fs.stat(oldFilePath);
-
-		const oldTempFile = await fileManager.addTemporaryFile({
-			filePath: oldFilePath,
-			size: oldStats.size,
-			originalName: oldFileName,
-			userId: 1,
-		});
-
-		const oldSavedFile = await fileManager.saveFile(oldTempFile.id, 1);
-
-		await Bun.sleep(100); // ensure different timestamps
-
-		const totalLimit = oldSavedFile.size + 5;
+		const nonAttachment = await save('protected.txt', 1, false);
+		const oldest = await save('oldest.txt', 2, true);
+		const newer = await save('newer.txt', 3, true);
 
 		await tdb.update(settings).set({
-			storageQuota: totalLimit,
-			storageUploadMaxFileSize: totalLimit,
+			storageQuota: 30,
+			storageUploadMaxFileSize: 10,
 			storageOverflowAction: StorageOverflowAction.DELETE_OLD_FILES,
 		});
 
-		const newFilePath = path.join(UPLOADS_PATH, newFileName);
+		expect((await getExceedingOldFiles(10)).map((file) => file.id)).toEqual([oldest.id]);
+		const newest = await save('newest.txt', 4, true);
 
-		await fs.writeFile(newFilePath, 'new content here');
+		expect(await tdb.select().from(files).where(eq(files.id, oldest.id)).get()).toBeUndefined();
+		expect(await fs.exists(path.join(PUBLIC_PATH, oldest.name))).toBe(false);
+		for (const file of [nonAttachment, newer, newest]) {
+			expect(await tdb.select().from(files).where(eq(files.id, file.id)).get()).toBeDefined();
+			expect(await fs.exists(path.join(PUBLIC_PATH, file.name))).toBe(true);
+		}
+	});
 
-		const newStats = await fs.stat(newFilePath);
+	test('overflow deletes nothing when attachments cannot free enough space', async () => {
+		const insertFile = (name: string, size: number, createdAt: number) =>
+			tdb
+				.insert(files)
+				.values({
+					name,
+					originalName: name,
+					md5: name,
+					userId: 1,
+					size,
+					mimeType: 'text/plain',
+					extension: '.txt',
+					createdAt,
+				})
+				.returning()
+				.get();
 
-		const newTempFile = await fileManager.addTemporaryFile({
-			filePath: newFilePath,
-			size: newStats.size,
-			originalName: newFileName,
-			userId: 1,
-		});
+		await insertFile('emoji.txt', 25, 1);
+		const attachment = await insertFile('attachment.txt', 5, 2);
+		const message = await tdb
+			.insert(messages)
+			.values({ channelId: 1, userId: 1, content: 'file', createdAt: 2 })
+			.returning()
+			.get();
+		await tdb.insert(messageFiles).values({ messageId: message.id, fileId: attachment.id, createdAt: 2 });
+		await tdb.update(settings).set({ storageQuota: 30, storageOverflowAction: StorageOverflowAction.DELETE_OLD_FILES });
 
-		const newSavedFile = await fileManager.saveFile(newTempFile.id, 1);
+		await expect(getExceedingOldFiles(10)).rejects.toThrow('Server storage limit exceeded.');
+		expect(await tdb.select().from(files).where(eq(files.id, attachment.id)).get()).toBeDefined();
+	});
 
-		tempFilesToCleanup.push(path.join(PUBLIC_PATH, newSavedFile.name));
-
-		const oldDbFile = await tdb.select().from(files).where(eq(files.id, oldSavedFile.id)).get();
-
-		expect(oldDbFile).toBeUndefined();
-
-		const newDbFile = await tdb.select().from(files).where(eq(files.id, newSavedFile.id)).get();
-
-		expect(newDbFile).toBeDefined();
+	test('quota selection accepts a file above the per-file limit but rejects one above the quota', async () => {
+		await tdb.update(settings).set({ storageQuota: 30, storageUploadMaxFileSize: 10 });
+		expect(await getExceedingOldFiles(20)).toEqual([]);
+		await expect(getExceedingOldFiles(31)).rejects.toThrow('File size exceeds total server storage quota');
 	});
 
 	test('should allow save when storage limits are disabled', async () => {

@@ -1,4 +1,4 @@
-import { isEmptyMessage, Permission } from '@sharkord/shared';
+import { ChannelPermission, isEmptyMessage, Permission } from '@sharkord/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
@@ -18,6 +18,8 @@ const deleteFileRoute = protectedProcedure.input(z.object({ fileId: z.number() }
 		code: 'NOT_FOUND',
 		message: 'Message not found',
 	});
+
+	await ctx.needsChannelPermission(message.channelId, ChannelPermission.VIEW_CHANNEL);
 
 	invariant(message.userId === ctx.user.id || (await ctx.hasPermission(Permission.MANAGE_MESSAGES)), {
 		code: 'FORBIDDEN',
