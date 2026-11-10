@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.5.6](https://github.com/jonocairns/ripcord/compare/v2.5.5...v2.5.6) (2026-11-10)
+
+
+### Bug Fixes
+
+* close replaced server connections so they cannot disturb the active session ([#401](https://github.com/jonocairns/ripcord/issues/401)) ([0d76090](https://github.com/jonocairns/ripcord/commit/0d760905d39acc21e199f9ea860f7e63a605fe62))
+* load missed messages and clear the unread marker in the open channel after a reconnect ([#400](https://github.com/jonocairns/ripcord/issues/400)) ([35b7979](https://github.com/jonocairns/ripcord/commit/35b79794d7969db280fe34d2cd8250919a9e2daa))
+* reject a password change that races a session revocation and make role edits atomic ([#397](https://github.com/jonocairns/ripcord/issues/397)) ([eec5d59](https://github.com/jonocairns/ripcord/commit/eec5d594f0111195cdce59396bf11494ce730c83))
+* require channel access to reorder private channels or manage their permissions ([#398](https://github.com/jonocairns/ripcord/issues/398)) ([a5941ee](https://github.com/jonocairns/ripcord/commit/a5941ee1e411d84b1bbad7c3a18fb7dcb270ddf9))
+
 ## [2.5.5](https://github.com/jonocairns/ripcord/compare/v2.5.4...v2.5.5) (2026-11-10)
 
 
