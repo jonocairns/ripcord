@@ -96,6 +96,7 @@ export type TSidecarCapabilities = {
 };
 
 type TAppAudioBinaryEgressInfo = {
+	authToken: string;
 	port: number;
 	framing?: string;
 	protocolVersion?: number;
@@ -329,13 +330,16 @@ const isDesktopPushKeybindEvent = (value: unknown): value is TDesktopPushKeybind
 	return isPushKeybindKind(value.kind) && typeof value.active === 'boolean';
 };
 
-const isAppAudioBinaryEgressInfo = (value: unknown): value is TAppAudioBinaryEgressInfo => {
+export const isAppAudioBinaryEgressInfo = (value: unknown): value is TAppAudioBinaryEgressInfo => {
 	if (!isRecord(value)) {
 		return false;
 	}
 
 	return (
 		isPositiveInteger(value.port) &&
+		typeof value.authToken === 'string' &&
+		value.authToken.length === 64 &&
+		/^[0-9a-fA-F]{64}$/.test(value.authToken) &&
 		hasOptionalString(value, 'framing') &&
 		hasOptionalPositiveInteger(value, 'protocolVersion')
 	);
@@ -1155,7 +1159,12 @@ class CaptureSidecarManager {
 			await this.ensureSidecarReady();
 
 			const response = await this.sendRequest('audio_capture.binary_egress_info', {});
-			const info = expectSidecarResult(response, isAppAudioBinaryEgressInfo, 'audio_capture.binary_egress_info');
+			if (!isAppAudioBinaryEgressInfo(response)) {
+				// A stale development sidecar must use stdout for this launch.
+				this.appAudioBinaryEgressUnsupported = true;
+				return;
+			}
+			const info = response;
 
 			if (!Number.isInteger(info.port) || info.port <= 0 || info.port > 65_535) {
 				throw new Error('Invalid binary app-audio egress port');
@@ -1186,6 +1195,7 @@ class CaptureSidecarManager {
 					cleanupTimeout();
 					socket.removeListener('error', onInitialError);
 					socket.setNoDelay(true);
+					socket.write(info.authToken, 'ascii');
 
 					socket.on('data', (data) => {
 						this.handleAppAudioBinaryEgressData(data);
