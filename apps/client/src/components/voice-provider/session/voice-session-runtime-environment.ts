@@ -17,7 +17,7 @@ import {
 	dispatchVoiceSessionWithResult,
 	getVoiceSessionState,
 } from '@/features/server/voice/voice-session-store';
-import { logDebug, logVoice, reportError } from '@/helpers/browser-logger';
+import { logDebug, logVoice, recordVoiceDiagnostic, reportError } from '@/helpers/browser-logger';
 import { recordDesktopDiagnostic } from '@/helpers/desktop-diagnostics';
 import { setStreamReconnectAttemptId } from '@/helpers/stream-observability';
 import { traceSpan } from '@/helpers/telemetry/tracing';
@@ -192,6 +192,13 @@ const voiceSessionRuntimeExecutorEnvironment = {
 			attempt: command.attempt + 1,
 		});
 	},
+	reportRebuildNonceRestart: (command, currentNonce) => {
+		recordVoiceDiagnostic(
+			'Voice rebuild restarted after a reconnect nonce change',
+			[{ commandId: command.commandId, generation: command.generation, commandNonce: command.nonce, currentNonce }],
+			'warning',
+		);
+	},
 	reportRestoreDetached: (command) => {
 		reportError('Voice reconnect detached a hung cancelled operation', new Error('Voice restore detached'), {
 			commandType: command.type,
@@ -212,6 +219,7 @@ const voiceSessionRuntimeExecutorEnvironment = {
 	| 'reportRebuildDetached'
 	| 'reportRebuildTerminalFailure'
 	| 'reportRestoreDetached'
+	| 'reportRebuildNonceRestart'
 >;
 
 export { voiceSessionRuntimeEnvironment, voiceSessionRuntimeExecutorEnvironment };

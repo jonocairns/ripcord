@@ -62,6 +62,7 @@ const createFakePorts = (overrides: Partial<TVoiceSessionExecutorPorts> = {}): T
 	reportRebuildDetached: () => {},
 	reportRebuildTerminalFailure: () => {},
 	reportRestoreDetached: () => {},
+	reportRebuildNonceRestart: () => {},
 	...overrides,
 });
 

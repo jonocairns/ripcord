@@ -1,4 +1,3 @@
-import { recordVoiceDiagnostic } from '@/helpers/browser-logger';
 import { getVoiceReconnectRetryDelayMs, VoiceReconnectTimeoutError } from './reconnect-policy';
 import {
 	selectReconnectAuthenticated,
@@ -120,6 +119,9 @@ type TVoiceSessionExecutorPorts = {
 	reportRebuildDetached: (command: TRebuildTransportsCommand) => void;
 	reportRebuildTerminalFailure: (command: TRebuildTransportsCommand, error: unknown) => void;
 	reportRestoreDetached: (command: TRestoreVoiceSessionCommand) => void;
+	// Temporary (D4): proves in production whether the nonce restart still fires
+	// before it is deleted.
+	reportRebuildNonceRestart: (command: TRebuildTransportsCommand, currentNonce: number) => void;
 	commandObserver?: TVoiceSessionCommandObserver;
 };
 
@@ -602,11 +604,7 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 					return false;
 				}
 
-				recordVoiceDiagnostic(
-					'Voice rebuild restarted after a reconnect nonce change',
-					[{ commandId: command.commandId, generation: command.generation, commandNonce: command.nonce, currentNonce }],
-					'warning',
-				);
+				reportSafely(() => ports.reportRebuildNonceRestart(command, currentNonce));
 
 				dispatchVoiceSession({
 					type: 'NonceChanged',

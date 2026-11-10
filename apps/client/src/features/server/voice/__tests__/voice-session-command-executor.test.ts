@@ -133,6 +133,7 @@ const createFakePorts = (overrides: Partial<TVoiceSessionExecutorPorts> = {}): T
 	reportRebuildDetached: () => {},
 	reportRebuildTerminalFailure: () => {},
 	reportRestoreDetached: () => {},
+	reportRebuildNonceRestart: () => {},
 	...overrides,
 });
 
@@ -772,8 +773,12 @@ describe('voice session command executor', () => {
 		const startedNonces: number[] = [];
 		const replacementDeferred = createDeferred<void>();
 		const restartResults: boolean[] = [];
+		const reportedRestarts: Array<{ commandNonce: number; currentNonce: number }> = [];
 		const executor = createExecutor(
 			createFakePorts({
+				reportRebuildNonceRestart: (command, currentNonce) => {
+					reportedRestarts.push({ commandNonce: command.nonce, currentNonce });
+				},
 				rebuildTransports: (command, context) => {
 					startedNonces.push(command.nonce);
 					if (command.nonce === 1) {
@@ -794,6 +799,7 @@ describe('voice session command executor', () => {
 			await flushMicrotasks();
 
 			expect(restartResults).toEqual([true]);
+			expect(reportedRestarts).toEqual([{ commandNonce: 1, currentNonce: 2 }]);
 			expect(startedNonces).toEqual([1, 2]);
 			expect(getVoiceSessionState().phase).toMatchObject({
 				phase: 'rebuilding',
