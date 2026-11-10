@@ -16,6 +16,8 @@ import type { pubsub } from './pubsub';
 import { createRateLimiter, getClientRateLimitKey } from './rate-limiters/rate-limiter';
 import { assertSessionIsValid } from './user-sessions';
 
+export type TChannelPermissionChecker = (permission: ChannelPermission) => boolean;
+
 export type Context = {
 	handshakeHash: string;
 	authenticated: boolean;
@@ -39,6 +41,8 @@ export type Context = {
 	getClientInstanceId: () => string | undefined;
 	hasPermission: (targetPermission: Permission | Permission[]) => Promise<boolean>;
 	needsPermission: (targetPermission: Permission | Permission[]) => Promise<void>;
+	// Operation-scoped snapshot; call again for subsequent operations.
+	createChannelPermissionChecker: (channelId: number) => TChannelPermissionChecker;
 	hasChannelPermission: (channelId: number, targetPermission: ChannelPermission) => Promise<boolean>;
 	needsChannelPermission: (channelId: number, targetPermission: ChannelPermission) => Promise<void>;
 	getOwnWs: () => WebSocket | undefined;
