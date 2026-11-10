@@ -80,10 +80,12 @@ test('a connection replaced after the disconnect screen is closed and Leave voic
 			await expectMicrophoneFlow(watcher.page, 'inbound');
 			const before = fault.connectedCount();
 			fault.restore();
-			// Prompt cancellation may avoid connecting the retired handler at all.
-			expect.soft(fault.connectedCount() - before).toBeLessThanOrEqual(1);
 			// The retired client must close after its held connection is released.
 			await expect.soft.poll(() => fault.openCount(), { timeout: 15_000 }).toBe(1);
+			// Count only after the released handlers have run, so extra connections
+			// from the retired client are caught even if they close quickly. Prompt
+			// cancellation may avoid connecting the retired handler at all.
+			expect.soft(fault.connectedCount() - before).toBeLessThanOrEqual(1);
 			const settledAttempts = fault.attemptCount();
 			const { ownUserId } = await voiceMembership(page);
 			await page.getByTitle('Leave voice', { exact: true }).click();

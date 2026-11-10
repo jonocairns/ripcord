@@ -20,7 +20,7 @@ const reorderChannelsRoute = protectedProcedure
 	.mutation(async ({ input, ctx }) => {
 		await ctx.needsPermission(Permission.MANAGE_CHANNELS);
 
-		const categoryIds = db.transaction((tx) => {
+		const categoryChannelIds = db.transaction((tx) => {
 			// The asynchronous authorization lookup can overlap a role change. Recheck
 			// the current global grant in the same snapshot as membership and visibility.
 			// Drizzle's bun-sqlite transaction shares db's session and SQLite connection
@@ -59,7 +59,7 @@ const reorderChannelsRoute = protectedProcedure
 			return currentChannels.map((channel) => channel.id);
 		});
 
-		await Promise.all(categoryIds.map((channelId) => publishChannel(channelId, 'update')));
+		await Promise.all(categoryChannelIds.map((channelId) => publishChannel(channelId, 'update')));
 
 		if (input.channelIds.length > 0) {
 			enqueueActivityLog({
