@@ -57,11 +57,17 @@ export const createDiagnosticIngest = (deps: {
 			for (const [key, expiresAt] of seen) if (expiresAt <= receivedAt) seen.delete(key);
 			// Shift the entire batch together so relative event and breadcrumb times survive.
 			const offset = Math.max(...batch.records.map((record) => record.occurredAt)) - receivedAt;
-			const clockSkewMs = offset > 60_000 ? offset : 0;
-			if (clockSkewMs) count('diagnostic_clock_skew_corrected_batches');
+			const batchSkewMs = offset > 60_000 ? offset : 0;
+			let queuedCorrected = false;
 			for (const record of batch.records) {
 				const key = `${userId}:${batch.clientSessionId}:${record.id}`;
 				if (seen.has(key)) continue;
+				// A record whose own stamp is already in the accepted window keeps it when the batch
+				// offset would push it past the stale cutoff: the client clock may have been fixed
+				// mid-batch, or one record carried a bogus future stamp.
+				const rawInWindow = receivedAt - record.occurredAt <= 300_000 && record.occurredAt - receivedAt <= 60_000;
+				const clockSkewMs =
+					batchSkewMs && rawInWindow && receivedAt - (record.occurredAt - batchSkewMs) > 300_000 ? 0 : batchSkewMs;
 				if (receivedAt - (record.occurredAt - clockSkewMs) > 300_000) {
 					count('diagnostic_stale');
 					continue;
@@ -76,6 +82,7 @@ export const createDiagnosticIngest = (deps: {
 					if (oldest !== undefined) seen.delete(oldest);
 				}
 				seen.set(key, receivedAt + 300_000);
+				if (clockSkewMs) queuedCorrected = true;
 				const sanitized = sanitizeDiagnosticRecord(record);
 				queue.push({
 					record: {
@@ -101,6 +108,7 @@ export const createDiagnosticIngest = (deps: {
 					receivedAt,
 				});
 			}
+			if (queuedCorrected) count('diagnostic_clock_skew_corrected_batches');
 			timer ??= setTimeout(drain, 0);
 		},
 		flush: drain,

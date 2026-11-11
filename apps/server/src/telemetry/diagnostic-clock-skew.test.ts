@@ -120,3 +120,59 @@ test('extreme schema-valid future dates have no skew cap and invalid shifted bre
 		},
 	]);
 });
+
+const collectingIngest = (now: number) => {
+	const logs: { record: { occurredAt: number; clockSkewCorrected?: boolean } }[] = [];
+	const counts: string[] = [];
+	const ingest = createDiagnosticIngest({
+		now: () => now,
+		log: (entry) => {
+			logs.push(entry);
+		},
+		forward: () => {},
+		health: {
+			count: (reason) => {
+				counts.push(reason);
+			},
+		},
+	});
+	return { ingest, logs, counts };
+};
+
+test('a mixed batch keeps a correctly stamped record instead of correcting it into the stale window', () => {
+	const { ingest, logs, counts } = collectingIngest(400_000);
+	// The client clock was fixed between these two records: one is 580 s ahead, one is 5 s old.
+	ingest.accept(batch(record(980_000), record(395_000, 2)), 1);
+	ingest.flush();
+	expect(logs).toMatchObject([
+		{ record: { occurredAt: 400_000, clockSkewCorrected: true } },
+		{ record: { occurredAt: 395_000 } },
+	]);
+	expect(logs[1]?.record.clockSkewCorrected).toBeUndefined();
+	expect(counts).toEqual(['diagnostic_clock_skew_corrected_batches']);
+});
+
+test('the batch offset comes from the latest stamp, not from array position', () => {
+	const { ingest, logs } = collectingIngest(400_000);
+	ingest.accept(batch(record(1_002_000, 2), record(1_000_000)), 1);
+	ingest.flush();
+	expect(logs.map((entry) => entry.record.occurredAt)).toEqual([400_000, 398_000]);
+});
+
+test('a skewed record that is stale even after correction is still dropped', () => {
+	const { ingest, logs, counts } = collectingIngest(400_000);
+	// Offset 600 s from the newest record; the older record lands 301 s before receipt.
+	ingest.accept(batch(record(1_000_000), record(699_000, 2)), 1);
+	ingest.flush();
+	expect(logs).toMatchObject([{ record: { occurredAt: 400_000 } }]);
+	expect(counts).toEqual(['diagnostic_stale', 'diagnostic_clock_skew_corrected_batches']);
+});
+
+test('a replayed or fully dropped skewed batch does not count as corrected again', () => {
+	const { ingest, counts } = collectingIngest(400_000);
+	const skewed = batch(record(1_000_000));
+	ingest.accept(skewed, 1);
+	ingest.accept(skewed, 1);
+	ingest.flush();
+	expect(counts).toEqual(['diagnostic_clock_skew_corrected_batches']);
+});

@@ -568,17 +568,21 @@ class VoiceRuntime {
 			const lastAppliedSeq = this.clientVoiceStateSeqs.get(userId);
 
 			if (lastAppliedSeq !== undefined && seq <= lastAppliedSeq) {
-				logger.info({
-					message: 'Voice mute update dropped as stale',
-					callSite: 'updateState',
-					userId,
-					channelId: this.id,
-					seq,
-					lastAppliedSeq,
-					requestedMicMuted: metadata ? metadata.requestedMicMuted : newState.micMuted,
-					requestedSoundMuted: metadata ? metadata.requestedSoundMuted : newState.soundMuted,
-					clientInstanceId: metadata?.clientInstanceId,
-				});
+				const requestedMicMuted = metadata ? metadata.requestedMicMuted : newState.micMuted;
+				const requestedSoundMuted = metadata ? metadata.requestedSoundMuted : newState.soundMuted;
+				// Only mute or deafen requests are logged; a dropped webcam or screen-share update is not.
+				if (requestedMicMuted !== undefined || requestedSoundMuted !== undefined)
+					logger.info({
+						message: 'Voice mute update dropped as stale',
+						callSite: 'updateState',
+						userId,
+						channelId: this.id,
+						seq,
+						lastAppliedSeq,
+						requestedMicMuted,
+						requestedSoundMuted,
+						clientInstanceId: metadata?.clientInstanceId,
+					});
 				return false;
 			}
 

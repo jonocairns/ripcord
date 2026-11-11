@@ -65,6 +65,9 @@ test('join initializes mute state; updates log applied and stale decisions but n
 		log.mockClear();
 		await caller.voice.updateState({ webcamEnabled: true, seq: 11 });
 		expect(log).not.toHaveBeenCalled();
+		await caller.voice.updateState({ webcamEnabled: false, seq: 11 });
+		expect(log).not.toHaveBeenCalled();
+		expect(runtime.getUserState(2)).toMatchObject({ webcamEnabled: true });
 	} finally {
 		log.mockRestore();
 	}
