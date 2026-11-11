@@ -272,6 +272,7 @@ const actions = await import('../../../features/server/actions');
 const mode = process.argv[2];
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 const newModes = [
+	'read-connection-state',
 	'trace-connect',
 	'trace-drop-resume',
 	'trace-drop-resume-voice',
@@ -621,7 +622,35 @@ if (mode && newModes.includes(mode)) {
 		await actions.connect();
 		const socket = socketAt(0);
 		start = mode === 'trace-connect' ? 0 : trace.length;
-		if (['trace-drop-resume', 'trace-drop-resume-voice', 'must-change-password', 'gate-readystate'].includes(mode)) {
+		if (mode === 'read-connection-state') {
+			assert.equal(trpc.getServerConnectionState().phase.name, 'ready');
+			let calls = 0;
+			const unsubscribe = trpc.subscribeServerConnectionState(() => {
+				calls += 1;
+			});
+			drop(socket, 4013);
+			assert.equal(trpc.getServerConnectionState().phase.name, 'recovering');
+			assert.equal(calls, 1);
+			reopen(socket);
+			await tick();
+			assert.equal(trpc.getServerConnectionState().phase.name, 'ready');
+			assert.equal(trpc.getServerConnectionState(), trpc.getServerConnectionState());
+			drop(socket, 4013);
+			const phase = trpc.getServerConnectionState().phase;
+			assert.equal(phase.name, 'recovering');
+			trpc.reconnectTRPC('first');
+			assert.deepEqual(
+				trpc.getServerConnectionState().phase,
+				phase,
+				'a client replacement keeps recovering and its since',
+			);
+			const beforeUnsubscribe = calls;
+			unsubscribe();
+			drop(socketAt(1), 4013);
+			assert.equal(calls, beforeUnsubscribe, 'unsubscribing stops listener calls');
+		} else if (
+			['trace-drop-resume', 'trace-drop-resume-voice', 'must-change-password', 'gate-readystate'].includes(mode)
+		) {
 			let waiting: Promise<void> | undefined;
 			if (mode === 'gate-readystate') {
 				socket.connection.ws.readyState = 3;

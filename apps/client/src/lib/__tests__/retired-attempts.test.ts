@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 
 for (const mode of [
+	'read-connection-state',
 	'trace-connect',
 	'trace-drop-resume',
 	'trace-drop-resume-voice',

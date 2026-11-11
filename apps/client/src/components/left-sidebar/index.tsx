@@ -29,6 +29,7 @@ import { Avatar, AvatarImage } from '../ui/avatar';
 import { Button } from '../ui/button';
 import { Categories } from './categories';
 import { DesktopUpdateCallout } from './desktop-update-callout';
+import { ServerReconnectStatus } from './server-reconnect-status';
 import { UserControl } from './user-control';
 import { VoiceControl } from './voice-control';
 
@@ -210,6 +211,7 @@ const LeftSidebar = memo(({ className }: TLeftSidebarProps) => {
 			</div>
 			<DesktopUpdateCallout />
 			<div className="border-t border-sidebar-border bg-sidebar-accent/60">
+				<ServerReconnectStatus />
 				<VoiceControl />
 				<UserControl />
 			</div>
