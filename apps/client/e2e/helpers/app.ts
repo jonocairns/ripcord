@@ -93,8 +93,10 @@ const WS_HOOK = `
     }
   };
   window.__ripcordE2eCloseAppWebSocket = () => {
-    const socket = webSockets.findLast(({ readyState, url }) => readyState === Native.OPEN && !url.includes(':5173'));
-    if (!socket) return null;
+    // Only the newest app socket is current: a retired client's socket can stay open while it
+    // drains pending requests and its replacement connects.
+    const socket = webSockets.findLast(({ url }) => !url.includes(':5173'));
+    if (!socket || socket.readyState !== Native.OPEN) return null;
     socket.close(4013, 'Playwright connection fault');
     return { socketCount: webSockets.length };
   };
@@ -156,8 +158,9 @@ const waitForStats = async (
 	throw new Error(`Timed out waiting for ${label}. Last WebRTC stats: ${JSON.stringify(lastStats)}`);
 };
 
-// Recovery can briefly leave the page with only a connecting socket (a reconnect in flight, or the
-// app replacing its client), so wait for an open one and close it in the same poll.
+// Recovery can briefly leave the newest app socket connecting (a reconnect in flight, or the app
+// replacing its client), so wait for it to open and close it in the same poll. The reconnect check
+// then waits for a newer app socket to open.
 const dropAppWebSocket = async (page: Page, options: { waitForReconnect?: boolean } = {}): Promise<void> => {
 	const closed = await page
 		.waitForFunction(() => window.__ripcordE2eCloseAppWebSocket?.() ?? null, undefined, {
@@ -175,11 +178,11 @@ const dropAppWebSocket = async (page: Page, options: { waitForReconnect?: boolea
 
 	if (options.waitForReconnect !== false) {
 		await page.waitForFunction(
-			(previousSocketCount) =>
-				(window.__ripcordE2eWebSockets?.length ?? 0) > previousSocketCount &&
-				(window.__ripcordE2eWebSockets ?? []).some(
-					({ readyState, url }) => readyState === WebSocket.OPEN && !url.includes(':5173'),
-				),
+			(previousSocketCount) => {
+				const webSockets = window.__ripcordE2eWebSockets ?? [];
+				const newestIndex = webSockets.findLastIndex(({ url }) => !url.includes(':5173'));
+				return newestIndex >= previousSocketCount && webSockets[newestIndex]?.readyState === WebSocket.OPEN;
+			},
 			socketCount,
 			{ timeout: 20_000 },
 		);
