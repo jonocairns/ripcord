@@ -16,8 +16,6 @@ declare global {
 	interface Window {
 		__ripcordE2ePeerConnections?: RTCPeerConnection[];
 		__ripcordE2eStats?: () => Promise<PcStats>;
-		__ripcordE2eWebSockets?: WebSocket[];
-		__ripcordE2eCloseAppWebSocket?: () => { socketCount: number } | null;
 	}
 }
 
@@ -79,30 +77,6 @@ const PC_HOOK = `
 })();
 `;
 
-const WS_HOOK = `
-(() => {
-  const Native = window.WebSocket;
-  if (!Native || window.__ripcordE2eCloseAppWebSocket) return;
-
-  const webSockets = [];
-  window.__ripcordE2eWebSockets = webSockets;
-  window.WebSocket = class extends Native {
-    constructor(...args) {
-      super(...args);
-      webSockets.push(this);
-    }
-  };
-  window.__ripcordE2eCloseAppWebSocket = () => {
-    // Only the newest app socket is current: a retired client's socket can stay open while it
-    // drains pending requests and its replacement connects.
-    const socket = webSockets.findLast(({ url }) => !url.includes(':5173'));
-    if (!socket || socket.readyState !== Native.OPEN) return null;
-    socket.close(4013, 'Playwright connection fault');
-    return { socketCount: webSockets.length };
-  };
-})();
-`;
-
 type PeerCredentials = {
 	identity: string;
 	password: string;
@@ -120,7 +94,7 @@ type ModerationAction = 'ban' | 'kick' | 'unban';
 const OWNER_CREDENTIALS: PeerCredentials = { identity: 'ripcord', password: 'ripcord' };
 
 const installPcHook = async (context: BrowserContext): Promise<void> => {
-	await context.addInitScript(`${PC_HOOK}\n${WS_HOOK}`);
+	await context.addInitScript(PC_HOOK);
 };
 
 const suppressViteHmrReload = async (page: Page): Promise<void> => {
@@ -158,34 +132,51 @@ const waitForStats = async (
 	throw new Error(`Timed out waiting for ${label}. Last WebRTC stats: ${JSON.stringify(lastStats)}`);
 };
 
-// Recovery can briefly leave the newest app socket connecting (a reconnect in flight, or the app
-// replacing its client), so wait for it to open and close it in the same poll. The reconnect check
-// then waits for a newer app socket to open.
-const dropAppWebSocket = async (page: Page, options: { waitForReconnect?: boolean } = {}): Promise<void> => {
-	const closed = await page
-		.waitForFunction(() => window.__ripcordE2eCloseAppWebSocket?.() ?? null, undefined, {
-			polling: 100,
-			timeout: 20_000,
-		})
-		.catch((error: unknown) => {
-			throw new Error('No open application WebSocket was available to close', { cause: error });
-		});
-	const result = await closed.jsonValue();
-	if (!result) {
-		throw new Error('The application WebSocket close did not report a socket count');
-	}
-	const { socketCount } = result;
+type AppSocketStep = 'close' | 'await-open';
 
-	if (options.waitForReconnect !== false) {
-		await page.waitForFunction(
-			(previousSocketCount) => {
-				const webSockets = window.__ripcordE2eWebSockets ?? [];
-				const newestIndex = webSockets.findLastIndex(({ url }) => !url.includes(':5173'));
-				return newestIndex >= previousSocketCount && webSockets[newestIndex]?.readyState === WebSocket.OPEN;
-			},
-			socketCount,
-			{ timeout: 20_000 },
-		);
+// Asks the app's own tRPC module about the live client's socket. A retired client's socket can
+// outlive its replacement, so the order sockets were created in does not say which one is live.
+const runAppSocketStep = async (page: Page, step: AppSocketStep, timeout: number): Promise<boolean> =>
+	page.evaluate(
+		async ({ step, timeout }) => {
+			const isReflectable = (value: unknown): value is object => typeof value === 'object' && value !== null;
+			const modulePath = '/src/lib/trpc.ts';
+			const trpcModule: unknown = await import(modulePath);
+			if (!isReflectable(trpcModule)) {
+				throw new Error('Could not load the tRPC client module');
+			}
+			const isTRPCSocketOpen = Reflect.get(trpcModule, 'isTRPCSocketOpen');
+			const debugCloseCurrentWs = Reflect.get(trpcModule, 'debugCloseCurrentWs');
+			if (typeof isTRPCSocketOpen !== 'function' || typeof debugCloseCurrentWs !== 'function') {
+				throw new Error('The tRPC client module does not expose its socket helpers');
+			}
+
+			const deadline = Date.now() + timeout;
+			while (Date.now() < deadline) {
+				if (Reflect.apply(isTRPCSocketOpen, trpcModule, []) === true) {
+					if (step === 'await-open') return true;
+					return (
+						Reflect.apply(debugCloseCurrentWs, trpcModule, [{ code: 4013, reason: 'Playwright connection fault' }]) ===
+						true
+					);
+				}
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			}
+			return false;
+		},
+		{ step, timeout },
+	);
+
+// Recovery can briefly leave the live client without an open socket (a reconnect in flight, or the
+// app replacing its client), so wait for it to open before closing it. Once closed, that socket can
+// never be open again, so the live client reporting an open socket means a replacement connected.
+const dropAppWebSocket = async (page: Page, options: { waitForReconnect?: boolean } = {}): Promise<void> => {
+	if (!(await runAppSocketStep(page, 'close', 20_000))) {
+		throw new Error('No open application WebSocket was available to close');
+	}
+
+	if (options.waitForReconnect !== false && !(await runAppSocketStep(page, 'await-open', 20_000))) {
+		throw new Error('The application WebSocket did not reconnect within 20 s');
 	}
 };
 
