@@ -153,8 +153,12 @@ become labels. Idle periods produce no summaries. The timer does not keep the
 process alive, and shutdown cancels it. Health summaries bypass Sentry forwarding
 and failures writing a summary are not recursively reported.
 
-`diagnostic_stale`, `diagnostic_future`, `diagnostic_queue_full` and
-`diagnostic_queue_expired` count discarded records. `diagnostic_log_failure` and
+`diagnostic_stale`, `diagnostic_queue_full` and `diagnostic_queue_expired` count
+discarded records. A batch stamped more than 60 s in the future is no longer
+discarded: it is shifted back by one offset so its order survives, its records
+keep their original stamps and skew, and `diagnostic_clock_skew_corrected_batches`
+counts each batch that queued at least one corrected record. (It replaces
+`diagnostic_future`.) `diagnostic_log_failure` and
 `error_adapter_failure` count synchronous sink failures. `error_export_failure`
 counts Sentry transport sends rejected by the network or a non-2xx response;
 `error_transport_dropped` counts SDK transport drop notifications, and

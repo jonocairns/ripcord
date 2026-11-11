@@ -1,4 +1,5 @@
 import type { TVoiceUserState } from '@sharkord/shared';
+import { logger } from '../../logger';
 import {
 	finishVoiceSessionAttemptObservation,
 	startVoiceSessionAttemptObservation,
@@ -298,6 +299,17 @@ const createVoiceRestoreOrJoinService = <TRuntime extends TVoiceRestoreRuntime, 
 						ownershipTransferred = true;
 						stage = 'membership';
 						runtime.addUser(user.id, state);
+						const initialState = runtime.getUserState(user.id);
+						logger.info({
+							message: 'Voice mute state initialized',
+							callSite: 'restore-fresh',
+							userId: user.id,
+							channelId,
+							clientInstanceId,
+							micMuted: initialState.micMuted,
+							soundMuted: initialState.soundMuted,
+							reconnectAttemptId,
+						});
 
 						const sessionIdentity = runtime.getVoiceSessionIdentity(user.id);
 
@@ -339,6 +351,19 @@ const createVoiceRestoreOrJoinService = <TRuntime extends TVoiceRestoreRuntime, 
 				if (!reconciliation) {
 					throw new VoiceSessionAttemptSupersededError();
 				}
+
+				logger.info({
+					message: 'Voice mute state reconciled',
+					callSite: 'restore',
+					userId: user.id,
+					channelId,
+					clientInstanceId,
+					reconnectAttemptId,
+					previousMicMuted: reconciliation.previousState.micMuted,
+					micMuted: reconciliation.currentState.micMuted,
+					previousSoundMuted: reconciliation.previousState.soundMuted,
+					soundMuted: reconciliation.currentState.soundMuted,
+				});
 
 				let preparedBootstrap: TPreparedVoiceBootstrap<TBootstrap> | undefined;
 

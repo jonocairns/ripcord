@@ -1,4 +1,5 @@
 import type { TVoiceUserState } from '@sharkord/shared';
+import { logger } from '../../logger';
 import {
 	finishVoiceSessionAttemptObservation,
 	startVoiceSessionAttemptObservation,
@@ -216,6 +217,16 @@ const createVoiceJoinService = <TRuntime extends TVoiceJoinRuntime, TBootstrap>(
 					ownershipTransferred = true;
 					stage = 'membership';
 					runtime.addUser(user.id, state);
+					const initialState = runtime.getUserState(user.id);
+					logger.info({
+						message: 'Voice mute state initialized',
+						callSite: 'join',
+						userId: user.id,
+						channelId,
+						clientInstanceId,
+						micMuted: initialState.micMuted,
+						soundMuted: initialState.soundMuted,
+					});
 
 					const newSessionIdentity = runtime.getVoiceSessionIdentity(user.id);
 

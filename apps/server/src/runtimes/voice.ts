@@ -558,6 +558,7 @@ class VoiceRuntime {
 		userId: number,
 		newState: Partial<TChannelState['users'][0]['state']>,
 		seq?: number,
+		metadata?: { clientInstanceId?: string; requestedMicMuted?: boolean; requestedSoundMuted?: boolean },
 	): boolean => {
 		if (!this.getUser(userId)) {
 			return false;
@@ -567,13 +568,44 @@ class VoiceRuntime {
 			const lastAppliedSeq = this.clientVoiceStateSeqs.get(userId);
 
 			if (lastAppliedSeq !== undefined && seq <= lastAppliedSeq) {
+				const requestedMicMuted = metadata ? metadata.requestedMicMuted : newState.micMuted;
+				const requestedSoundMuted = metadata ? metadata.requestedSoundMuted : newState.soundMuted;
+				// Only mute or deafen requests are logged; a dropped webcam or screen-share update is not.
+				if (requestedMicMuted !== undefined || requestedSoundMuted !== undefined)
+					logger.info({
+						message: 'Voice mute update dropped as stale',
+						callSite: 'updateState',
+						userId,
+						channelId: this.id,
+						seq,
+						lastAppliedSeq,
+						requestedMicMuted,
+						requestedSoundMuted,
+						clientInstanceId: metadata?.clientInstanceId,
+					});
 				return false;
 			}
 
 			this.clientVoiceStateSeqs.set(userId, seq);
 		}
 
+		const previousState = { ...this.getUserState(userId) };
 		this.updateUserState(userId, newState);
+		const currentState = this.getUserState(userId);
+		if (previousState.micMuted !== currentState.micMuted || previousState.soundMuted !== currentState.soundMuted) {
+			logger.info({
+				message: 'Voice mute state applied',
+				callSite: 'updateState',
+				userId,
+				channelId: this.id,
+				seq,
+				clientInstanceId: metadata?.clientInstanceId,
+				previousMicMuted: previousState.micMuted,
+				micMuted: currentState.micMuted,
+				previousSoundMuted: previousState.soundMuted,
+				soundMuted: currentState.soundMuted,
+			});
+		}
 		return true;
 	};
 

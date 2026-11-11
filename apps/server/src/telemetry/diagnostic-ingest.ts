@@ -2,7 +2,11 @@ import { sanitizeDiagnosticRecord, type TDiagnosticBatch, type TDiagnosticRecord
 import type { telemetryHealth } from './health';
 
 type TAccepted = {
-	record: TDiagnosticRecord;
+	record: TDiagnosticRecord & {
+		originalOccurredAt?: number;
+		clockSkewMs?: number;
+		clockSkewCorrected?: boolean;
+	};
 	reporterUserId: number;
 	clientSessionId: string;
 	droppedEvents: number;
@@ -51,15 +55,21 @@ export const createDiagnosticIngest = (deps: {
 		accept: (batch: TDiagnosticBatch, userId: number) => {
 			const receivedAt = now();
 			for (const [key, expiresAt] of seen) if (expiresAt <= receivedAt) seen.delete(key);
+			// Shift the entire batch together so relative event and breadcrumb times survive.
+			const offset = Math.max(...batch.records.map((record) => record.occurredAt)) - receivedAt;
+			const batchSkewMs = offset > 60_000 ? offset : 0;
+			let queuedCorrected = false;
 			for (const record of batch.records) {
 				const key = `${userId}:${batch.clientSessionId}:${record.id}`;
 				if (seen.has(key)) continue;
-				if (receivedAt - record.occurredAt > 300_000) {
+				// A record whose own stamp is already in the accepted window keeps it when the batch
+				// offset would push it past the stale cutoff: the client clock may have been fixed
+				// mid-batch, or one record carried a bogus future stamp.
+				const rawInWindow = receivedAt - record.occurredAt <= 300_000 && record.occurredAt - receivedAt <= 60_000;
+				const clockSkewMs =
+					batchSkewMs && rawInWindow && receivedAt - (record.occurredAt - batchSkewMs) > 300_000 ? 0 : batchSkewMs;
+				if (receivedAt - (record.occurredAt - clockSkewMs) > 300_000) {
 					count('diagnostic_stale');
-					continue;
-				}
-				if (record.occurredAt - receivedAt > 60_000) {
-					count('diagnostic_future');
 					continue;
 				}
 				if (queue.length >= 256) {
@@ -72,14 +82,33 @@ export const createDiagnosticIngest = (deps: {
 					if (oldest !== undefined) seen.delete(oldest);
 				}
 				seen.set(key, receivedAt + 300_000);
+				if (clockSkewMs) queuedCorrected = true;
+				const sanitized = sanitizeDiagnosticRecord(record);
 				queue.push({
-					record: sanitizeDiagnosticRecord(record),
+					record: {
+						...sanitized,
+						...(clockSkewMs
+							? {
+									occurredAt: record.occurredAt - clockSkewMs,
+									originalOccurredAt: record.occurredAt,
+									clockSkewMs,
+									clockSkewCorrected: true,
+									breadcrumbs: sanitized.breadcrumbs?.flatMap((breadcrumb) => {
+										const occurredAt = breadcrumb.occurredAt - clockSkewMs;
+										return Number.isFinite(occurredAt) && occurredAt >= 0 && occurredAt <= 8_640_000_000_000_000
+											? [{ ...breadcrumb, occurredAt }]
+											: [];
+									}),
+								}
+							: {}),
+					},
 					reporterUserId: userId,
 					clientSessionId: batch.clientSessionId,
 					droppedEvents: batch.droppedEvents,
 					receivedAt,
 				});
 			}
+			if (queuedCorrected) count('diagnostic_clock_skew_corrected_batches');
 			timer ??= setTimeout(drain, 0);
 		},
 		flush: drain,
