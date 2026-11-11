@@ -160,6 +160,7 @@ export const joinServer = async (
 	const ownsConnection = captureTRPCAttempt();
 	const isCurrent = () => ownsConnection() && (opts?.isCurrent?.() ?? true);
 
+	let passwordChangeRequired = false;
 	try {
 		const data = await trpc.others.joinServer.query({ handshakeHash, password });
 		if (!isCurrent() || trpc !== getTRPCClientIfInitialized()) throw new TRPCClientUnavailableError();
@@ -181,6 +182,7 @@ export const joinServer = async (
 		// Do not await between setInitialData and initSubscriptions below: mounted
 		// message loaders must capture the new subscription session before responses run.
 		useServerStore.getState().setInitialData(data);
+		passwordChangeRequired = data.mustChangePassword;
 		setDisconnectInfo(undefined);
 
 		// Attach the authenticated user to Sentry so issues report affected-user
@@ -271,7 +273,7 @@ export const joinServer = async (
 	// Register the WS reconnect handler so that if tRPC silently reconnects
 	// (e.g. server restart, brief network drop), we re-authenticate and
 	// restore subscriptions + voice on the new server-side context.
-	armServerRejoin(rejoinAfterSocketReopen);
+	armServerRejoin(rejoinAfterSocketReopen, { passwordChangeRequired });
 };
 
 const rejoinAfterSocketReopen = () => {

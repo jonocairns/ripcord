@@ -51,14 +51,6 @@ const subscribeServerConnectionState = (listener: () => void) => connection.subs
 let lastDrop: { code: number; reason: string; wasClean: boolean; wasConnected: boolean } | null = null;
 const sessionAuthentication = createSessionAuthenticationGate();
 
-// How long to keep silently reconnecting before tearing the app down to the
-// disconnect screen. Generous (Discord-style: keep trying, don't hard-fail) so a
-// transient blip — a network switch, a brief server restart, a short event-loop
-// stall — recovers in place without ever flashing a disconnect modal. Stays well
-// under the voice reconnect-intent TTL / server voice grace (60s), so voice still
-// restores even if a teardown does happen.
-const RETRY_GRACE_PERIOD_MS = 20_000;
-
 // WebSocket keep-alive (zombie-socket detection). The ping timer resets on any
 // received message, so on an active connection these rarely fire. The pong
 // timeout is deliberately generous (Discord-style forgiveness): it tolerates a
@@ -73,7 +65,7 @@ const WS_KEEPALIVE_PONG_TIMEOUT_MS = 20_000;
 // event-loop stall tripping keepAlive on every client at once, a restart) closes
 // many sockets simultaneously; without jitter they all reconnect on the same
 // tick and stampede the server with re-handshake + restoreOrJoin. Kept well
-// under RETRY_GRACE_PERIOD_MS so attempt 0 still resolves before app teardown.
+// under the unauthenticated grace period so attempt 0 still resolves before app teardown.
 const WS_RECONNECT_INITIAL_JITTER_MS = 1_000;
 
 // Reconnect backoff that mirrors tRPC's default exponential shape (prompt first
@@ -334,6 +326,7 @@ const debugCloseCurrentWs = (opts: { code?: number; reason?: string } = {}) => {
 };
 
 const cleanup = (opts: { clearAuth?: boolean } = {}) => {
+	lastDrop = null;
 	run(connection.dispatch({ type: 'cleaned-up', reason: new TRPCClientUnavailableError() }));
 
 	resetServerScreens();
@@ -346,9 +339,9 @@ const cleanup = (opts: { clearAuth?: boolean } = {}) => {
 	}
 };
 
-const armServerRejoin = (handler: () => void) => {
+const armServerRejoin = (handler: () => void, { passwordChangeRequired }: { passwordChangeRequired: boolean }) => {
 	serverRejoinHandler = handler;
-	run(connection.dispatch({ type: 'join-completed' }));
+	run(connection.dispatch({ type: 'join-completed', passwordChangeRequired }));
 };
 const disarmServerRejoin = () => {
 	run(connection.dispatch({ type: 'rejoin-disarmed' }));
@@ -361,6 +354,7 @@ const run = (commands: TConnectionCommand[]) => {
 				sessionAuthentication.invalidate();
 				break;
 			case 'authenticate-session':
+				lastDrop = null;
 				sessionAuthentication.authenticate();
 				break;
 			case 'cancel-session':
@@ -388,7 +382,7 @@ const run = (commands: TConnectionCommand[]) => {
 				clearDeferredWsReconnectOnlineListener();
 				if (typeof window === 'undefined') break;
 				deferredWsReconnectOnlineListener = () => {
-					run(connection.dispatch({ type: 'online', socketOpen: isTRPCSocketOpen() }));
+					run(connection.dispatch({ type: 'online', socketOpen: isTRPCSocketOpen(), now: performance.now() }));
 				};
 				window.addEventListener('online', deferredWsReconnectOnlineListener, { once: true });
 				break;
@@ -397,7 +391,7 @@ const run = (commands: TConnectionCommand[]) => {
 				graceTimerHandle = setTimeout(() => {
 					graceTimerHandle = null;
 					run(connection.dispatch({ type: 'grace-expired', online: isVoiceReconnectOnline() }));
-				}, RETRY_GRACE_PERIOD_MS);
+				}, command.delayMs);
 				break;
 			case 'clear-grace-timer':
 				if (graceTimerHandle) {
@@ -421,10 +415,13 @@ const run = (commands: TConnectionCommand[]) => {
 			case 'teardown-to-disconnect-screen': {
 				const drop = lastDrop;
 				cleanup();
-				if (drop) {
-					if (drop.wasConnected) playSound(SoundType.SERVER_DISCONNECTED);
-					setDisconnectInfo({ code: drop.code, reason: drop.reason, wasClean: drop.wasClean, time: new Date() });
-				}
+				if (!drop || drop.wasConnected) playSound(SoundType.SERVER_DISCONNECTED);
+				setDisconnectInfo({
+					code: drop?.code ?? DisconnectCode.UNEXPECTED,
+					reason: drop?.reason ?? '',
+					wasClean: drop?.wasClean ?? false,
+					time: new Date(),
+				});
 				break;
 			}
 		}

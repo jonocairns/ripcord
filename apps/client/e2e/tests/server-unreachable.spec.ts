@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type WebSocketRoute } from '@playwright/test';
 import {
 	createPeer,
 	credentialsFor,
@@ -44,8 +44,13 @@ for (const muted of [false, true]) {
 					await page.getByTitle('Mute microphone').click();
 					await expect(page.getByTitle('Unmute microphone')).toBeVisible();
 				}
+				// cut() detects a close explicitly; this does not measure half-open detection.
+				const droppedAt = Date.now();
 				await fault.cut();
-				await expect(page.getByText('Connection lost', { exact: true })).toBeVisible({ timeout: 45_000 });
+				await expect(page.getByText('Connection lost', { exact: true })).toBeVisible({ timeout: 60_000 });
+				const elapsed = Date.now() - droppedAt;
+				expect(elapsed).toBeGreaterThan(40_000);
+				expect(elapsed).toBeLessThan(55_000);
 				expect(await page.evaluate(() => navigator.onLine)).toBe(true);
 				fault.restore();
 
@@ -126,5 +131,57 @@ test('failed silent rejoin shows the disconnect screen and retries with saved cr
 		await expectMicrophoneFlow(page, 'outbound');
 	} finally {
 		await disposePeer(peer);
+	}
+});
+
+test('a rejoin that never answers ends on the disconnect screen', async ({ browser }, testInfo) => {
+	test.setTimeout(120_000);
+	const context = await browser.newContext();
+	await installPcHook(context);
+	const page = await context.newPage();
+	const credentials = credentialsFor(testInfo);
+	let holdHandshakes = false;
+	let heldHandshakes = 0;
+	const pendingHandshakes: { server: WebSocketRoute; request: string }[] = [];
+	try {
+		await suppressViteHmrReload(page);
+		await page.routeWebSocket(
+			(url) => url.port === '4991',
+			(socket) => {
+				const server = socket.connectToServer();
+				socket.onMessage((message) => {
+					if (typeof message !== 'string' || message === 'PING' || message === 'PONG') {
+						server.send(message);
+						return;
+					}
+					const payload: unknown = JSON.parse(message);
+					const requests: unknown[] = Array.isArray(payload) ? payload : [payload];
+					for (const request of requests) {
+						if (holdHandshakes && typeof request === 'object' && request !== null) {
+							const params: unknown = Reflect.get(request, 'params');
+							if (typeof params === 'object' && params !== null && Reflect.get(params, 'path') === 'others.handshake') {
+								heldHandshakes += 1;
+								pendingHandshakes.push({ server, request: JSON.stringify(request) });
+								continue;
+							}
+						}
+						server.send(JSON.stringify(request));
+					}
+				});
+			},
+		);
+		await login(page, credentials);
+		await joinVoice(page);
+		await expectMicrophoneFlow(page, 'outbound');
+		holdHandshakes = true;
+		await dropAppWebSocket(page, { waitForReconnect: false });
+		await expect(page.getByRole('heading', { name: 'Connection lost', exact: true })).toBeVisible({ timeout: 60_000 });
+		expect(heldHandshakes).toBeGreaterThan(0);
+		holdHandshakes = false;
+		// Release both the stalled rejoin and any immediate disconnect-screen retry.
+		for (const { server, request } of pendingHandshakes.splice(0)) server.send(request);
+		await expect(page.getByText('VOICE CHANNELS')).toBeVisible({ timeout: 30_000 });
+	} finally {
+		await disposePeer({ context, page, credentials });
 	}
 });

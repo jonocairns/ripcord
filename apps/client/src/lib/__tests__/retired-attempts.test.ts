@@ -2,6 +2,23 @@ import { expect, test } from 'bun:test';
 
 for (const mode of [
 	'read-connection-state',
+	'deadline-stalled-join',
+	'deadline-replacement',
+	'deadline-must-change-password',
+	'deadline-join-on-closing-socket',
+	'deadline-budget',
+	'deadline-authenticated-clears',
+	'deadline-cleanup-clears',
+	'deadline-lastdrop-isolation',
+	'deadline-offline-online-open',
+	'deadline-offline-online-closed',
+	'deadline-offline-replace-online-closed',
+	'deadline-offline-replace-online-open',
+	'deadline-offline-replace-authenticated',
+	'deadline-offline-replace-cleanup',
+	'deadline-offline',
+	'deadline-wasconnected-false',
+
 	'trace-connect',
 	'trace-drop-resume',
 	'trace-drop-resume-voice',

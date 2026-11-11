@@ -1,3 +1,10 @@
+// Allow transient outages to recover silently. The 45 s deadline is nominally
+// 15 s before the 60 s voice intent TTL and server grace, but those clocks start
+// at different moments: that margin is not guaranteed.
+const RECOVERY_DEADLINE_MS = 45_000;
+const UNAUTHENTICATED_GRACE_MS = 20_000;
+const OFFLINE_RECHECK_MS = 20_000;
+
 type TConnectionPhase =
 	| { name: 'idle' }
 	| { name: 'connecting' }
@@ -16,14 +23,16 @@ type TConnectionEvent =
 	| { type: 'client-started' }
 	| { type: 'cleaned-up'; reason: unknown }
 	| { type: 'socket-opened'; online: boolean; socketOpen: boolean; now: number }
-	| { type: 'online'; socketOpen: boolean }
+	| { type: 'online'; socketOpen: boolean; now: number }
 	| { type: 'socket-closed'; terminal: boolean; now: number }
 	| { type: 'socket-observed-closed'; now: number }
 	| { type: 'grace-expired'; online: boolean }
-	| { type: 'join-completed' | 'rejoin-disarmed' | 'session-authenticated' };
+	| { type: 'join-completed'; passwordChangeRequired: boolean }
+	| { type: 'rejoin-disarmed' | 'session-authenticated' };
 
 type TConnectionCommand =
 	| { type: 'cancel-session'; reason: unknown }
+	| { type: 'arm-grace-timer'; delayMs: number }
 	| {
 			type:
 				| 'clear-online-listener'
@@ -35,7 +44,6 @@ type TConnectionCommand =
 				| 'await-online'
 				| 'run-rejoin'
 				| 'voice-socket-dropped'
-				| 'arm-grace-timer'
 				| 'teardown-to-disconnect-screen'
 				| 'authenticate-session'
 				| 'voice-session-authenticated'
@@ -59,7 +67,7 @@ const reduceConnection = (
 } => {
 	let state = previous;
 	const commands: TConnectionCommand[] = [];
-	const emit = (...types: Exclude<TConnectionCommand['type'], 'cancel-session'>[]) => {
+	const emit = (...types: Exclude<TConnectionCommand['type'], 'cancel-session' | 'arm-grace-timer'>[]) => {
 		for (const type of types) commands.push({ type });
 	};
 	const recover = (now: number) =>
@@ -68,7 +76,7 @@ const reduceConnection = (
 		emit('clear-online-listener');
 		if (previous.resumePending && socketOpen) {
 			state = { ...state, resumePending: false };
-			emit('clear-grace-timer');
+			if (state.phase.name !== 'recovering') emit('clear-grace-timer');
 			if (previous.rejoinArmed) emit('run-rejoin');
 		}
 	};
@@ -81,7 +89,8 @@ const reduceConnection = (
 				resumePending: false,
 				rejoinArmed: false,
 			};
-			emit('clear-online-listener', 'clear-grace-timer', 'retire-client', 'pause-telemetry', 'invalidate-session');
+			if (previous.phase.name !== 'recovering') emit('clear-online-listener', 'clear-grace-timer');
+			emit('retire-client', 'pause-telemetry', 'invalidate-session');
 			break;
 		case 'cleaned-up':
 			state = {
@@ -104,7 +113,10 @@ const reduceConnection = (
 			}
 			break;
 		case 'online':
-			resume(event.socketOpen);
+			if (previous.phase.name === 'recovering' && event.now >= previous.phase.since + RECOVERY_DEADLINE_MS) {
+				state = { ...previous, resumePending: false };
+				emit('clear-online-listener', 'teardown-to-disconnect-screen');
+			} else resume(event.socketOpen);
 			break;
 		case 'socket-closed':
 			state = {
@@ -113,25 +125,43 @@ const reduceConnection = (
 				resumePending: event.terminal ? previous.resumePending : true,
 			};
 			emit('invalidate-session', 'pause-telemetry', 'clear-online-listener');
-			if (!event.terminal) emit('voice-socket-dropped', 'arm-grace-timer');
+			if (!event.terminal) {
+				emit('voice-socket-dropped');
+				commands.push({
+					type: 'arm-grace-timer',
+					delayMs:
+						state.phase.name === 'recovering'
+							? Math.max(0, state.phase.since + RECOVERY_DEADLINE_MS - event.now)
+							: UNAUTHENTICATED_GRACE_MS,
+				});
+			}
 			break;
 		case 'socket-observed-closed':
 			state = { ...previous, phase: recover(event.now) };
 			emit('invalidate-session');
 			break;
 		case 'grace-expired':
-			if (!previous.resumePending) break;
+			if (previous.phase.name === 'idle' || previous.phase.name === 'ready') break;
+			if (previous.phase.name !== 'recovering' && !previous.resumePending) break;
 			// Stay paused while offline: the disconnect screen cannot help while the
 			// network is unavailable. Preserve deferred recovery and the pending resume
 			// signal so the next online open re-authenticates.
-			if (!event.online) emit('arm-grace-timer');
-			else {
+			if (!event.online) {
+				commands.push({ type: 'arm-grace-timer', delayMs: OFFLINE_RECHECK_MS });
+				if (previous.phase.name === 'recovering') emit('await-online');
+			} else {
 				state = { ...previous, resumePending: false };
 				emit('teardown-to-disconnect-screen');
 			}
 			break;
 		case 'join-completed':
-			if (previous.phase.name !== 'idle') state = { ...previous, rejoinArmed: true };
+			if (previous.phase.name !== 'idle') {
+				state = { ...previous, rejoinArmed: true };
+				if (previous.phase.name === 'recovering' && event.passwordChangeRequired) {
+					state = { ...state, phase: { name: 'connecting' } };
+					emit('clear-grace-timer');
+				}
+			}
 			break;
 		case 'rejoin-disarmed':
 			state = { ...previous, rejoinArmed: false };
@@ -139,7 +169,7 @@ const reduceConnection = (
 		case 'session-authenticated':
 			if (previous.phase.name !== 'idle') {
 				state = { ...previous, phase: { name: 'ready' } };
-				emit('authenticate-session', 'voice-session-authenticated', 'authenticate-telemetry');
+				emit('clear-grace-timer', 'authenticate-session', 'voice-session-authenticated', 'authenticate-telemetry');
 			}
 			break;
 	}
@@ -181,8 +211,11 @@ const createConnectionStore = () => {
 
 export {
 	createConnectionStore,
+	OFFLINE_RECHECK_MS,
+	RECOVERY_DEADLINE_MS,
 	reduceConnection,
 	type TConnectionCommand,
 	type TConnectionEvent,
 	type TConnectionState,
+	UNAUTHENTICATED_GRACE_MS,
 };
