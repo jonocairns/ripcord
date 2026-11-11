@@ -417,10 +417,15 @@ describe('voice session command executor', () => {
 				);
 			});
 		it('wakes on readiness alone and ignores bounded not-ready notifications', async () => {
+			// The fake scheduler's delay never resolves by itself, so every wake below comes from a
+			// readiness notification, not from the deadline timer.
+			const scheduler = createFakeScheduler();
 			const command = startAuthWait();
 			let probes = 0;
 			const executor = createExecutor(
 				createFakePorts({
+					now: scheduler.now,
+					delay: scheduler.delay,
 					isSessionReady: () => {
 						probes++;
 						return sessionReady;
@@ -475,7 +480,11 @@ describe('voice session command executor', () => {
 				executor.execute([newCommand]);
 				setSessionReady();
 				await flushMicrotasks();
-				const authEvents = dispatch.mock.calls.map(([event]) => event).filter((event) => event.type === 'AuthReady');
+				const events = dispatch.mock.calls.map(([event]) => event);
+				expect(
+					events.filter((event) => 'commandId' in event && event.commandId === oldCommand.commandId),
+				).toEqual([]);
+				const authEvents = events.filter((event) => event.type === 'AuthReady');
 				expect(authEvents).toEqual([
 					{ type: 'AuthReady', commandId: newCommand.commandId, generation: newCommand.generation },
 				]);

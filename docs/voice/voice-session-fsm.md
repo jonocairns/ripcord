@@ -197,7 +197,9 @@ stop-watch races, provider remount, and desktop app-audio recovery where hardwar
 is available.
 
 A drop dispatches `WsDropped` once with the current intent. The machine stores
-no authentication flag. Every restore passes through `WaitAuth`; its executor
-reads connection readiness and dispatches `AuthReady` synchronously, without an
-intervening await. Outside recovery the top-level intent is staged for rejoin;
+no authentication flag. Recovery reaches `restoring` only through `WaitAuth`, from
+the initial reconnect, an online wait or a retry; its executor reads connection
+readiness and dispatches `AuthReady` synchronously, without an intervening await.
+A `Resumed` during `restoring` or `restoreWatch` re-issues the restore in place
+without a new `WaitAuth`, as it did before. Outside recovery the top-level intent is staged for rejoin;
 during recovery the phase holds the only live intent and start time.

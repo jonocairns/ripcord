@@ -121,12 +121,15 @@ const updateVoiceReconnectIntentState = (
 };
 
 const reportVoiceSocketDropped = (now = Date.now()): void => {
-	dispatchVoiceSession({
-		type: 'WsDropped',
-		pending: readVoiceReconnectIntent(now + VOICE_RECONNECT_INTENT_TTL_MS),
-		now,
-		online: isBrowserOnline(),
-	});
+	const pending = readVoiceReconnectIntent(now + VOICE_RECONNECT_INTENT_TTL_MS);
+	dispatchVoiceSession({ type: 'WsDropped', pending, now, online: isBrowserOnline() });
+	if (pending) {
+		logDebug('Voice reconnect intent snapshotted', {
+			channelId: pending.channelId,
+			peerCount: pending.peerUserIds.length,
+			expiresAt: pending.expiresAt,
+		});
+	}
 };
 
 const startVoiceReconnectFromStagedIntent = (now = Date.now()): void => {
