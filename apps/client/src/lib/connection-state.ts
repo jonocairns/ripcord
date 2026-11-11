@@ -46,7 +46,6 @@ type TConnectionCommand =
 				| 'voice-socket-dropped'
 				| 'teardown-to-disconnect-screen'
 				| 'authenticate-session'
-				| 'voice-session-authenticated'
 				| 'authenticate-telemetry';
 	  };
 
@@ -169,7 +168,7 @@ const reduceConnection = (
 		case 'session-authenticated':
 			if (previous.phase.name !== 'idle') {
 				state = { ...previous, phase: { name: 'ready' } };
-				emit('clear-grace-timer', 'authenticate-session', 'voice-session-authenticated', 'authenticate-telemetry');
+				emit('clear-grace-timer', 'authenticate-session', 'authenticate-telemetry');
 			}
 			break;
 	}

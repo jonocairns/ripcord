@@ -1,7 +1,7 @@
 const shouldStartProtectedVoiceEventSubscriptions = (
 	reconnectingSince: number | undefined,
-	reconnectAuthenticated: boolean,
-): boolean => reconnectingSince === undefined || reconnectAuthenticated;
+	sessionReady: boolean,
+): boolean => reconnectingSince === undefined || sessionReady;
 
 const shouldSyncExistingProducersAfterVoiceEventSubscriptionStart = (
 	reconnectingSince: number | undefined,

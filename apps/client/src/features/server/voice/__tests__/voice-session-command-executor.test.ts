@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { VoiceReconnectTimeoutError } from '../reconnect-policy';
 import {
 	createVoiceSessionCommandExecutor,
@@ -12,6 +12,7 @@ import {
 	type TWatchedRemoteStreamsSnapshot,
 	VOICE_RECONNECT_SUPPRESSION_MS,
 } from '../voice-session-machine';
+import * as voiceSessionStore from '../voice-session-store';
 import {
 	dispatchVoiceSession,
 	getVoiceSessionState,
@@ -19,6 +20,13 @@ import {
 	resetVoiceSessionState,
 	subscribeVoiceSession,
 } from '../voice-session-store';
+
+let sessionReady = false;
+const readinessListeners = new Set<() => void>();
+const setSessionReady = (): void => {
+	sessionReady = true;
+	readinessListeners.forEach((listener) => listener());
+};
 
 // Deterministic harness: no real timers, browser globals, React renderer, RPC
 // client, or mediasoup mock. Time and every recovery operation are injected
@@ -120,6 +128,13 @@ const createFakePorts = (overrides: Partial<TVoiceSessionExecutorPorts> = {}): T
 	random: () => 0.5,
 	delay: () => Promise.resolve(),
 	isOnline: () => true,
+	isSessionReady: () => sessionReady,
+	subscribeSessionReadiness: (listener) => {
+		readinessListeners.add(listener);
+		return () => {
+			readinessListeners.delete(listener);
+		};
+	},
 	captureRecoverySnapshot: () => emptySnapshot,
 	rebuildTransports: () => Promise.resolve(),
 	restoreVoiceSession: () => Promise.resolve({ serverSessionEstablished: true }),
@@ -196,19 +211,21 @@ const startRestore = (): Extract<TVoiceSessionCommand, { type: 'RestoreVoiceSess
 		pending: pendingReconnect,
 		now: 0,
 		online: true,
-		authenticated: true,
 	});
 
 	if (snapshotCommand?.type !== 'CaptureRecoverySnapshot') {
 		throw new Error('expected CaptureRecoverySnapshot command');
 	}
 
-	const [restoreCommand] = dispatchVoiceSession({
+	const [authCommand] = dispatchVoiceSession({
 		type: 'RecoveryStarted',
 		commandId: snapshotCommand.commandId,
 		generation: snapshotCommand.generation,
 		snapshot: emptySnapshot,
 	});
+
+	if (!authCommand) throw new Error('expected auth wait');
+	const [restoreCommand] = dispatchVoiceSession({ ...authCommand, type: 'AuthReady' });
 
 	if (restoreCommand?.type !== 'RestoreVoiceSession') {
 		throw new Error('expected RestoreVoiceSession command');
@@ -223,7 +240,6 @@ const startOnlineWait = (): Extract<TVoiceSessionCommand, { type: 'WaitOnline' }
 		pending: pendingReconnect,
 		now: 0,
 		online: false,
-		authenticated: false,
 	});
 
 	if (snapshotCommand?.type !== 'CaptureRecoverySnapshot') {
@@ -245,12 +261,12 @@ const startOnlineWait = (): Extract<TVoiceSessionCommand, { type: 'WaitOnline' }
 };
 
 const startAuthWait = (): Extract<TVoiceSessionCommand, { type: 'WaitAuth' }> => {
+	sessionReady = false;
 	const [snapshotCommand] = dispatchVoiceSession({
 		type: 'WsDropped',
 		pending: pendingReconnect,
 		now: 0,
 		online: true,
-		authenticated: false,
 	});
 
 	if (snapshotCommand?.type !== 'CaptureRecoverySnapshot') {
@@ -277,20 +293,21 @@ const startRetryDelay = (pending = pendingReconnect): Extract<TVoiceSessionComma
 		pending,
 		now: 0,
 		online: true,
-		authenticated: true,
 	});
 
 	if (snapshotCommand?.type !== 'CaptureRecoverySnapshot') {
 		throw new Error('expected CaptureRecoverySnapshot command');
 	}
 
-	const [restoreCommand] = dispatchVoiceSession({
+	const [authCommand] = dispatchVoiceSession({
 		type: 'RecoveryStarted',
 		commandId: snapshotCommand.commandId,
 		generation: snapshotCommand.generation,
 		snapshot: emptySnapshot,
 	});
 
+	if (!authCommand) throw new Error('expected auth command');
+	const [restoreCommand] = dispatchVoiceSession({ ...authCommand, type: 'AuthReady' });
 	if (restoreCommand?.type !== 'RestoreVoiceSession') {
 		throw new Error('expected RestoreVoiceSession command');
 	}
@@ -322,6 +339,8 @@ describe('voice session command executor', () => {
 
 	beforeEach(() => {
 		resetVoiceSessionState();
+		sessionReady = true;
+		readinessListeners.clear();
 	});
 
 	afterEach(() => {
@@ -330,6 +349,155 @@ describe('voice session command executor', () => {
 		}
 
 		executors.length = 0;
+	});
+
+	describe('connection readiness boundary', () => {
+		const observeRestoring = (readReady: () => boolean) => {
+			const values: boolean[] = [];
+			const unsubscribe = subscribeVoiceSession((state) => {
+				if (state.phase.phase === 'reconnecting' && state.phase.step === 'restoring') values.push(readReady());
+			});
+			return { values, unsubscribe };
+		};
+		it('★ dispatches before readiness loss queued behind a successful probe', async () => {
+			const scheduler = createFakeScheduler();
+			const command = startAuthWait();
+			let ready = true;
+			let queued = false;
+			const isSessionReady = () => {
+				if (ready && !queued) {
+					queued = true;
+					queueMicrotask(() => {
+						ready = false;
+					});
+				}
+				return ready;
+			};
+			const observed = observeRestoring(isSessionReady);
+			try {
+				const executor = createExecutor(
+					createFakePorts({ isSessionReady, now: scheduler.now, delay: scheduler.delay }),
+				);
+				executor.execute([command]);
+				await flushMicrotasks();
+				expect(observed.values).toEqual([true]);
+			} finally {
+				observed.unsubscribe();
+			}
+		});
+		it('★ rechecks client replacement with no voice-store update', async () => {
+			const scheduler = createFakeScheduler();
+			const command = startAuthWait();
+			const observed = observeRestoring(() => sessionReady);
+			try {
+				const executor = createExecutor(createFakePorts({ now: scheduler.now, delay: scheduler.delay }));
+				executor.execute([command]);
+				setSessionReady();
+				sessionReady = false;
+				await flushMicrotasks();
+				expect(observed.values).toEqual([]);
+				expect(getVoiceSessionState().phase).toMatchObject({ step: 'waitingAuth' });
+				setSessionReady();
+				await flushMicrotasks();
+				expect(observed.values).toEqual([true]);
+			} finally {
+				observed.unsubscribe();
+			}
+		});
+		for (const offset of [-1, 0, 1])
+			it(`probes initial readiness at deadline offset ${offset}`, async () => {
+				const command = startAuthWait();
+				const executor = createExecutor(
+					createFakePorts({ now: () => pendingReconnect.expiresAt + offset, isSessionReady: () => true }),
+				);
+				executor.execute([command]);
+				await flushMicrotasks();
+				expect(getVoiceSessionState().phase).toMatchObject(
+					offset > 0 ? { phase: 'failed', reason: 'reconnect-expired' } : { step: 'restoring' },
+				);
+			});
+		it('wakes on readiness alone and ignores bounded not-ready notifications', async () => {
+			const command = startAuthWait();
+			let probes = 0;
+			const executor = createExecutor(
+				createFakePorts({
+					isSessionReady: () => {
+						probes++;
+						return sessionReady;
+					},
+				}),
+			);
+			executor.execute([command]);
+			readinessListeners.forEach((listener) => listener());
+			await flushMicrotasks();
+			expect(getVoiceSessionState().phase).toMatchObject({ step: 'waitingAuth' });
+			expect(probes).toBe(2);
+			setSessionReady();
+			await flushMicrotasks();
+			expect(getVoiceSessionState().phase).toMatchObject({ step: 'restoring' });
+			expect(readinessListeners.size).toBe(0);
+		});
+		for (const offset of [0, 1])
+			it(`rechecks expiry after wake at offset ${offset}`, async () => {
+				let now = 0;
+				const command = startAuthWait();
+				const executor = createExecutor(createFakePorts({ now: () => now }));
+				executor.execute([command]);
+				now = pendingReconnect.expiresAt + offset;
+				setSessionReady();
+				await flushMicrotasks();
+				expect(getVoiceSessionState().phase).toMatchObject(offset ? { phase: 'failed' } : { step: 'restoring' });
+			});
+		it('reads a moved deadline live while waiting', async () => {
+			const scheduler = createFakeScheduler();
+			const command = startAuthWait();
+			const executor = createExecutor(createFakePorts({ now: scheduler.now, delay: scheduler.delay }));
+			executor.execute([command]);
+			dispatchVoiceSession({ type: 'ReconnectIntentCaptured', pending: { ...pendingReconnect, expiresAt: 120_000 } });
+			await flushMicrotasks();
+			await scheduler.advanceBy(60_001);
+			expect(getVoiceSessionState().phase).toMatchObject({ step: 'waitingAuth' });
+			setSessionReady();
+			await flushMicrotasks();
+			expect(getVoiceSessionState().phase).toMatchObject({ step: 'restoring' });
+		});
+
+		it('rechecks command currency after Resumed and authenticates only the re-issued wait', async () => {
+			const scheduler = createFakeScheduler();
+			const oldCommand = startAuthWait();
+			const executor = createExecutor(createFakePorts({ now: scheduler.now, delay: scheduler.delay }));
+			const dispatch = spyOn(voiceSessionStore, 'dispatchVoiceSession');
+			try {
+				executor.execute([oldCommand]);
+				const [newCommand] = dispatchVoiceSession({ type: 'Resumed' });
+				if (newCommand?.type !== 'WaitAuth') throw new Error('expected re-issued WaitAuth');
+				expect(newCommand.generation).not.toBe(oldCommand.generation);
+				executor.execute([newCommand]);
+				setSessionReady();
+				await flushMicrotasks();
+				const authEvents = dispatch.mock.calls.map(([event]) => event).filter((event) => event.type === 'AuthReady');
+				expect(authEvents).toEqual([
+					{ type: 'AuthReady', commandId: newCommand.commandId, generation: newCommand.generation },
+				]);
+				expect(getVoiceSessionState().phase).toMatchObject({ step: 'restoring', generation: newCommand.generation });
+				expect(readinessListeners.size).toBe(0);
+			} finally {
+				dispatch.mockRestore();
+			}
+		});
+
+		it('removes the readiness listener on abort', async () => {
+			const command = startAuthWait();
+			const observer = createRecordingCommandObserver();
+			const executor = createExecutor(createFakePorts({ commandObserver: observer.observer }));
+			executor.execute([command]);
+			expect(readinessListeners.size).toBe(1);
+			executor.dispose();
+			await flushMicrotasks();
+			expect(readinessListeners.size).toBe(0);
+			expect(observer.finished).toHaveLength(1);
+			expect(getVoiceSessionState().phase).toMatchObject({ step: 'waitingAuth' });
+		});
 	});
 
 	it('executes a current snapshot command and dispatches RecoveryStarted with the same command identity', () => {
@@ -722,6 +890,7 @@ describe('voice session command executor', () => {
 	});
 
 	it('preempts a rebuild on websocket reconnect and drops its stale completion', async () => {
+		sessionReady = false;
 		const scheduler = createFakeScheduler();
 		const rebuildDeferred = createDeferred<void>();
 		let rebuildSignal: AbortSignal | undefined;
@@ -750,7 +919,6 @@ describe('voice session command executor', () => {
 				pending: pendingReconnect,
 				now: 100,
 				online: true,
-				authenticated: false,
 			});
 
 			expect(rebuildSignal?.aborted).toBe(true);
@@ -1181,8 +1349,8 @@ describe('voice session command executor', () => {
 				pending: pendingReconnect,
 				now: 0,
 				online: true,
-				authenticated: true,
 			});
+			await flushMicrotasks();
 			await scheduler.advanceBy(12_000);
 
 			for (let elapsed = 0; elapsed < 1_000; elapsed += 250) {
@@ -1238,8 +1406,8 @@ describe('voice session command executor', () => {
 				pending: pendingReconnect,
 				now: 0,
 				online: true,
-				authenticated: true,
 			});
+			await flushMicrotasks();
 			const [replacementCommand] = dispatchVoiceSession({ type: 'Resumed' });
 
 			if (replacementCommand?.type !== 'RestoreVoiceSession') {
@@ -1287,7 +1455,6 @@ describe('voice session command executor', () => {
 				pending: pendingReconnect,
 				now: 0,
 				online: true,
-				authenticated: true,
 			});
 			await flushMicrotasks();
 
@@ -1474,7 +1641,6 @@ describe('voice session command executor', () => {
 			pending: pendingReconnect,
 			now: 0,
 			online: false,
-			authenticated: false,
 		});
 
 		if (snapshotCommand?.type !== 'CaptureRecoverySnapshot') {
@@ -1540,6 +1706,7 @@ describe('voice session command executor', () => {
 
 		executor.execute([waitCommand]);
 		expect(scheduler.pendingCount()).toBe(1);
+		setSessionReady();
 
 		await scheduler.advanceBy(250);
 		expect(getVoiceSessionState().phase).toMatchObject({ phase: 'reconnecting', step: 'waitingOnline' });
@@ -1571,7 +1738,6 @@ describe('voice session command executor', () => {
 			pending: { ...pendingReconnect, expiresAt: 120_000 },
 			now: scheduler.now(),
 			online: false,
-			authenticated: false,
 		});
 		await scheduler.advanceBy(100);
 
@@ -1595,8 +1761,7 @@ describe('voice session command executor', () => {
 
 		executor.execute([waitCommand]);
 		expect(scheduler.pendingCount()).toBe(1);
-
-		dispatchVoiceSession({ type: 'SocketAuthenticated' });
+		setSessionReady();
 		await flushMicrotasks();
 
 		expect(getVoiceSessionState().phase).toMatchObject({ phase: 'reconnecting', step: 'restoring' });
@@ -1606,9 +1771,9 @@ describe('voice session command executor', () => {
 	it('expires an auth wait whose deadline passed even when the socket is already authenticated', async () => {
 		const commandObserver = createRecordingCommandObserver();
 		const waitCommand = startAuthWait();
+		setSessionReady();
 		// Authentication lands long after the reconnect intent expired, as when the
 		// disconnect screen reconnects minutes after an app teardown.
-		dispatchVoiceSession({ type: 'SocketAuthenticated' });
 		const executor = createExecutor(
 			createFakePorts({
 				now: () => pendingReconnect.expiresAt + 1,
@@ -1651,6 +1816,8 @@ describe('voice session command executor', () => {
 		expect(reportedFailures).toEqual([]);
 
 		resetVoiceSessionState();
+		sessionReady = true;
+		readinessListeners.clear();
 		const resumedWaitCommand = startAuthWait();
 		executor.execute([resumedWaitCommand]);
 		expect(scheduler.pendingCount()).toBe(1);
@@ -1686,7 +1853,7 @@ describe('voice session command executor', () => {
 			await scheduler.advanceBy(250);
 		}
 
-		expect(getVoiceSessionState().phase).toMatchObject({ phase: 'reconnecting', step: 'restoring' });
+		expect(getVoiceSessionState().phase).toMatchObject({ phase: 'reconnecting', step: 'waitingAuth' });
 	});
 
 	it('expires an offline retry delay only after the live session deadline', async () => {
@@ -1716,7 +1883,7 @@ describe('voice session command executor', () => {
 	it('accepts an already-authenticated socket at the reconnect deadline', async () => {
 		const scheduler = createFakeScheduler(pendingReconnect.expiresAt);
 		const waitCommand = startAuthWait();
-		dispatchVoiceSession({ type: 'SocketAuthenticated' });
+		setSessionReady();
 		const executor = createExecutor(
 			createFakePorts({
 				now: scheduler.now,
@@ -1816,6 +1983,8 @@ describe('voice session command executor', () => {
 			// Reset notifies state-only listeners, so the executor aborts the pending
 			// operation immediately rather than waiting for the next dispatch.
 			resetVoiceSessionState();
+			sessionReady = true;
+			readinessListeners.clear();
 			expect(abortedCommandIds).toEqual([preResetRebuild.commandId]);
 			dispatchVoiceSession({ type: 'TransportFailed', channelId: 5, nonce: 1 });
 			await flushMicrotasks();

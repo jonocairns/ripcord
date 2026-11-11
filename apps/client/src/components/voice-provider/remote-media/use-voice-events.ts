@@ -2,9 +2,10 @@ import { StreamKind, type TVoiceTransportFailureEvent } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
 import { useEffect } from 'react';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
+import { useServerConnectionSelector } from '@/features/server/use-server-connection';
 import { useOwnUserId } from '@/features/server/users/hooks';
 import { useVoiceSessionSelector } from '@/features/server/voice/voice-session-hooks';
-import { selectReconnectAuthenticated, selectReconnectingSince } from '@/features/server/voice/voice-session-machine';
+import { selectReconnectingSince } from '@/features/server/voice/voice-session-machine';
 import { logVoice } from '@/helpers/browser-logger';
 import { recordStreamEvent } from '@/helpers/stream-observability';
 import { captureTRPCAttempt, getTRPCClient } from '@/lib/trpc';
@@ -69,7 +70,7 @@ const useVoiceEvents = ({
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const ownUserId = useOwnUserId();
 	const reconnectingSince = useVoiceSessionSelector(selectReconnectingSince);
-	const reconnectAuthenticated = useVoiceSessionSelector(selectReconnectAuthenticated);
+	const sessionReady = useServerConnectionSelector((state) => state.phase.name === 'ready');
 
 	useEffect(() => {
 		// Force a fresh subscription set after WS reconnect even when the voice
@@ -86,7 +87,7 @@ const useVoiceEvents = ({
 		// stream with UNAUTHORIZED and forces a teardown + rebuild. Wait for the
 		// auth gate. In steady state reconnectingSince is undefined, so this never
 		// blocks the normal subscription path.
-		if (!shouldStartProtectedVoiceEventSubscriptions(reconnectingSince, reconnectAuthenticated)) {
+		if (!shouldStartProtectedVoiceEventSubscriptions(reconnectingSince, sessionReady)) {
 			logVoice('Deferring voice event subscriptions until the reconnected WS re-authenticates', {
 				channelId: currentVoiceChannelId,
 			});
@@ -393,7 +394,7 @@ const useVoiceEvents = ({
 		getExternalStreamTrackPresence,
 		rtpCapabilities,
 		reconnectingSince,
-		reconnectAuthenticated,
+		sessionReady,
 		reconnectNonce,
 	]);
 };

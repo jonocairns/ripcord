@@ -11,6 +11,9 @@ import {
 } from '@/features/server/voice/voice-session-store';
 import { mountVoiceSessionExecutor } from '../use-voice-session-executor';
 
+let sessionReady = false;
+const readinessListeners = new Set<() => void>();
+
 const emptySnapshot: TWatchedRemoteStreamsSnapshot = { remoteUserStreams: {}, externalStreams: {} };
 
 const pendingReconnect = {
@@ -49,6 +52,13 @@ const createFakePorts = (overrides: Partial<TVoiceSessionExecutorPorts> = {}): T
 	random: () => 0.5,
 	delay: () => Promise.resolve(),
 	isOnline: () => true,
+	isSessionReady: () => sessionReady,
+	subscribeSessionReadiness: (listener) => {
+		readinessListeners.add(listener);
+		return () => {
+			readinessListeners.delete(listener);
+		};
+	},
 	captureRecoverySnapshot: () => emptySnapshot,
 	rebuildTransports: () => Promise.resolve(),
 	restoreVoiceSession: () => Promise.resolve({ serverSessionEstablished: true }),
@@ -72,20 +82,21 @@ const startRestoreWithNoRunner = (): void => {
 		pending: pendingReconnect,
 		now: 0,
 		online: true,
-		authenticated: true,
 	});
 
 	if (snapshotCommand?.type !== 'CaptureRecoverySnapshot') {
 		throw new Error('expected CaptureRecoverySnapshot command');
 	}
 
-	const [restoreCommand] = dispatchVoiceSession({
+	const [authCommand] = dispatchVoiceSession({
 		type: 'RecoveryStarted',
 		commandId: snapshotCommand.commandId,
 		generation: snapshotCommand.generation,
 		snapshot: emptySnapshot,
 	});
 
+	if (!authCommand) throw new Error('expected auth command');
+	const [restoreCommand] = dispatchVoiceSession({ ...authCommand, type: 'AuthReady' });
 	if (restoreCommand?.type !== 'RestoreVoiceSession') {
 		throw new Error('expected RestoreVoiceSession command');
 	}
@@ -122,6 +133,8 @@ describe('voice session executor adapter', () => {
 
 	beforeEach(() => {
 		resetVoiceSessionState();
+		sessionReady = false;
+		readinessListeners.clear();
 	});
 
 	afterEach(() => {
@@ -304,6 +317,8 @@ describe('voice session executor adapter', () => {
 		expect(recoveryCalls).toBe(1);
 
 		resetVoiceSessionState();
+		sessionReady = false;
+		readinessListeners.clear();
 		bufferDesktopAudioRecovery();
 		dispatchVoiceSession({ type: 'RecoveryCleared', reason: 'logout' });
 		const unmountAfterInvalidation = mountVoiceSessionExecutor(() => ports);

@@ -230,7 +230,6 @@ describe('transport recovery circuit', () => {
 			},
 			now: 100,
 			online: true,
-			authenticated: true,
 		}).state;
 		const ignored = reduceVoiceSession(reconnecting, {
 			type: 'TransportFailed',
@@ -272,7 +271,6 @@ describe('transport recovery circuit', () => {
 			},
 			now: 100,
 			online: true,
-			authenticated: true,
 		}).state;
 		const ignored = reduceVoiceSession(reconnecting, {
 			type: 'TransportRecoveryExhausted',

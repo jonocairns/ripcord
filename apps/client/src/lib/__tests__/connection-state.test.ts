@@ -203,7 +203,7 @@ const rows: TRow[] = [
 		commands: [
 			{ type: 'clear-grace-timer' },
 			{ type: 'authenticate-session' },
-			{ type: 'voice-session-authenticated' },
+
 			{ type: 'authenticate-telemetry' },
 		],
 	},
@@ -294,7 +294,7 @@ const rows: TRow[] = [
 		commands: [
 			{ type: 'clear-grace-timer' },
 			{ type: 'authenticate-session' },
-			{ type: 'voice-session-authenticated' },
+
 			{ type: 'authenticate-telemetry' },
 		],
 	},
@@ -391,7 +391,7 @@ const rows: TRow[] = [
 		commands: [
 			{ type: 'clear-grace-timer' },
 			{ type: 'authenticate-session' },
-			{ type: 'voice-session-authenticated' },
+
 			{ type: 'authenticate-telemetry' },
 		],
 	},
@@ -916,7 +916,7 @@ for (const socketOpen of [false, true])
 		expect(authenticated.commands).toEqual([
 			{ type: 'clear-grace-timer' },
 			{ type: 'authenticate-session' },
-			{ type: 'voice-session-authenticated' },
+
 			{ type: 'authenticate-telemetry' },
 		]);
 		expect(authenticated.state.phase).toEqual({ name: 'ready' });

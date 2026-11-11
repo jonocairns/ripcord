@@ -89,7 +89,6 @@ const startReconnectWithSnapshot = (authenticated = true): [TVoiceSessionState, 
 		pending: pending(),
 		now: 100,
 		online: true,
-		authenticated,
 	});
 	expect(commands[0]).toEqual(expect.objectContaining({ type: 'CaptureRecoverySnapshot' }));
 
@@ -107,6 +106,7 @@ const startReconnectWithSnapshot = (authenticated = true): [TVoiceSessionState, 
 	});
 
 	if (authenticated) {
+		[state, commands] = dispatch(state, { type: 'AuthReady', commandId: activeCommandId(state), generation });
 		expect(commands[0]).toEqual(expect.objectContaining({ type: 'RestoreVoiceSession' }));
 	} else {
 		expect(commands[0]).toEqual(expect.objectContaining({ type: 'WaitAuth' }));
@@ -188,7 +188,6 @@ describe('voice session machine', () => {
 			pending: pending(),
 			now: 100,
 			online: true,
-			authenticated: true,
 		});
 		expect(state.phase.phase).toBe('reconnecting');
 
@@ -214,7 +213,6 @@ describe('voice session machine', () => {
 			pending: pending({ channelId: 5 }),
 			now: 200,
 			online: true,
-			authenticated: false,
 		});
 
 		expect(result.state.phase).toMatchObject({
@@ -328,7 +326,6 @@ describe('voice session machine', () => {
 			pending: pending(),
 			now: 100,
 			online: false,
-			authenticated: false,
 		});
 		expect(commands[0]).toEqual(expect.objectContaining({ type: 'CaptureRecoverySnapshot' }));
 
@@ -373,7 +370,7 @@ describe('voice session machine', () => {
 		]);
 	});
 
-	it('does not skip the online gate when authentication arrives while waitingOnline', () => {
+	it('passes through online and authentication gates before restoring', () => {
 		let state = createInitialVoiceSessionState();
 		let commands: TVoiceSessionCommand[];
 
@@ -382,7 +379,6 @@ describe('voice session machine', () => {
 			pending: pending(),
 			now: 100,
 			online: false,
-			authenticated: false,
 		});
 
 		const generation = commands[0]?.generation;
@@ -397,12 +393,7 @@ describe('voice session machine', () => {
 			generation,
 			snapshot: snapshot(),
 		});
-		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'waitingOnline', authenticated: false });
-
-		[state, commands] = dispatch(state, { type: 'SocketAuthenticated' });
-
-		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'waitingOnline', authenticated: true });
-		expect(commands).toEqual([]);
+		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'waitingOnline' });
 
 		[state, commands] = dispatch(state, {
 			type: 'OnlineReady',
@@ -410,7 +401,8 @@ describe('voice session machine', () => {
 			generation,
 		});
 
-		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'restoring', authenticated: true });
+		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'waitingAuth' });
+		[state, commands] = dispatch(state, { type: 'AuthReady', commandId: activeCommandId(state), generation });
 		expect(commands).toEqual([expect.objectContaining({ type: 'RestoreVoiceSession', generation })]);
 	});
 
@@ -428,12 +420,11 @@ describe('voice session machine', () => {
 			pending: pending({ expiresAt: 20_000 }),
 			now: 200,
 			online: false,
-			authenticated: false,
 		});
 
 		expect(result.commands).toEqual([
 			expect.objectContaining({
-				type: 'WaitOnline',
+				type: 'WaitAuth',
 				generation,
 			}),
 		]);
@@ -443,8 +434,7 @@ describe('voice session machine', () => {
 
 		expect(result.state.phase).toMatchObject({
 			phase: 'reconnecting',
-			step: 'waitingOnline',
-			authenticated: false,
+			step: 'waitingAuth',
 			generation,
 			pending: expect.objectContaining({ expiresAt: 20_000 }),
 		});
@@ -466,12 +456,11 @@ describe('voice session machine', () => {
 	it('moves an in-flight restore back behind the auth gate when the socket becomes unauthenticated', () => {
 		const [state, generation] = startReconnectWithSnapshot(true);
 		const restoreCommandId = activeCommandId(state);
-		const result = reduceVoiceSession(state, { type: 'SocketUnauthenticated' });
+		const result = reduceVoiceSession(state, { type: 'WsDropped', now: 200, online: true });
 
 		expect(result.state.phase).toMatchObject({
 			phase: 'reconnecting',
 			step: 'waitingAuth',
-			authenticated: false,
 			generation,
 		});
 		expect(result.commands).toEqual([expect.objectContaining({ type: 'WaitAuth', generation })]);
@@ -534,8 +523,9 @@ describe('voice session machine', () => {
 			generation: expect.any(Number),
 		});
 		expect(result.state.pendingVoiceReconnect).toBeUndefined();
-		expect(result.state.reconnectingSince).toBeUndefined();
-		expect(result.state.reconnectAuthenticated).toBe(false);
+		expect(
+			result.state.phase.phase === 'reconnecting' ? result.state.phase.reconnectingSince : undefined,
+		).toBeUndefined();
 		// The give-up path must run the full reconnect clear (Sentry report, reason
 		// toast, clearVoiceReconnectRecovery) AND leave the server session that
 		// restoreOrJoin already bound this cycle.
@@ -614,6 +604,7 @@ describe('voice session machine', () => {
 			commandId: activeCommandId(state),
 			generation,
 		});
+		[state, commands] = dispatch(state, { type: 'AuthReady', commandId: activeCommandId(state), generation });
 		expect(commands).toEqual([expect.objectContaining({ type: 'RestoreVoiceSession' })]);
 
 		[state, commands] = dispatch(state, {
@@ -701,8 +692,7 @@ describe('voice session machine', () => {
 
 		expect(state.phase).toEqual({ phase: 'connected', channelId: 5, generation });
 		expect(state.pendingVoiceReconnect).toBeUndefined();
-		expect(state.reconnectingSince).toBeUndefined();
-		expect(state.reconnectAuthenticated).toBe(false);
+		expect(state.phase.phase === 'reconnecting' ? state.phase.reconnectingSince : undefined).toBeUndefined();
 		expect(state.suppression).toEqual({
 			channelId: 5,
 			peerUserIds: [10, 20],
@@ -713,26 +703,22 @@ describe('voice session machine', () => {
 
 	it('waits for auth before restore when reconnect starts unauthenticated', () => {
 		let [state, generation] = startReconnectWithSnapshot(false);
-		let commands: TVoiceSessionCommand[];
 
-		[state, commands] = dispatch(state, { type: 'SocketAuthenticated' });
-
-		expect(state.phase).toMatchObject({ phase: 'reconnecting', authenticated: true, step: 'waitingAuth' });
-		expect(commands).toEqual([]);
+		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'waitingAuth' });
 
 		const authReadyResult = dispatch(state, {
 			type: 'AuthReady',
 			commandId: activeCommandId(state),
 			generation,
 		});
-		commands = authReadyResult[1];
+		const commands = authReadyResult[1];
 		state = authReadyResult[0];
 
-		expect(state.phase).toMatchObject({ phase: 'reconnecting', authenticated: true, step: 'restoring' });
+		expect(state.phase).toMatchObject({ phase: 'reconnecting', step: 'restoring' });
 		expect(commands).toEqual([expect.objectContaining({ type: 'RestoreVoiceSession', generation })]);
 	});
 
-	it('clears reconnect facade fields when auth recovery is cleared', () => {
+	it('clears staged intent when auth recovery is cleared', () => {
 		const [state, generation] = startReconnectWithSnapshot(false);
 		const result = reduceVoiceSession(state, {
 			type: 'AuthCleared',
@@ -742,8 +728,9 @@ describe('voice session machine', () => {
 
 		expect(result.state.phase).toEqual({ phase: 'idle' });
 		expect(result.state.pendingVoiceReconnect).toBeUndefined();
-		expect(result.state.reconnectingSince).toBeUndefined();
-		expect(result.state.reconnectAuthenticated).toBe(false);
+		expect(
+			result.state.phase.phase === 'reconnecting' ? result.state.phase.reconnectingSince : undefined,
+		).toBeUndefined();
 		expect(result.commands).toEqual([]);
 	});
 
@@ -837,4 +824,27 @@ describe('voice session machine', () => {
 		expect(result.state).toBe(state);
 		expect(result.commands).toEqual([]);
 	});
+});
+
+// Drops without a current channel must not adopt staged intent before rejoin.
+describe('staged reconnect ownership', () => {
+	it('returns the identical state for a drop without intent outside recovery', () => {
+		const state = { ...createInitialVoiceSessionState(), pendingVoiceReconnect: pending() };
+		expect(reduceVoiceSession(state, { type: 'WsDropped', now: 100, online: true }).state).toBe(state);
+	});
+	for (const withPending of [false, true])
+		it(`supersedes restore with pending=${withPending} and keeps only phase intent`, () => {
+			const [state] = startReconnectWithSnapshot();
+			expect(state.pendingVoiceReconnect).toBeUndefined();
+			const result = reduceVoiceSession(state, {
+				type: 'WsDropped',
+				now: 200,
+				online: true,
+				pending: withPending ? pending({ expiresAt: 20_000 }) : undefined,
+			});
+			expect(result.state.phase).toMatchObject({ step: 'waitingAuth' });
+			expect(result.state.pendingVoiceReconnect).toBeUndefined();
+			const captured = reduceVoiceSession(result.state, { type: 'ReconnectIntentCaptured', pending: pending() });
+			expect(captured.state.pendingVoiceReconnect).toBeUndefined();
+		});
 });

@@ -3,12 +3,10 @@ import { useServerStore } from '../../slice';
 import {
 	captureVoiceReconnectIntentForCurrentSession,
 	clearVoiceReconnectRecovery,
-	ensureVoiceReconnectStarted,
 	getValidPendingVoiceReconnect,
 	isVoiceReconnectPeerSuppressed,
-	markVoiceReconnectSessionAuthenticated,
-	markVoiceReconnectSessionUnauthenticated,
 	snapshotVoiceReconnectIntent,
+	startVoiceReconnectFromStagedIntent,
 	type TPendingVoiceReconnect,
 	type TVoiceReconnectSuppression,
 	updateVoiceReconnectIntentState,
@@ -16,7 +14,6 @@ import {
 } from '../reconnect-coordinator';
 import {
 	selectPendingVoiceReconnect,
-	selectReconnectAuthenticated,
 	selectReconnectingSince,
 	selectVoiceReconnectSuppression,
 	VOICE_RECONNECT_SUPPRESSION_MS,
@@ -31,7 +28,6 @@ import {
 const getPendingVoiceReconnect = (): TPendingVoiceReconnect | undefined =>
 	selectVoiceSessionState(selectPendingVoiceReconnect);
 const getReconnectingSince = (): number | undefined => selectVoiceSessionState(selectReconnectingSince);
-const getReconnectAuthenticated = (): boolean => selectVoiceSessionState(selectReconnectAuthenticated);
 const getVoiceReconnectSuppression = (): TVoiceReconnectSuppression | undefined =>
 	selectVoiceSessionState(selectVoiceReconnectSuppression);
 
@@ -41,7 +37,6 @@ const setVoiceReconnectSuppression = (suppression: TVoiceReconnectSuppression): 
 		pending: { ...suppression, micMuted: false, soundMuted: false },
 		now: suppression.expiresAt - VOICE_RECONNECT_SUPPRESSION_MS,
 		online: true,
-		authenticated: false,
 	});
 	if (capture?.type !== 'CaptureRecoverySnapshot') throw new Error('expected recovery snapshot command');
 	const [auth] = dispatchVoiceSession({
@@ -50,7 +45,6 @@ const setVoiceReconnectSuppression = (suppression: TVoiceReconnectSuppression): 
 		snapshot: { remoteUserStreams: {}, externalStreams: {} },
 	});
 	if (auth?.type !== 'WaitAuth') throw new Error('expected authentication command');
-	dispatchVoiceSession({ type: 'SocketAuthenticated' });
 	const [restore] = dispatchVoiceSession({ ...auth, type: 'AuthReady' });
 	if (restore?.type !== 'RestoreVoiceSession') throw new Error('expected restore command');
 	const [watch] = dispatchVoiceSession({ ...restore, type: 'RestoreSucceeded' });
@@ -222,7 +216,6 @@ describe('voice reconnect coordinator', () => {
 				},
 				now: Date.now(),
 				online: false,
-				authenticated: false,
 			});
 
 			expect(updateVoiceReconnectIntentState({ micMuted: true })).toBe(true);
@@ -258,7 +251,7 @@ describe('voice reconnect coordinator', () => {
 					expiresAt: Date.now() + VOICE_RECONNECT_INTENT_TTL_MS,
 				},
 			});
-			ensureVoiceReconnectStarted();
+			startVoiceReconnectFromStagedIntent();
 
 			clearVoiceReconnectRecovery('user-left-voice');
 
@@ -277,19 +270,23 @@ describe('voice reconnect coordinator', () => {
 		});
 	});
 
-	describe('ensureVoiceReconnectStarted', () => {
+	describe('startVoiceReconnectFromStagedIntent', () => {
 		it('sets reconnectingSince when recovery has not started yet', () => {
+			useServerStore.setState({ ownUserId: 1, currentVoiceChannelId: 5 });
 			const startedAt = 1234;
+			snapshotVoiceReconnectIntent({ expiresAt: Date.now() + 60_000 });
 
-			ensureVoiceReconnectStarted(startedAt);
+			startVoiceReconnectFromStagedIntent(startedAt);
 
 			expect(getReconnectingSince()).toBe(startedAt);
 		});
 
 		it('preserves the original reconnect timestamp when called again', () => {
-			ensureVoiceReconnectStarted(1234);
+			useServerStore.setState({ ownUserId: 1, currentVoiceChannelId: 5 });
+			captureVoiceReconnectIntentForCurrentSession();
+			startVoiceReconnectFromStagedIntent(1234);
 
-			ensureVoiceReconnectStarted(5678);
+			startVoiceReconnectFromStagedIntent(5678);
 
 			expect(getReconnectingSince()).toBe(1234);
 		});
@@ -312,7 +309,7 @@ describe('voice reconnect coordinator', () => {
 			});
 
 			try {
-				ensureVoiceReconnectStarted(1234);
+				startVoiceReconnectFromStagedIntent(1234);
 			} finally {
 				unregister();
 			}
@@ -321,27 +318,6 @@ describe('voice reconnect coordinator', () => {
 			for (const reconnectingSince of observed) {
 				expect(reconnectingSince).toBe(1234);
 			}
-		});
-	});
-
-	describe('reconnect authentication gate', () => {
-		it('starts unauthenticated and toggles with the WS auth lifecycle', () => {
-			expect(getReconnectAuthenticated()).toBe(false);
-
-			markVoiceReconnectSessionAuthenticated();
-			expect(getReconnectAuthenticated()).toBe(true);
-
-			// A subsequent WS drop must re-gate recovery until the next joinServer.
-			markVoiceReconnectSessionUnauthenticated();
-			expect(getReconnectAuthenticated()).toBe(false);
-		});
-
-		it('resets the auth gate when recovery is cleared', () => {
-			markVoiceReconnectSessionAuthenticated();
-
-			clearVoiceReconnectRecovery('user-started-voice-join');
-
-			expect(getReconnectAuthenticated()).toBe(false);
 		});
 	});
 
@@ -355,12 +331,10 @@ describe('voice reconnect coordinator', () => {
 				},
 			});
 			captureVoiceReconnectIntentForCurrentSession();
-			ensureVoiceReconnectStarted(1234);
-			markVoiceReconnectSessionAuthenticated();
+			startVoiceReconnectFromStagedIntent(1234);
 
 			expect(getPendingVoiceReconnect()).toBeDefined();
 			expect(getReconnectingSince()).toBe(1234);
-			expect(getReconnectAuthenticated()).toBe(true);
 			expect(getVoiceReconnectSuppression()).toBeUndefined();
 		});
 	});

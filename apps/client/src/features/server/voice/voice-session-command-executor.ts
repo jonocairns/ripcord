@@ -1,6 +1,5 @@
 import { getVoiceReconnectRetryDelayMs, VoiceReconnectTimeoutError } from './reconnect-policy';
 import {
-	selectReconnectAuthenticated,
 	selectReconnectingSince,
 	type TTransportRecoveryTransition,
 	type TVoiceSessionCommand,
@@ -102,6 +101,8 @@ type TVoiceSessionExecutorPorts = {
 	random: () => number;
 	delay: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 	isOnline: () => boolean;
+	isSessionReady: () => boolean;
+	subscribeSessionReadiness: (listener: () => void) => () => void;
 
 	captureRecoverySnapshot: () => TWatchedRemoteStreamsSnapshot;
 	rebuildTransports: (command: TRebuildTransportsCommand, context: TVoiceSessionRebuildContext) => Promise<void>;
@@ -437,7 +438,9 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 		}
 
 		let unsubscribe = (): void => {};
+		let unsubscribeReadiness = (): void => {};
 		const stateChanged = new Promise<'stateChanged' | 'cancelled'>((resolve) => {
+			unsubscribeReadiness = ports.subscribeSessionReadiness(() => resolve('stateChanged'));
 			unsubscribe = subscribeVoiceSessionState(() => {
 				resolve('stateChanged');
 			});
@@ -463,45 +466,59 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 			return await Promise.race([stateChanged, deadline]);
 		} finally {
 			unsubscribe();
+			unsubscribeReadiness();
 			controller.abort();
 			signal.removeEventListener('abort', abortChild);
 		}
 	};
 
-	const waitForAuthenticated = async (
+	type TAuthWaitProbe =
+		| { outcome: 'cleared' | 'expired' | 'authenticated' }
+		| { outcome: 'waiting'; remainingMs: number };
+	const probeAuthWait = (
+		command: Extract<TVoiceSessionCommand, { type: 'WaitAuth' }>,
+		state: TVoiceSessionState,
+	): TAuthWaitProbe => {
+		if (selectReconnectingSince(state) === undefined) return { outcome: 'cleared' };
+		// Check expiry before accepting an authenticated socket: after an app
+		// teardown the provider can remount long after the reconnect intent
+		// expired, and restoring then would silently rejoin voice with a live mic.
+		// An authenticated socket is still accepted exactly at the deadline.
+		const remainingMs = getLiveReconnectDeadline(command) - ports.now();
+		if (remainingMs < 0) return { outcome: 'expired' };
+		if (ports.isSessionReady()) return { outcome: 'authenticated' };
+		if (remainingMs === 0) return { outcome: 'expired' };
+		return { outcome: 'waiting', remainingMs };
+	};
+	// AuthReady is dispatched only in a step in which the session was read as
+	// ready. Readiness can be lost afterwards: WsDropped supersedes a restore.
+	// Client replacement is not reported to voice; an already-running restore
+	// meets the new client through the existing restore-failure and retry path.
+	const runAuthWait = async (
 		command: Extract<TVoiceSessionCommand, { type: 'WaitAuth' }>,
 		context: TVoiceSessionCommandContext,
 	): Promise<'authenticated' | 'expired' | 'cleared' | 'cancelled'> => {
 		while (context.isCurrent()) {
 			const stateBeforeSubscribe = selectVoiceSessionState((state) => state);
-			const reconnectingSince = selectReconnectingSince(stateBeforeSubscribe);
-			if (reconnectingSince === undefined) {
-				return 'cleared';
+			const probe = probeAuthWait(command, stateBeforeSubscribe);
+			if (probe.outcome !== 'waiting') {
+				// One synchronous step: isCurrent, the readiness and expiry reads, and
+				// this dispatch. Nothing can run between them.
+				dispatchVoiceSession({
+					type:
+						probe.outcome === 'authenticated'
+							? 'AuthReady'
+							: probe.outcome === 'cleared'
+								? 'AuthCleared'
+								: 'AuthExpired',
+					commandId: command.commandId,
+					generation: command.generation,
+				});
+				return probe.outcome;
 			}
-
-			// Check expiry before accepting an authenticated socket: after an app
-			// teardown the provider can remount long after the reconnect intent
-			// expired, and restoring then would silently rejoin voice with a live mic.
-			// An authenticated socket is still accepted exactly at the deadline.
-			const remainingMs = getLiveReconnectDeadline(command) - ports.now();
-			if (remainingMs < 0) {
-				return 'expired';
-			}
-
-			if (selectReconnectAuthenticated(stateBeforeSubscribe)) {
-				return 'authenticated';
-			}
-
-			if (remainingMs === 0) {
-				return 'expired';
-			}
-
-			const outcome = await waitForStateChangeOrDeadline(remainingMs, context.signal, stateBeforeSubscribe);
-			if (outcome === 'cancelled') {
-				return 'cancelled';
-			}
+			const waited = await waitForStateChangeOrDeadline(probe.remainingMs, context.signal, stateBeforeSubscribe);
+			if (waited === 'cancelled') return 'cancelled';
 		}
-
 		return 'cancelled';
 	};
 
@@ -938,15 +955,7 @@ const createVoiceSessionCommandExecutor = (ports: TVoiceSessionExecutorPorts): T
 						: 'succeeded';
 			}
 			case 'WaitAuth': {
-				const outcome = await waitForAuthenticated(command, context);
-
-				if (outcome !== 'cancelled' && context.isCurrent()) {
-					dispatchVoiceSession({
-						type: outcome === 'authenticated' ? 'AuthReady' : outcome === 'cleared' ? 'AuthCleared' : 'AuthExpired',
-						commandId: command.commandId,
-						generation: command.generation,
-					});
-				}
+				const outcome = await runAuthWait(command, context);
 
 				return outcome === 'expired'
 					? 'expired'

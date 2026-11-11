@@ -3,10 +3,9 @@ import { useServerStore } from '../../slice';
 import {
 	captureVoiceReconnectIntentForCurrentSession,
 	clearVoiceReconnectRecovery,
-	ensureVoiceReconnectStarted,
 	getValidPendingVoiceReconnect,
-	markVoiceReconnectSessionAuthenticated,
-	markVoiceReconnectSessionUnauthenticated,
+	reportVoiceSocketDropped,
+	startVoiceReconnectFromStagedIntent,
 	updateVoiceReconnectIntentState,
 } from '../reconnect-coordinator';
 import {
@@ -32,15 +31,13 @@ const send = (event: TVoiceSessionEvent): void => {
 };
 const drop = (): void => {
 	ready = false;
-	markVoiceReconnectSessionUnauthenticated();
-	if (captureVoiceReconnectIntentForCurrentSession()) ensureVoiceReconnectStarted();
+	reportVoiceSocketDropped();
 };
 const sessionAuthenticated = (): void => {
 	ready = true;
-	markVoiceReconnectSessionAuthenticated();
 };
 const rejoinCompleted = (): void => {
-	if (getValidPendingVoiceReconnect()) ensureVoiceReconnectStarted();
+	if (getValidPendingVoiceReconnect()) startVoiceReconnectFromStagedIntent();
 };
 const settle = (): void => {
 	for (let i = 0; i < 10; i++) {

@@ -1,11 +1,6 @@
 import { logDebug } from '@/helpers/browser-logger';
 import { useServerStore } from '../slice';
-import {
-	selectPendingVoiceReconnect,
-	selectReconnectAuthenticated,
-	selectReconnectingSince,
-	selectVoiceReconnectSuppression,
-} from './voice-session-machine';
+import { selectPendingVoiceReconnect, selectVoiceReconnectSuppression } from './voice-session-machine';
 import { dispatchVoiceSession, selectVoiceSessionState } from './voice-session-store';
 
 type TPendingVoiceReconnect = {
@@ -45,10 +40,6 @@ type TClearReason =
 const getMachinePendingVoiceReconnect = (): TPendingVoiceReconnect | undefined =>
 	selectVoiceSessionState(selectPendingVoiceReconnect);
 
-const getMachineReconnectingSince = (): number | undefined => selectVoiceSessionState(selectReconnectingSince);
-
-const getMachineReconnectAuthenticated = (): boolean => selectVoiceSessionState(selectReconnectAuthenticated);
-
 const getMachineVoiceReconnectSuppression = (): TVoiceReconnectSuppression | undefined =>
 	selectVoiceSessionState(selectVoiceReconnectSuppression);
 
@@ -60,7 +51,7 @@ const isBrowserOnline = (): boolean => {
 	return navigator.onLine;
 };
 
-const snapshotVoiceReconnectIntent = (opts: { expiresAt: number }): void => {
+const readVoiceReconnectIntent = (expiresAt: number): TPendingVoiceReconnect | undefined => {
 	const serverState = useServerStore.getState();
 	const { currentVoiceChannelId, ownUserId, voiceMap, ownVoiceDefaults } = serverState;
 
@@ -78,15 +69,20 @@ const snapshotVoiceReconnectIntent = (opts: { expiresAt: number }): void => {
 		micMuted: ownVoiceDefaults.micMuted,
 		soundMuted: ownVoiceDefaults.soundMuted,
 		peerUserIds: [...peerUserIds],
-		expiresAt: opts.expiresAt,
+		expiresAt,
 	};
 
-	dispatchVoiceSession({ type: 'ReconnectIntentCaptured', pending: pendingVoiceReconnect });
+	return pendingVoiceReconnect;
+};
 
+const snapshotVoiceReconnectIntent = (opts: { expiresAt: number }): void => {
+	const pending = readVoiceReconnectIntent(opts.expiresAt);
+	if (!pending) return;
+	dispatchVoiceSession({ type: 'ReconnectIntentCaptured', pending });
 	logDebug('Voice reconnect intent snapshotted', {
-		channelId: currentVoiceChannelId,
-		peerCount: peerUserIds.length,
-		expiresAt: opts.expiresAt,
+		channelId: pending.channelId,
+		peerCount: pending.peerUserIds.length,
+		expiresAt: pending.expiresAt,
 	});
 };
 
@@ -124,31 +120,20 @@ const updateVoiceReconnectIntentState = (
 	return true;
 };
 
-const ensureVoiceReconnectStarted = (timestamp = Date.now()): void => {
-	const reconnectingSince = getMachineReconnectingSince();
-
-	if (reconnectingSince !== undefined) {
-		return;
-	}
-
+const reportVoiceSocketDropped = (now = Date.now()): void => {
 	dispatchVoiceSession({
-		type: 'ReconnectStarted',
-		now: timestamp,
+		type: 'WsDropped',
+		pending: readVoiceReconnectIntent(now + VOICE_RECONNECT_INTENT_TTL_MS),
+		now,
 		online: isBrowserOnline(),
-		authenticated: getMachineReconnectAuthenticated(),
 	});
 };
 
-// Called when a WS drop is detected: the next socket must re-authenticate before
-// voice recovery may run restoreOrJoin.
-const markVoiceReconnectSessionUnauthenticated = (): void => {
-	dispatchVoiceSession({ type: 'SocketUnauthenticated' });
-};
-
-// Called once joinServer succeeds on the reconnected socket, unblocking the
-// gated voice recovery.
-const markVoiceReconnectSessionAuthenticated = (): void => {
-	dispatchVoiceSession({ type: 'SocketAuthenticated' });
+const startVoiceReconnectFromStagedIntent = (now = Date.now()): void => {
+	if (isVoiceReconnectRecoveryActive()) return;
+	const pending = getMachinePendingVoiceReconnect();
+	if (!pending || now > pending.expiresAt) return;
+	dispatchVoiceSession({ type: 'WsDropped', pending, now, online: isBrowserOnline() });
 };
 
 const clearVoiceReconnectRecovery = (reason: TClearReason): void => {
@@ -183,13 +168,12 @@ export type { TClearReason, TPendingVoiceReconnect, TVoiceReconnectSuppression }
 export {
 	captureVoiceReconnectIntentForCurrentSession,
 	clearVoiceReconnectRecovery,
-	ensureVoiceReconnectStarted,
 	getValidPendingVoiceReconnect,
 	isVoiceReconnectPeerSuppressed,
 	isVoiceReconnectRecoveryActive,
-	markVoiceReconnectSessionAuthenticated,
-	markVoiceReconnectSessionUnauthenticated,
+	reportVoiceSocketDropped,
 	snapshotVoiceReconnectIntent,
+	startVoiceReconnectFromStagedIntent,
 	updateVoiceReconnectIntentState,
 	VOICE_RECONNECT_INTENT_TTL_MS,
 };
