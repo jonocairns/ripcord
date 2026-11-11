@@ -1,111 +1,44 @@
-import type { StreamKind, TStreamEventDetails } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
 import { useEffect } from 'react';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import {
-	isConsumeCommandRunnable,
-	type TRemoteMediaCommand,
-	type TRemoteMediaSubscriptions,
-	type TStreamsToConsumeCommand,
-} from './remote-media-subscriptions';
+	createRemoteMediaCommandRunner,
+	type TCloseRemoteConsumer,
+	type TConsumeRemoteMedia,
+} from './remote-media-command-runner';
+import type { TRemoteMediaLedgerStore } from './remote-media-ledger-store';
 import type { TExternalStreamTrackPresence } from './use-pending-streams';
-
-type TConsumeRemoteMedia = (
-	remoteId: number,
-	kind: StreamKind,
-	rtpCapabilities: RtpCapabilities,
-	expectedProducerId?: string,
-	options?: {
-		isManualRetry?: boolean;
-		restartExisting?: boolean;
-	},
-) => Promise<unknown>;
-
-type TCloseRemoteConsumer = (
-	remoteId: number,
-	kind: StreamKind,
-	consumerId?: string,
-	reason?: TStreamEventDetails['reason'],
-) => Promise<unknown>;
-
-type TUseRemoteMediaConsumeRunnerInput = {
-	currentVoiceChannelId: number | undefined;
-	rtpCapabilities: RtpCapabilities | null;
-	commands: TRemoteMediaCommand[];
-	remoteMediaSubscriptions: TRemoteMediaSubscriptions;
-	clearCommands: (commands: TRemoteMediaCommand[]) => void;
-	consume: TConsumeRemoteMedia;
-	closeConsumer: TCloseRemoteConsumer;
-	getExternalStreamTrackPresence: () => TExternalStreamTrackPresence;
-};
 
 export const useRemoteMediaConsumeRunner = ({
 	currentVoiceChannelId,
 	rtpCapabilities,
-	commands,
-	remoteMediaSubscriptions,
-	clearCommands,
+	ledgerStore,
 	consume,
 	closeConsumer,
 	getExternalStreamTrackPresence,
-}: TUseRemoteMediaConsumeRunnerInput) => {
-	// Read against the freshest ledger at drain time without re-running the drain
-	// on every subscription change; commands and subscriptions update atomically,
-	// so the command batch and this snapshot stay consistent.
-	const remoteMediaSubscriptionsRef = useLatestRef(remoteMediaSubscriptions);
-
+}: {
+	currentVoiceChannelId: number | undefined;
+	rtpCapabilities: RtpCapabilities | null;
+	ledgerStore: TRemoteMediaLedgerStore;
+	consume: TConsumeRemoteMedia;
+	closeConsumer: TCloseRemoteConsumer;
+	getExternalStreamTrackPresence: () => TExternalStreamTrackPresence;
+}) => {
+	const inputs = useLatestRef({ consume, closeConsumer, getExternalStreamTrackPresence });
 	useEffect(() => {
-		if (currentVoiceChannelId === undefined) {
-			return;
+		if (currentVoiceChannelId === undefined || !rtpCapabilities) {
+			ledgerStore.setCommandRunner(undefined);
+		} else {
+			ledgerStore.setCommandRunner(
+				createRemoteMediaCommandRunner({
+					getSnapshot: ledgerStore.getSnapshot,
+					getRtpCapabilities: () => rtpCapabilities,
+					getExternalStreamTrackPresence: () => inputs.current.getExternalStreamTrackPresence(),
+					consume: (...args) => inputs.current.consume(...args),
+					closeConsumer: (...args) => inputs.current.closeConsumer(...args),
+				}),
+			);
 		}
-
-		const currentRtpCapabilities = rtpCapabilities;
-
-		if (!currentRtpCapabilities) {
-			return;
-		}
-
-		const runnableCommands = commands;
-
-		if (runnableCommands.length === 0) {
-			return;
-		}
-
-		clearCommands(runnableCommands);
-
-		const currentSubscriptions = remoteMediaSubscriptionsRef.current;
-		const externalStreamTracks = getExternalStreamTrackPresence();
-
-		runnableCommands.forEach((command) => {
-			if (command.type === 'consume') {
-				const consumeCommand: TStreamsToConsumeCommand = command;
-
-				// A queued consume can outlive its intent (e.g. the user stopped
-				// watching while rtpCapabilities was unavailable). Running it would
-				// re-request the watch and resurrect stopped media, so skip commands
-				// whose slot is no longer consume-eligible in the live ledger.
-				if (!isConsumeCommandRunnable(currentSubscriptions, consumeCommand, externalStreamTracks)) {
-					return;
-				}
-
-				void consume(consumeCommand.remoteId, consumeCommand.kind, currentRtpCapabilities, consumeCommand.producerId, {
-					isManualRetry: consumeCommand.isManualRetry,
-					restartExisting: consumeCommand.isManualRetry,
-				});
-				return;
-			}
-
-			if (command.type === 'closeConsumer') {
-				void closeConsumer(command.remoteId, command.kind, command.consumerId, command.reason);
-			}
-		});
-	}, [
-		clearCommands,
-		closeConsumer,
-		commands,
-		consume,
-		currentVoiceChannelId,
-		getExternalStreamTrackPresence,
-		rtpCapabilities,
-	]);
+		return () => ledgerStore.setCommandRunner(undefined);
+	}, [currentVoiceChannelId, rtpCapabilities, ledgerStore]);
 };

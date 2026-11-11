@@ -136,13 +136,13 @@ retained. Surviving ids retain the same ref objects, including across recovery
 while channel membership remains. Pruning or terminal clearing makes later
 lookup create new refs; it does not mutate detached element refs or stop tracks.
 
-Remote consume-start acknowledgement waits for the committed ledger before
-transport work proceeds. The integration mounts in a layout effect. Cleanup
-settles pending acknowledgements and fences inactive mutations without clearing
-ledger state or tearing down resources owned by transports/stream maps. Each
-activation has its own publication generation; Strict Mode replay uses a fresh
-publication, and an old cleanup cannot dispose its replacement. Currency is
-rechecked when the acknowledgement promise settles. Exact producer/channel identity protects repair, while
+Remote consume-start publication synchronously commits the ledger and checks
+currency before returning. The integration mounts in a layout effect. Cleanup
+fences inactive mutations without clearing ledger state or tearing down resources
+owned by transports/stream maps. Activation replacement makes old cleanup inert;
+Strict Mode replay does not revoke an already-computed publication answer.
+Controller cancellation, transport generations and producer identity checks fence
+later asynchronous allocation and resume work. Exact producer/channel identity protects repair, while
 id-only producer compatibility remains supported. Reconnect snapshots describe
 watch intent, and restore rehydrates the authoritative ledger rather than
 consuming privately. An explicit stop during recovery stays authoritative.
@@ -161,11 +161,11 @@ and its unresolved clock-divergence limitation.
 
 ## Lifecycle corrections
 
-A separate layer adds the acknowledgement lifecycle fencing above. Construction
-remains inactive and effect-free. A disposed publication is never reused during
-replay. The corresponding factory/mount tests cover activation replacement,
-cleanup after acknowledgement but before promise delivery, inactive callbacks
-and preservation of transport/ledger cleanup ownership.
+The integration checks consume-start currency synchronously, with controller
+fencing for subsequent asynchronous work. Construction remains inactive and
+effect-free. Factory/mount tests cover activation replacement, cleanup and replay
+after synchronous publication, inactive callbacks and preservation of
+transport/ledger cleanup ownership.
 
 The same layer corrects rebuild completion at awaited boundaries: losing runtime
 or command currency, or confirmed server connectivity, throws a supersession

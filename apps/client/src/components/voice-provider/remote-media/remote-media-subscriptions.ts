@@ -1,7 +1,5 @@
 import { StreamKind, type TRemoteProducerIds, type TStreamEventDetails } from '@sharkord/shared';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TWatchedRemoteStreamsSnapshot } from '@/features/server/voice/voice-session-machine';
-import { recordStreamEvent } from '@/helpers/stream-observability';
 import {
 	getPendingStreamKey,
 	isExternalTrackPresent,
@@ -9,7 +7,6 @@ import {
 	type TExternalStreamTrackPresence,
 	type TPendingStream,
 } from './use-pending-streams';
-import { getWatchIntentEvents } from './watch-intent-observability';
 
 export type TRemoteMediaStatus = 'available' | 'wanted' | 'consuming' | 'retrying' | 'consumed' | 'failed';
 
@@ -1238,7 +1235,7 @@ export const remoteMediaSubscriptionsToRepairScheduleCommands = (
 	return commands;
 };
 
-const hasSubscriptionChanged = (prev: TRemoteMediaSubscriptions, next: TRemoteMediaSubscriptions): boolean => {
+export const hasSubscriptionChanged = (prev: TRemoteMediaSubscriptions, next: TRemoteMediaSubscriptions): boolean => {
 	if (prev === next) {
 		return false;
 	}
@@ -1256,197 +1253,15 @@ const hasSubscriptionChanged = (prev: TRemoteMediaSubscriptions, next: TRemoteMe
 	return false;
 };
 
-export const useRemoteMediaSubscriptions = () => {
-	// Subscriptions and the pending command queue share one atomic state so the
-	// reducer runs inside a *pure* functional updater. Enqueuing commands used to
-	// live as a nested setState side effect inside the subscriptions updater,
-	// which StrictMode's intentional double-invoke turned into duplicate
-	// consume/close operations.
-	const [remoteMediaState, setRemoteMediaState] = useState<{
-		subscriptions: TRemoteMediaSubscriptions;
-		commands: TRemoteMediaCommand[];
-	}>(() => ({ subscriptions: new Map(), commands: [] }));
-	const { subscriptions: remoteMediaSubscriptions, commands: remoteMediaCommands } = remoteMediaState;
-	const previousSubscriptions = useRef<TRemoteMediaSubscriptions>(new Map());
-	// Observe committed ledger transitions outside React's pure state updater.
-	// StrictMode may replay an effect, but the saved snapshot makes replay a no-op.
-	useEffect(() => {
-		for (const event of getWatchIntentEvents(previousSubscriptions.current, remoteMediaSubscriptions))
-			recordStreamEvent(event);
-		previousSubscriptions.current = remoteMediaSubscriptions;
-	}, [remoteMediaSubscriptions]);
-	const update = useCallback((nextFor: (prev: TRemoteMediaSubscriptions, now: number) => TRemoteMediaReducerResult) => {
-		setRemoteMediaState((prev) => {
-			const result = nextFor(prev.subscriptions, Date.now());
-			const nextSubscriptions = hasSubscriptionChanged(prev.subscriptions, result.state)
-				? result.state
-				: prev.subscriptions;
-
-			if (nextSubscriptions === prev.subscriptions && result.commands.length === 0) {
-				return prev;
-			}
-
-			return {
-				subscriptions: nextSubscriptions,
-				commands: result.commands.length > 0 ? [...prev.commands, ...result.commands] : prev.commands,
-			};
-		});
-	}, []);
-	const clearRemoteMediaCommands = useCallback((commandsToClear: TRemoteMediaCommand[]) => {
-		if (commandsToClear.length === 0) {
-			return;
-		}
-
-		setRemoteMediaState((prev) => ({ ...prev, commands: prev.commands.slice(commandsToClear.length) }));
-	}, []);
-	const pendingStreams = useMemo(
-		() => remoteMediaSubscriptionsToPendingStreams(remoteMediaSubscriptions),
-		[remoteMediaSubscriptions],
-	);
-	const visibleRemoteMedia = useMemo(
-		() => remoteMediaSubscriptionsToVisibleRemoteMedia(remoteMediaSubscriptions),
-		[remoteMediaSubscriptions],
-	);
-	const addPendingStream = useCallback(
-		(remoteId: number, kind: StreamKind, producerId?: string, externalStreamTracks?: TExternalStreamTrackPresence) => {
-			update((prev, now) => markRemoteProducerPresent(prev, remoteId, kind, now, producerId, { externalStreamTracks }));
-		},
-		[update],
-	);
-	const removePendingStream = useCallback(
-		(remoteId: number, kind: StreamKind, producerId?: string, options?: { preserveDesired?: boolean }) => {
-			update((prev, now) => markRemoteProducerClosed(prev, remoteId, kind, now, producerId, options));
-		},
-		[update],
-	);
-	const clearPendingStreamsForUser = useCallback(
-		(remoteId: number) => {
-			update((prev) => emptyResult(clearRemoteMediaForUser(prev, remoteId)));
-		},
-		[update],
-	);
-	const clearAllPendingStreams = useCallback((opts?: { preserveIntent?: boolean }) => {
-		setRemoteMediaState((prev) => {
-			if (!opts?.preserveIntent) {
-				return prev.subscriptions.size === 0 && prev.commands.length === 0
-					? prev
-					: { subscriptions: new Map(), commands: [] };
-			}
-
-			const nextSubscriptions = clearRemoteMediaProducerStateForTransportCleanup(prev.subscriptions, Date.now());
-
-			if (nextSubscriptions === prev.subscriptions && prev.commands.length === 0) {
-				return prev;
-			}
-
-			return {
-				subscriptions: nextSubscriptions,
-				commands: [],
-			};
-		});
-	}, []);
-	const reconcilePendingStreams = useCallback(
-		(producers: TRemoteProducerIds, externalStreamTracks?: TExternalStreamTrackPresence) => {
-			update((prev, now) => reconcileRemoteMediaWithProducerSnapshot(prev, producers, externalStreamTracks, now));
-		},
-		[update],
-	);
-	const markRepairAttemptStarted = useCallback(
-		(
-			command: TRemoteMediaRepairScheduleCommand,
-			currentVoiceChannelId: number | undefined,
-			currentExternalStreams: Record<number, unknown>,
-		) => {
-			update((prev, now) =>
-				emptyResult(
-					markRemoteMediaRepairAttemptStarted(prev, command, now, currentVoiceChannelId, currentExternalStreams),
-				),
-			);
-		},
-		[update],
-	);
-	const markWatchRequested = useCallback(
-		(remoteId: number, kind: StreamKind, externalStreamTracks?: TExternalStreamTrackPresence) => {
-			recordStreamEvent({ event: 'watch_requested', remoteId, kind, mode: 'manual' });
-			update((prev, now) => markRemoteWatchRequested(prev, remoteId, kind, now, { externalStreamTracks }));
-		},
-		[update],
-	);
-	const markWatchStopped = useCallback(
-		(remoteId: number, kind: StreamKind) => {
-			recordStreamEvent({ event: 'watch_stopped', remoteId, kind, mode: 'manual' });
-			update((prev, now) => markRemoteWatchStopped(prev, remoteId, kind, now));
-		},
-		[update],
-	);
-	const markRetryRequested = useCallback(
-		(remoteId: number, kind: StreamKind, externalStreamTracks?: TExternalStreamTrackPresence) => {
-			recordStreamEvent({ event: 'watch_retry_requested', remoteId, kind, mode: 'manual' });
-			update((prev, now) => markRemoteRetryRequested(prev, remoteId, kind, now, { externalStreamTracks }));
-		},
-		[update],
-	);
-	const rehydrateWatchIntentOnly = useCallback(
-		(snapshot: TWatchedRemoteStreamsSnapshot) => {
-			update((prev, now) => rehydrateRemoteMediaWatchIntentOnly(prev, snapshot, now));
-		},
-		[update],
-	);
-	const markConsumeStarted = useCallback(
-		(remoteId: number, kind: StreamKind, producerId?: string, consumeGeneration?: number, isManualRetry = false) => {
-			update((prev, now) =>
-				markRemoteConsumeStarted(prev, remoteId, kind, now, producerId, consumeGeneration, isManualRetry),
-			);
-		},
-		[update],
-	);
-	const markConsumeSucceeded = useCallback(
-		(remoteId: number, kind: StreamKind, producerId: string, consumerId: string, consumeGeneration?: number) => {
-			update((prev, now) =>
-				markRemoteConsumeSucceeded(prev, remoteId, kind, now, producerId, consumerId, consumeGeneration),
-			);
-		},
-		[update],
-	);
-	const markConsumeFailed = useCallback(
-		(remoteId: number, kind: StreamKind, reason?: string, consumeGeneration?: number) => {
-			update((prev, now) => markRemoteConsumeFailed(prev, remoteId, kind, now, reason, consumeGeneration));
-		},
-		[update],
-	);
-	const markConsumerClosed = useCallback(
-		(remoteId: number, kind: StreamKind, consumerId?: string) => {
-			update((prev, now) => markRemoteConsumerClosed(prev, remoteId, kind, now, consumerId));
-		},
-		[update],
-	);
-	const clearExternalStream = useCallback(
-		(streamId: number) => {
-			update((prev) => emptyResult(clearRemoteMediaForExternalStream(prev, streamId)));
-		},
-		[update],
-	);
-
-	return {
-		remoteMediaSubscriptions,
-		remoteMediaCommands,
-		pendingStreams,
-		visibleRemoteMedia,
-		clearRemoteMediaCommands,
-		addPendingStream,
-		removePendingStream,
-		clearPendingStreamsForUser,
-		clearAllPendingStreams,
-		reconcilePendingStreams,
-		markRepairAttemptStarted,
-		markWatchRequested,
-		markWatchStopped,
-		markRetryRequested,
-		rehydrateWatchIntentOnly,
-		markConsumeStarted,
-		markConsumeSucceeded,
-		markConsumeFailed,
-		markConsumerClosed,
-		clearExternalStream,
-	};
+export const isRemoteConsumeStartCurrent = (
+	subscriptions: TRemoteMediaSubscriptions,
+	request: { remoteId: number; kind: StreamKind; expectedProducerId?: string },
+	operationToken: number,
+): boolean => {
+	const subscription = subscriptions.get(getPendingStreamKey(request.remoteId, request.kind));
+	const producerMatches =
+		request.expectedProducerId === undefined ||
+		subscription?.producerId === undefined ||
+		subscription.producerId === request.expectedProducerId;
+	return subscription?.consumeGeneration === operationToken && subscription.producerPresent && producerMatches;
 };

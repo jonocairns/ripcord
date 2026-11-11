@@ -5,10 +5,10 @@ import { useServerStore } from '@/features/server/slice';
 import { logVoice } from '@/helpers/browser-logger';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import { createRemoteMediaIntegration, mountRemoteMediaIntegration } from './remote-media-integration';
-import { useRemoteMediaSubscriptions } from './remote-media-subscriptions';
 import type { TExternalStreamTrackPresence } from './use-pending-streams';
 import { useRemoteMediaConsumeRunner } from './use-remote-media-consume-runner';
 import { useRemoteMediaRepairRunner } from './use-remote-media-repair-runner';
+import { useRemoteMediaSubscriptions } from './use-remote-media-subscriptions';
 import { useRemoteStreams } from './use-remote-streams';
 import { useTransports } from './use-transports';
 import { useVoiceEvents } from './use-voice-events';
@@ -54,10 +54,9 @@ const useRemoteMedia = ({
 	} = useRemoteStreams();
 	const {
 		remoteMediaSubscriptions,
-		remoteMediaCommands,
+		ledgerStore,
 		pendingStreams,
 		visibleRemoteMedia,
-		clearRemoteMediaCommands,
 		addPendingStream,
 		removePendingStream,
 		clearPendingStreamsForUser,
@@ -77,8 +76,7 @@ const useRemoteMedia = ({
 
 	const inputsRef = useLatestRef({
 		currentVoiceChannelId,
-		remoteMediaSubscriptions,
-		pendingStreams,
+		ledgerStore,
 		currentChannelExternalStreams,
 		externalStreams,
 		getRtpCapabilities,
@@ -104,9 +102,6 @@ const useRemoteMedia = ({
 		acceptStream,
 		retryRemoteMedia,
 	} = integration;
-	useEffect(() => {
-		integration.reconcileConsumeStarts(remoteMediaSubscriptions);
-	}, [integration, remoteMediaSubscriptions]);
 
 	const {
 		producerTransport,
@@ -154,28 +149,25 @@ const useRemoteMedia = ({
 	useRemoteMediaConsumeRunner({
 		currentVoiceChannelId,
 		rtpCapabilities,
-		commands: remoteMediaCommands,
-		remoteMediaSubscriptions,
-		clearCommands: clearRemoteMediaCommands,
+		ledgerStore,
 		consume,
 		closeConsumer,
 		getExternalStreamTrackPresence,
 	});
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Ledger changes must still trigger external-stream reconciliation; integration reads the store at call time.
 	useEffect(() => {
 		integration.reconcileExternalStreams({
 			...inputsRef.current,
 			currentChannelExternalStreams,
 			externalStreams,
-			pendingStreams,
-			remoteMediaSubscriptions,
 		});
 	}, [integration, currentChannelExternalStreams, externalStreams, pendingStreams, remoteMediaSubscriptions]);
 
 	useRemoteMediaRepairRunner({
 		currentVoiceChannelId,
 		rtpCapabilities,
-		remoteMediaSubscriptions,
+		ledgerStore,
 		pendingStreams,
 		currentChannelExternalStreams,
 		markRepairAttemptStarted,

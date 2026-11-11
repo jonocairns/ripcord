@@ -3,6 +3,7 @@ import type { RtpCapabilities } from 'mediasoup-client/types';
 import { useEffect, useRef } from 'react';
 import { logVoice } from '@/helpers/browser-logger';
 import { useLatestRef } from '@/hooks/use-latest-ref';
+import type { TRemoteMediaLedgerStore } from './remote-media-ledger-store';
 import { getRemoteMediaRepairDelayMs } from './remote-media-repair-policy';
 import {
 	isRemoteMediaRepairScheduleCommandCurrent,
@@ -10,7 +11,6 @@ import {
 	remoteMediaSubscriptionsToRepairScheduleCommands,
 	type TRemoteMediaRepairIdentity,
 	type TRemoteMediaRepairScheduleCommand,
-	type TRemoteMediaSubscriptions,
 } from './remote-media-subscriptions';
 import type { TExternalStreamTrackPresence, TPendingStream } from './use-pending-streams';
 
@@ -23,7 +23,7 @@ type TRepairRemoteProducer = (
 type TUseRemoteMediaRepairRunnerInput = {
 	currentVoiceChannelId: number | undefined;
 	rtpCapabilities: RtpCapabilities | null;
-	remoteMediaSubscriptions: TRemoteMediaSubscriptions;
+	ledgerStore: TRemoteMediaLedgerStore;
 	pendingStreams: Map<string, TPendingStream>;
 	currentChannelExternalStreams: Record<number, TExternalStream>;
 	markRepairAttemptStarted: (
@@ -38,14 +38,13 @@ type TUseRemoteMediaRepairRunnerInput = {
 export const useRemoteMediaRepairRunner = ({
 	currentVoiceChannelId,
 	rtpCapabilities,
-	remoteMediaSubscriptions,
+	ledgerStore,
 	pendingStreams,
 	currentChannelExternalStreams,
 	markRepairAttemptStarted,
 	repairRemoteProducer,
 	getExternalStreamTrackPresence,
 }: TUseRemoteMediaRepairRunnerInput) => {
-	const remoteMediaSubscriptionsRef = useLatestRef(remoteMediaSubscriptions);
 	const currentVoiceChannelIdRef = useLatestRef(currentVoiceChannelId);
 	const currentChannelExternalStreamsRef = useLatestRef(currentChannelExternalStreams);
 	const loggedExhaustedIdentitiesRef = useRef<Set<string>>(new Set());
@@ -58,7 +57,7 @@ export const useRemoteMediaRepairRunner = ({
 
 		const commands = remoteMediaSubscriptionsToRepairScheduleCommands(
 			currentVoiceChannelId,
-			remoteMediaSubscriptionsRef.current,
+			ledgerStore.getSnapshot(),
 			pendingStreams,
 			currentChannelExternalStreams,
 		);
@@ -93,7 +92,7 @@ export const useRemoteMediaRepairRunner = ({
 
 			const repairDelayMs = Math.max(0, command.retryAt + repairIntervalMs - firstRepairIntervalMs - Date.now());
 			const repairTimeout = setTimeout(() => {
-				const currentSubscriptions = remoteMediaSubscriptionsRef.current;
+				const currentSubscriptions = ledgerStore.getSnapshot();
 				const currentExternalStreams = currentChannelExternalStreamsRef.current;
 
 				if (
@@ -142,6 +141,7 @@ export const useRemoteMediaRepairRunner = ({
 		getExternalStreamTrackPresence,
 		markRepairAttemptStarted,
 		pendingStreams,
+		ledgerStore,
 		repairRemoteProducer,
 		rtpCapabilities,
 	]);

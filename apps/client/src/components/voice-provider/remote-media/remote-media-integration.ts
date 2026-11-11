@@ -4,13 +4,10 @@ import type {
 	TWatchedExternalStreamsSnapshot,
 	TWatchedRemoteStreamsSnapshot,
 } from '@/features/server/voice/voice-session-machine';
-import { createRemoteMediaConsumeStartPublication } from './remote-media-consume-start-publication';
-import type {
-	TRemoteMediaRepairIdentity,
-	TRemoteMediaSubscriptions,
-	useRemoteMediaSubscriptions,
-} from './remote-media-subscriptions';
-import { getPendingStreamKey, type TExternalStreamTrackPresence, type TPendingStream } from './use-pending-streams';
+import type { TRemoteMediaLedgerStore } from './remote-media-ledger-store';
+import { isRemoteConsumeStartCurrent, type TRemoteMediaRepairIdentity } from './remote-media-subscriptions';
+import { getPendingStreamKey, type TExternalStreamTrackPresence } from './use-pending-streams';
+import type { useRemoteMediaSubscriptions } from './use-remote-media-subscriptions';
 import type { TExternalStreamsMap } from './use-remote-streams';
 
 type TRemoteMediaIntegrationInputs = Pick<
@@ -18,8 +15,7 @@ type TRemoteMediaIntegrationInputs = Pick<
 	'markConsumeStarted' | 'markWatchRequested' | 'markRetryRequested' | 'addPendingStream'
 > & {
 	currentVoiceChannelId: number | undefined;
-	remoteMediaSubscriptions: TRemoteMediaSubscriptions;
-	pendingStreams: Map<string, TPendingStream>;
+	ledgerStore: TRemoteMediaLedgerStore;
 	currentChannelExternalStreams: Record<number, TExternalStream>;
 	externalStreams: TExternalStreamsMap;
 	getRtpCapabilities: () => RtpCapabilities | null;
@@ -31,18 +27,14 @@ type TRemoteMediaIntegrationInputs = Pick<
 // Connects projections and identity checks to their authoritative owners. It
 // acquires no media and owns neither ledger state nor transports/retry policy.
 const createRemoteMediaIntegration = (getInputs: () => TRemoteMediaIntegrationInputs) => {
-	let consumeStartPublication = createRemoteMediaConsumeStartPublication();
 	let active = false;
 	let lifecycleGeneration = 0;
 	const activate = (): (() => void) => {
-		consumeStartPublication.dispose();
-		consumeStartPublication = createRemoteMediaConsumeStartPublication();
 		active = true;
 		const generation = ++lifecycleGeneration;
 		return () => {
 			if (!active || generation !== lifecycleGeneration) return;
 			active = false;
-			consumeStartPublication.dispose();
 		};
 	};
 	const getExternalStreamTrackPresence = (): TExternalStreamTrackPresence => {
@@ -62,20 +54,22 @@ const createRemoteMediaIntegration = (getInputs: () => TRemoteMediaIntegrationIn
 	): Promise<boolean> => {
 		if (!active || signal.aborted) return Promise.resolve(false);
 		const generation = lifecycleGeneration;
-		const publication = consumeStartPublication.wait(
-			{ remoteId, kind, expectedProducerId: producerId },
-			consumeGeneration,
-			signal,
-		);
+
 		getInputs().markConsumeStarted(remoteId, kind, producerId, consumeGeneration, isManualRetry);
-		return publication.then((published) => published && active && generation === lifecycleGeneration);
+		return Promise.resolve(
+			isRemoteConsumeStartCurrent(
+				getInputs().ledgerStore.getSnapshot(),
+				{ remoteId, kind, expectedProducerId: producerId },
+				consumeGeneration,
+			) &&
+				active &&
+				generation === lifecycleGeneration,
+		);
 	};
-	const reconcileConsumeStarts = (subscriptions = getInputs().remoteMediaSubscriptions): void => {
-		if (active) consumeStartPublication.reconcile(subscriptions);
-	};
+
 	const isRemoteMediaProducerCurrent = (remoteId: number, kind: StreamKind, producerId: string): boolean => {
 		if (!active) return false;
-		const subscription = getInputs().remoteMediaSubscriptions.get(getPendingStreamKey(remoteId, kind));
+		const subscription = getInputs().ledgerStore.getSnapshot().get(getPendingStreamKey(remoteId, kind));
 		return (
 			subscription?.producerPresent === true &&
 			(subscription.producerId === undefined || subscription.producerId === producerId)
@@ -84,7 +78,7 @@ const createRemoteMediaIntegration = (getInputs: () => TRemoteMediaIntegrationIn
 	const isRemoteMediaRepairIdentityCurrent = (identity: TRemoteMediaRepairIdentity): boolean => {
 		if (!active) return false;
 		const inputs = getInputs();
-		const subscription = inputs.remoteMediaSubscriptions.get(identity.key);
+		const subscription = inputs.ledgerStore.getSnapshot().get(identity.key);
 		return (
 			inputs.currentVoiceChannelId === identity.channelId &&
 			subscription?.producerPresent === true &&
@@ -94,11 +88,11 @@ const createRemoteMediaIntegration = (getInputs: () => TRemoteMediaIntegrationIn
 		);
 	};
 	const getPendingStreamProducerId = (remoteId: number, kind: StreamKind): string | undefined =>
-		getInputs().pendingStreams.get(getPendingStreamKey(remoteId, kind))?.producerId;
+		getInputs().ledgerStore.getPendingStreams().get(getPendingStreamKey(remoteId, kind))?.producerId;
 	const captureWatchedRemoteStreams = (): TWatchedRemoteStreamsSnapshot => {
 		const remoteUserStreams: Record<number, StreamKind[]> = {};
 		const externalStreams: Record<number, TWatchedExternalStreamsSnapshot> = {};
-		for (const subscription of getInputs().remoteMediaSubscriptions.values()) {
+		for (const subscription of getInputs().ledgerStore.getSnapshot().values()) {
 			if (!subscription.desired || subscription.kind === StreamKind.AUDIO) continue;
 			if (
 				subscription.kind === StreamKind.VIDEO ||
@@ -148,7 +142,8 @@ const createRemoteMediaIntegration = (getInputs: () => TRemoteMediaIntegrationIn
 				if (
 					trackPresent &&
 					!activeTrack &&
-					(!inputs.pendingStreams.has(key) || inputs.remoteMediaSubscriptions.get(key)?.desired === true)
+					(!inputs.ledgerStore.getPendingStreams().has(key) ||
+						inputs.ledgerStore.getSnapshot().get(key)?.desired === true)
 				) {
 					inputs.addPendingStream(remoteId, kind, undefined, tracks);
 				}
@@ -158,7 +153,6 @@ const createRemoteMediaIntegration = (getInputs: () => TRemoteMediaIntegrationIn
 	return {
 		activate,
 		publishRemoteMediaConsumeStarted,
-		reconcileConsumeStarts,
 		isRemoteMediaProducerCurrent,
 		isRemoteMediaRepairIdentityCurrent,
 		getPendingStreamProducerId,
