@@ -51,7 +51,7 @@ const ServerReconnectStatus = memo(() => {
 				</div>
 				<div className="min-w-0 flex-1">
 					<p className="truncate text-sm font-semibold text-foreground">{title}</p>
-					<p className="truncate text-xs text-warning/90">{detail}</p>
+					<p className="text-xs text-warning/90">{detail}</p>
 				</div>
 			</div>
 		</div>
