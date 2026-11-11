@@ -2,7 +2,11 @@ import { sanitizeDiagnosticRecord, type TDiagnosticBatch, type TDiagnosticRecord
 import type { telemetryHealth } from './health';
 
 type TAccepted = {
-	record: TDiagnosticRecord;
+	record: TDiagnosticRecord & {
+		originalOccurredAt?: number;
+		clockSkewMs?: number;
+		clockSkewCorrected?: boolean;
+	};
 	reporterUserId: number;
 	clientSessionId: string;
 	droppedEvents: number;
@@ -51,15 +55,15 @@ export const createDiagnosticIngest = (deps: {
 		accept: (batch: TDiagnosticBatch, userId: number) => {
 			const receivedAt = now();
 			for (const [key, expiresAt] of seen) if (expiresAt <= receivedAt) seen.delete(key);
+			// Shift the entire batch together so relative event and breadcrumb times survive.
+			const offset = Math.max(...batch.records.map((record) => record.occurredAt)) - receivedAt;
+			const clockSkewMs = offset > 60_000 ? offset : 0;
+			if (clockSkewMs) count('diagnostic_clock_skew_corrected_batches');
 			for (const record of batch.records) {
 				const key = `${userId}:${batch.clientSessionId}:${record.id}`;
 				if (seen.has(key)) continue;
-				if (receivedAt - record.occurredAt > 300_000) {
+				if (receivedAt - (record.occurredAt - clockSkewMs) > 300_000) {
 					count('diagnostic_stale');
-					continue;
-				}
-				if (record.occurredAt - receivedAt > 60_000) {
-					count('diagnostic_future');
 					continue;
 				}
 				if (queue.length >= 256) {
@@ -72,8 +76,25 @@ export const createDiagnosticIngest = (deps: {
 					if (oldest !== undefined) seen.delete(oldest);
 				}
 				seen.set(key, receivedAt + 300_000);
+				const sanitized = sanitizeDiagnosticRecord(record);
 				queue.push({
-					record: sanitizeDiagnosticRecord(record),
+					record: {
+						...sanitized,
+						...(clockSkewMs
+							? {
+									occurredAt: record.occurredAt - clockSkewMs,
+									originalOccurredAt: record.occurredAt,
+									clockSkewMs,
+									clockSkewCorrected: true,
+									breadcrumbs: sanitized.breadcrumbs?.flatMap((breadcrumb) => {
+										const occurredAt = breadcrumb.occurredAt - clockSkewMs;
+										return Number.isFinite(occurredAt) && occurredAt >= 0 && occurredAt <= 8_640_000_000_000_000
+											? [{ ...breadcrumb, occurredAt }]
+											: [];
+									}),
+								}
+							: {}),
+					},
 					reporterUserId: userId,
 					clientSessionId: batch.clientSessionId,
 					droppedEvents: batch.droppedEvents,

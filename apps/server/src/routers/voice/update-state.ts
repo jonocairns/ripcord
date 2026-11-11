@@ -1,5 +1,6 @@
 import { ChannelPermission, Permission, ServerEvents } from '@sharkord/shared';
 import { z } from 'zod';
+import { logger } from '../../logger';
 import { VoiceRuntime } from '../../runtimes/voice';
 import { protectedProcedure } from '../../utils/trpc';
 import { publishVoiceSidebarEvent } from '../../utils/voice-sidebar-events';
@@ -30,7 +31,16 @@ const updateVoiceStateRoute = protectedProcedure
 		const canUseWebcam = can(ChannelPermission.WEBCAM);
 		const canShareScreen = can(ChannelPermission.SHARE_SCREEN);
 
-		if (!canSpeak) {
+		if (!canSpeak && validatedInput.micMuted !== undefined) {
+			logger.info({
+				message: 'Voice mute update stripped by permission',
+				callSite: 'updateState',
+				userId: ctx.user.id,
+				channelId,
+				seq,
+				clientInstanceId: ctx.getClientInstanceId(),
+				requestedMicMuted: validatedInput.micMuted,
+			});
 			delete validatedInput.micMuted;
 		}
 
@@ -42,7 +52,11 @@ const updateVoiceStateRoute = protectedProcedure
 			delete validatedInput.sharingScreen;
 		}
 
-		const applied = runtime.applyClientVoiceStateUpdate(ctx.user.id, validatedInput, seq);
+		const applied = runtime.applyClientVoiceStateUpdate(ctx.user.id, validatedInput, seq, {
+			clientInstanceId: ctx.getClientInstanceId(),
+			requestedMicMuted: input.micMuted,
+			requestedSoundMuted: input.soundMuted,
+		});
 
 		if (!applied) {
 			return;

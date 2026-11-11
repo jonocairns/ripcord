@@ -49,7 +49,7 @@ describe('server diagnostic acceptance', () => {
 		ingest.flush();
 		expect(errors).toHaveLength(2);
 	});
-	test('bounds pending memory, rejects expired/future records and contains both sink failures', () => {
+	test('bounds pending memory, rejects expired records, corrects future records and contains both sink failures', () => {
 		let calls = 0;
 		const ingest = createDiagnosticIngest({
 			now: () => 400_000,
@@ -64,7 +64,8 @@ describe('server diagnostic acceptance', () => {
 		ingest.accept(batch(0), 1);
 		ingest.accept(batch(500_000), 1);
 		ingest.flush();
-		expect(calls).toBe(0);
+		expect(calls).toBe(1);
+		calls = 0;
 		for (let i = 0; i < 300; i++) ingest.accept(batch(400_000), 1);
 		expect(() => ingest.flush()).not.toThrow();
 		expect(calls).toBe(256);
@@ -171,7 +172,14 @@ test('counts known loss boundaries without counting acknowledgement retries as n
 	ingest.accept(accepted, 1);
 	ingest.accept(accepted, 1);
 	ingest.flush();
-	expect(counts).toEqual(['diagnostic_stale', 'diagnostic_future', 'diagnostic_log_failure', 'error_adapter_failure']);
+	expect(counts).toEqual([
+		'diagnostic_stale',
+		'diagnostic_clock_skew_corrected_batches',
+		'diagnostic_log_failure',
+		'error_adapter_failure',
+		'diagnostic_log_failure',
+		'error_adapter_failure',
+	]);
 	for (let i = 0; i < 257; i++) ingest.accept(batch(now), 1);
 	now += 30_001;
 	ingest.flush();

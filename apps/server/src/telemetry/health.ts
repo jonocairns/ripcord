@@ -1,7 +1,7 @@
 // Fixed reason codes only: no user/session/provider/error text becomes a label.
 type TTelemetryHealthReason =
 	| 'diagnostic_stale'
-	| 'diagnostic_future'
+	| 'diagnostic_clock_skew_corrected_batches'
 	| 'diagnostic_queue_full'
 	| 'diagnostic_queue_expired'
 	| 'diagnostic_log_failure'
