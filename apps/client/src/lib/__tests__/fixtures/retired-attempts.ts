@@ -639,10 +639,10 @@ if (mode && newModes.includes(mode)) {
 			const phase = trpc.getServerConnectionState().phase;
 			assert.equal(phase.name, 'recovering');
 			trpc.reconnectTRPC('first');
-			assert.deepEqual(
+			assert.strictEqual(
 				trpc.getServerConnectionState().phase,
 				phase,
-				'a client replacement keeps recovering and its since',
+				'a client replacement keeps the same recovering phase',
 			);
 			const beforeUnsubscribe = calls;
 			unsubscribe();
