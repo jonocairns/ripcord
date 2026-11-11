@@ -41,16 +41,25 @@ for (const replacementJoinFails of [false, true]) {
 		const watcher = await createPeer(browser, credentialsFor(testInfo, 'watcher'));
 		const producer = await createPeer(browser, credentialsFor(testInfo, 'producer'));
 		let holdHandshake = false;
-		const heldHandshakes: (() => void)[] = [];
+		let routedSockets = 0;
+		// The newest routed socket the helper's injected fault closed.
+		let faultedSocket = 0;
+		const heldHandshakes: { socket: number; release: () => void }[] = [];
 		await producer.page.routeWebSocket(
 			(url) => url.port === '4991',
 			(socket) => {
+				routedSockets += 1;
+				const socketNumber = routedSockets;
 				const server = socket.connectToServer();
+				socket.onClose((code, reason) => {
+					if (reason === 'Playwright connection fault') faultedSocket = Math.max(faultedSocket, socketNumber);
+					void server.close({ code, reason });
+				});
 				socket.onMessage((message) => {
 					// Hold re-authentication on the second replacement socket so the
 					// leave deterministically happens before joinServer can complete.
 					if (holdHandshake && typeof message === 'string' && message.includes('"others.handshake"')) {
-						heldHandshakes.push(() => server.send(message));
+						heldHandshakes.push({ socket: socketNumber, release: () => server.send(message) });
 					} else {
 						server.send(message);
 					}
@@ -71,8 +80,13 @@ for (const replacementJoinFails of [false, true]) {
 				.poll(async () => (await readVoiceServerEvents()).filter((event) => event.event === 'attempt').length)
 				.toBeGreaterThan(previousAttempts);
 			holdHandshake = true;
+			const faultedBeforeDrop = faultedSocket;
 			await dropAppWebSocket(producer.page, { waitForReconnect: false });
-			await expect.poll(() => heldHandshakes.length).toBeGreaterThan(0);
+			// The helper waits for an open socket, so the socket it closed may already have had its
+			// handshake held. Wait for a handshake from a socket opened after that one.
+			await expect.poll(() => faultedSocket).toBeGreaterThan(faultedBeforeDrop);
+			const droppedSocket = faultedSocket;
+			await expect.poll(() => heldHandshakes.some(({ socket }) => socket > droppedSocket)).toBe(true);
 			await producer.page.getByTitle('Leave voice', { exact: true }).click();
 			await expect(producer.page.getByTitle('Leave voice', { exact: true })).toHaveCount(0);
 			await expect.poll(async () => (await pcStats(producer.page)).liveOutboundVideoTracks).toBe(0);
@@ -89,7 +103,7 @@ for (const replacementJoinFails of [false, true]) {
 				});
 			}
 			holdHandshake = false;
-			for (const release of heldHandshakes.splice(0)) release();
+			for (const { release } of heldHandshakes.splice(0)) release();
 			if (replacementJoinFails) {
 				const kind = await producer.page.evaluate(async () => {
 					const result: unknown = await Reflect.get(window, '__ripcordE2eReplacementJoin');
@@ -110,7 +124,7 @@ for (const replacementJoinFails of [false, true]) {
 			await expect.poll(async () => (await voiceMembership(watcher.page)).memberIds).toContain(ownUserId);
 		} finally {
 			holdHandshake = false;
-			for (const release of heldHandshakes.splice(0)) release();
+			for (const { release } of heldHandshakes.splice(0)) release();
 			await disposePeer(producer);
 			await disposePeer(watcher);
 		}
