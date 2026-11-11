@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.5.9](https://github.com/jonocairns/ripcord/compare/v2.5.8...v2.5.9) (2026-11-11)
+
+
+### Bug Fixes
+
+* **desktop:** authenticate the app audio stream between the capture helper and the app ([#389](https://github.com/jonocairns/ripcord/issues/389)) ([8e98f3a](https://github.com/jonocairns/ripcord/commit/8e98f3afa298b551d375744d8db1994a7feca4ab))
+* show private channels to a new owner as soon as the secret token is used ([#416](https://github.com/jonocairns/ripcord/issues/416)) ([cb3b0b3](https://github.com/jonocairns/ripcord/commit/cb3b0b33650e1a55e4dd12c09cb9d4dc0a5f9354))
+
 ## [2.5.8](https://github.com/jonocairns/ripcord/compare/v2.5.7...v2.5.8) (2026-11-10)
 
 
