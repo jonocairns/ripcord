@@ -62,3 +62,10 @@ channel, calls the app's own tRPC client through `helpers/trpc.ts` with that use
 Run it on unmodified main first: the `getByRole('status').filter({ hasText: 'Reconnecting...' })` visibility assertion
 must fail there. Then run it on the branch, followed serially by `text-chat-reconnect`, `reconnect`,
 `server-unreachable`, and `session-conflict`. The sidebar drawer must be open below 768 px; that limitation is accepted.
+
+Unresolved online recovery reaches the disconnect screen 45 seconds after the first detected socket drop.
+Socket opens and client replacements preserve that deadline until authenticated readiness.
+The server-unreachable and replaced-connection waits exceed 45 seconds intentionally (60 seconds).
+The server-unreachable duration assertion measures a detected close, not half-open keep-alive detection.
+Its stalled-handshake case forwards heartbeats and holds only the rejoin handshake.
+A final failed silent rejoin (#408) still tears down immediately; its default five-second assertion stays unchanged.

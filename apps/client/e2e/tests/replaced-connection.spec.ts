@@ -66,7 +66,7 @@ test('a connection replaced after the disconnect screen is closed and Leave voic
 			await expectMicrophoneFlow(watcher.page, 'inbound');
 
 			await fault.cut();
-			await expect(page.getByText('Connection lost', { exact: true })).toBeVisible({ timeout: 45_000 });
+			await expect(page.getByText('Connection lost', { exact: true })).toBeVisible({ timeout: 60_000 });
 			expect(await page.evaluate(() => navigator.onLine)).toBe(true);
 			// Retired CONNECTING handlers may remain held until released to finish close.
 			// Release the newest (disconnect-screen) attempt, preserving older handlers.

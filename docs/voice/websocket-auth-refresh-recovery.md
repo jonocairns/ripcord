@@ -91,3 +91,32 @@ The scenario should also assert that there is no duplicate server join, no
 unbounded refresh loop, and no page error from teardown-time voice activity.
 Focused unit coverage should prove callback transfer and revocation across
 controlled replacement, terminal cleanup, and stale generations.
+
+
+## Application disconnect deadline
+
+An authenticated session has one 45-second deadline from its first detected drop,
+measured with the recovering phase's monotonic `since`. Repeated closes shrink the
+remaining budget; socket opens, stalled rejoins and token-refresh client replacements
+preserve the deadline. Replacement also preserves any pending online listener.
+Only authenticated readiness clears the recovery timer, except that a rejoin requiring
+`mustChangePassword` ends recovery so the forced-password form remains usable.
+A join completed on a closing socket without authenticated readiness keeps the timer.
+
+A final recoverable rejoin failure (#408) tears down immediately and keeps voice intent.
+Server-password exits, terminal credentials errors, kick, ban and logout retain their
+immediate cleanup behavior. Never-authenticated connections retain their separate
+20-second grace, restarted by closes and cancelled by an open socket.
+
+Offline expiry keeps the original deadline and defers teardown, installing a one-shot
+online listener and a 20-second recheck. Returning online after the deadline tears down
+immediately, even after replacement or on an open stalled socket; it does not start an
+old rejoin. The recheck covers online changes without an event. Authentication or cleanup
+before the online event prevents a later teardown. Deadline teardown keeps voice intent
+and recorded disconnect details, so the disconnect screen's immediate retry can recover.
+The old leftover-timer teardown of an already authenticated first connect is removed.
+
+The nominal 15-second difference from the 60-second voice windows is not guaranteed:
+the intent, server grace and client deadline begin at different moments, and offline
+periods and subsequent media setup may outlast them. The separate callback ownership
+gap described above remains deferred; replacement no longer loses the disconnect deadline.

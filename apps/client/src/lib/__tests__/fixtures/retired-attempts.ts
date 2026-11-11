@@ -34,11 +34,22 @@ mock.module('@/lib/session-authentication-gate', () => ({
 		};
 	},
 }));
+let now = 0;
+Object.defineProperty(performance, 'now', { value: () => now });
+let captureShortTimers = false;
+const capturing = (step: () => void) => {
+	captureShortTimers = true;
+	try {
+		step();
+	} finally {
+		captureShortTimers = false;
+	}
+};
 const nativeSetTimeout = globalThis.setTimeout;
 const nativeClearTimeout = globalThis.clearTimeout;
 const timers = new Map<unknown, { callback: () => void; live: boolean }>();
 globalThis.setTimeout = Object.assign((callback: TimerHandler, delay?: number) => {
-	if ((delay ?? 0) < 1000) return nativeSetTimeout(callback, delay);
+	if (!captureShortTimers && (delay ?? 0) < 1000) return nativeSetTimeout(callback, delay);
 	assert.equal(typeof callback, 'function');
 	const id = nativeSetTimeout(() => {}, 0);
 	timers.set(id, {
@@ -267,12 +278,39 @@ Object.assign(globalThis, {
 	},
 	WebSocket: { OPEN: 1 },
 });
+const { createConnectionStore: realConnectionStore, ...connectionExports } = await import('../../connection-state');
+let readConnectionState: (() => import('../../connection-state').TConnectionState) | undefined;
+mock.module('@/lib/connection-state', () => ({
+	...connectionExports,
+	createConnectionStore: () => {
+		const store = realConnectionStore();
+		readConnectionState = store.getState;
+		return store;
+	},
+}));
 const trpc = await import('../../trpc');
 const actions = await import('../../../features/server/actions');
 const mode = process.argv[2];
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 const newModes = [
 	'read-connection-state',
+	'deadline-stalled-join',
+	'deadline-replacement',
+	'deadline-must-change-password',
+	'deadline-join-on-closing-socket',
+	'deadline-budget',
+	'deadline-authenticated-clears',
+	'deadline-cleanup-clears',
+	'deadline-lastdrop-isolation',
+	'deadline-offline-online-open',
+	'deadline-offline-online-closed',
+	'deadline-offline-replace-online-closed',
+	'deadline-offline-replace-online-open',
+	'deadline-offline-replace-authenticated',
+	'deadline-offline-replace-cleanup',
+	'deadline-offline',
+	'deadline-wasconnected-false',
+
 	'trace-connect',
 	'trace-drop-resume',
 	'trace-drop-resume-voice',
@@ -333,13 +371,12 @@ const literalTraces: Record<string, string[]> = {
 		'stopClientTracing',
 		'markVoiceReconnectSessionUnauthenticated',
 		'captureVoiceReconnectIntentForCurrentSession',
-		'timer:arm:20000',
+		'timer:arm:45000',
 		'recordDesktopDiagnostic:websocket_opened:reconnecting=true',
 		'pauseStreamObservability',
 		'pauseDiagnosticDelivery',
 		'stopClientTracing',
 		'gate:invalidate',
-		'timer:clear',
 		'logDebug',
 		'handshake',
 		'join',
@@ -356,6 +393,7 @@ const literalTraces: Record<string, string[]> = {
 		'setPluginCommands',
 		'flushReconnectSnapshotEventBuffer',
 		'nonce',
+		'timer:clear',
 		'gate:authenticate',
 		'markVoiceReconnectSessionAuthenticated',
 		'authenticateStreamObservability',
@@ -373,13 +411,12 @@ const literalTraces: Record<string, string[]> = {
 		'markVoiceReconnectSessionUnauthenticated',
 		'captureVoiceReconnectIntentForCurrentSession',
 		'ensureVoiceReconnectStarted',
-		'timer:arm:20000',
+		'timer:arm:45000',
 		'recordDesktopDiagnostic:websocket_opened:reconnecting=true',
 		'pauseStreamObservability',
 		'pauseDiagnosticDelivery',
 		'stopClientTracing',
 		'gate:invalidate',
-		'timer:clear',
 		'logDebug',
 		'handshake',
 		'join',
@@ -396,6 +433,7 @@ const literalTraces: Record<string, string[]> = {
 		'setPluginCommands',
 		'flushReconnectSnapshotEventBuffer',
 		'nonce',
+		'timer:clear',
 		'gate:authenticate',
 		'markVoiceReconnectSessionAuthenticated',
 		'authenticateStreamObservability',
@@ -517,6 +555,7 @@ const literalTraces: Record<string, string[]> = {
 		'stopClientTracing',
 		'setErrorReportingIdentity',
 		'gate:cancel',
+		'timer:clear',
 		'close',
 		'resetServerScreens',
 		'reset',
@@ -526,8 +565,6 @@ const literalTraces: Record<string, string[]> = {
 		'disconnectInfo:1006',
 	],
 	'trace-replace-pending': [
-		'listener:remove:online',
-		'timer:clear',
 		'close',
 		'pauseStreamObservability',
 		'pauseDiagnosticDelivery',
@@ -585,12 +622,211 @@ if (mode && newModes.includes(mode)) {
 		await tick();
 		assert.equal(settled, false);
 	};
+
+	if (mode.startsWith('deadline-')) {
+		const assertTornDown = (code: number) => {
+			assert.equal(trpc.getTRPCClientIfInitialized(), null);
+			assert.equal(disconnectInfo?.code, code);
+			assert.equal(liveTimers().length, 0);
+			assert.equal(listeners.size, 0);
+			assert.ok(!trace.some((entry) => entry.startsWith('clearVoiceReconnectRecovery')));
+		};
+		const arm = async (code = 4013) => {
+			await actions.connect();
+			now = 1000;
+			holdHandshake = true;
+			capturing(() => drop(socketAt(sockets.length - 1), code));
+		};
+		await arm();
+		let socket = socketAt(0);
+		if (mode === 'deadline-budget') {
+			assert.equal(trace.at(-1), 'timer:arm:45000');
+			now = 11000;
+			let start = trace.length;
+			reopen(socket);
+			assert.ok(!trace.slice(start).includes('timer:clear'));
+			assert.equal(liveTimers().length, 1);
+			capturing(() => drop(socket));
+			assert.deepEqual(
+				trace.slice(start).filter((entry) => entry.startsWith('timer:')),
+				['timer:clear', 'timer:arm:35000'],
+			);
+			now = 21000;
+			start = trace.length;
+			trpc.reconnectTRPC('first');
+			assert.ok(!trace.slice(start).includes('timer:clear'));
+			assert.equal(liveTimers().length, 1);
+			socket = socketAt(1);
+			now = 31000;
+			reopen(socket);
+			capturing(() => drop(socket));
+			assert.equal(trace.at(-1), 'timer:arm:15000');
+			now = 45500;
+			capturing(() => drop(socket));
+			assert.equal(trace.at(-1), 'timer:arm:500');
+			now = 46500;
+			capturing(() => drop(socket));
+			assert.equal(trace.at(-1), 'timer:arm:0');
+			capturing(fireTimer);
+			assertTornDown(1006);
+		} else if (mode === 'deadline-offline-replace-authenticated') {
+			reopen(socket);
+			handshake.reject(new MockTRPCClientError('expired', { code: 'UNAUTHORIZED' }));
+			await tick();
+			online = false;
+			now = 46000;
+			capturing(fireTimer);
+			assert.equal(listeners.size, 1);
+			holdHandshake = false;
+			refresh.resolve(true);
+			await tick();
+			assert.equal(liveTimers().length, 0);
+			assert.equal(readConnectionState?.().phase.name, 'ready');
+			now = 48000;
+			online = true;
+			const start = trace.length;
+			capturing(fireOnline);
+			assert.ok(trpc.getTRPCClientIfInitialized());
+			assert.equal(disconnectInfo, undefined);
+			assert.equal(readConnectionState?.().phase.name, 'ready');
+			assert.ok(!trace.slice(start).includes('handshake'));
+		} else if (mode.startsWith('deadline-offline-replace-')) {
+			online = false;
+			now = 46000;
+			capturing(fireTimer);
+			assert.equal(trace.at(-2), 'timer:arm:20000');
+			assert.equal(listeners.size, 1);
+			assert.deepEqual(readConnectionState?.().phase, { name: 'recovering', since: 1000 });
+			now = 47000;
+			const start = trace.length;
+			trpc.reconnectTRPC('first');
+			assert.ok(!trace.slice(start).includes('listener:remove:online'));
+			assert.ok(!trace.slice(start).includes('timer:clear'));
+			assert.equal(liveTimers().length, 1);
+			assert.equal(listeners.size, 1);
+			assert.deepEqual(readConnectionState?.().phase, { name: 'recovering', since: 1000 });
+			socket = socketAt(1);
+			if (mode === 'deadline-offline-replace-cleanup') {
+				trpc.cleanup();
+				assert.equal(liveTimers().length, 0);
+				assert.equal(listeners.size, 0);
+				const end = trace.length;
+				online = true;
+				capturing(fireOnline);
+				assert.equal(trace.length, end);
+			} else {
+				if (mode.endsWith('-open')) {
+					now = 47500;
+					const before = trace.length;
+					socket.onOpen();
+					assert.ok(!trace.slice(before).some((entry) => entry.startsWith('listener:') || entry === 'handshake'));
+				} else socket.connection.ws.readyState = 3;
+				now = 48000;
+				online = true;
+				const before = trace.length;
+				capturing(fireOnline);
+				assertTornDown(4013);
+				assert.ok(!trace.slice(before).some((entry) => ['timer:fire', 'handshake', 'join'].includes(entry)));
+			}
+		} else if (mode === 'deadline-lastdrop-isolation') {
+			// Recover one session, then expire another, then defer a third offline.
+			holdHandshake = false;
+			reopen(socket);
+			await tick();
+			assert.equal(liveTimers().length, 0);
+			capturing(() => drop(socket, 4002));
+			capturing(fireTimer);
+			assertTornDown(4002);
+			await actions.connect();
+			socket = socketAt(sockets.length - 1);
+			holdHandshake = true;
+			now = 1000;
+			capturing(() => drop(socket, 4003));
+			online = false;
+			reopen(socket);
+			now = 46000;
+			capturing(fireTimer);
+			online = true;
+			capturing(fireOnline);
+			assertTornDown(4003);
+		} else if (mode.startsWith('deadline-offline')) {
+			online = false;
+			if (mode.endsWith('-open')) reopen(socket);
+			now = 46000;
+			capturing(fireTimer);
+			assert.equal(liveTimers().length, 1);
+			assert.equal(listeners.size, 1);
+			assert.ok(trpc.getTRPCClientIfInitialized());
+			online = true;
+			now = 46500;
+			const before = trace.length;
+			if (mode === 'deadline-offline') capturing(fireTimer);
+			else capturing(fireOnline);
+			assertTornDown(4013);
+			assert.ok(!trace.slice(before).includes('handshake'));
+		} else if (mode === 'deadline-replacement') {
+			reopen(socket);
+			handshake.reject(new MockTRPCClientError('expired', { code: 'UNAUTHORIZED' }));
+			await tick();
+			handshake = deferred<{ hasPassword: boolean; handshakeHash: string }>();
+			refresh.resolve(true);
+			await tick();
+			assert.equal(sockets.length, 2);
+			assert.equal(liveTimers().length, 1);
+			capturing(fireTimer);
+			assertTornDown(4013);
+		} else if (mode === 'deadline-wasconnected-false') {
+			state.connected = false;
+			capturing(() => drop(socket, 4014));
+			const before = trace.length;
+			capturing(fireTimer);
+			assertTornDown(4014);
+			assert.ok(!trace.slice(before).includes('playSound'));
+		} else {
+			if (mode === 'deadline-cleanup-clears') online = false;
+			reopen(socket);
+			assert.equal(liveTimers().length, 1);
+			if (mode === 'deadline-stalled-join') {
+				capturing(fireTimer);
+				assertTornDown(4013);
+			} else if (mode === 'deadline-cleanup-clears') {
+				trpc.cleanup();
+				assert.equal(liveTimers().length, 0);
+				assert.equal(listeners.size, 0);
+			} else {
+				mustChangePassword = mode === 'deadline-must-change-password';
+				if (mode === 'deadline-join-on-closing-socket') socket.connection.ws.readyState = 2;
+				const before = trace.length;
+				handshake.resolve({ hasPassword: false, handshakeHash: 'hash' });
+				await tick();
+				if (mode === 'deadline-join-on-closing-socket') {
+					assert.equal(liveTimers().length, 1);
+					capturing(fireTimer);
+					assertTornDown(4013);
+				} else {
+					assert.equal(liveTimers().length, 0);
+					assert.equal(trace.slice(before).filter((entry) => entry === 'timer:clear').length, 1);
+					assert.ok(trpc.getTRPCClientIfInitialized());
+					assert.equal(disconnectInfo, undefined);
+				}
+			}
+		}
+		process.exit(0);
+	}
 	let start = 0;
-	if (mode === 'first-connect-drop' || mode.startsWith('edge-c-')) {
+	if (mode === 'first-connect-drop' || mode === 'grace-rearm' || mode.startsWith('edge-c-')) {
 		holdHandshake = true;
 		const connecting = actions.connect();
 		drop(socketAt(0));
-		if (mode === 'first-connect-drop') {
+		if (mode === 'first-connect-drop' || mode === 'grace-rearm') {
+			if (mode === 'grace-rearm') {
+				const before = trace.length;
+				drop(socketAt(0));
+				assert.deepEqual(
+					trace.slice(before).filter((entry) => entry.startsWith('timer:')),
+					['timer:clear', 'timer:arm:20000'],
+				);
+			}
 			fireTimer();
 			assert.equal(trpc.getTRPCClientIfInitialized(), null);
 			assert.equal(disconnectInfo?.code, 1006);
@@ -600,19 +836,19 @@ if (mode && newModes.includes(mode)) {
 			handshake.resolve({ hasPassword: false, handshakeHash: 'hash' });
 			await connecting;
 			assert.ok(trace.includes('gate:authenticate'));
-			assert.equal(liveTimers().length, 1);
+			assert.equal(liveTimers().length, 0);
 			assert.equal(listeners.size, 1);
 			online = true;
 			start = trace.length;
 			if (mode === 'edge-c-online') {
 				fireOnline();
 				await tick();
-				assert.ok(trace.slice(start).includes('timer:clear'));
+				assert.ok(!trace.slice(start).includes('timer:clear'));
 				assert.ok(trace.slice(start).includes('handshake'));
 			} else {
-				fireTimer();
-				assert.equal(trpc.getTRPCClientIfInitialized(), null);
-				assert.equal(disconnectInfo?.code, 1006);
+				assert.equal(liveTimers().length, 0);
+				assert.ok(trpc.getTRPCClientIfInitialized());
+				assert.equal(disconnectInfo, undefined);
 			}
 		}
 	} else {
@@ -687,22 +923,12 @@ if (mode && newModes.includes(mode)) {
 			start = trace.length;
 			fireTimer();
 			assert.equal(trpc.getTRPCClientIfInitialized(), null);
-		} else if (mode === 'grace-rearm') {
-			drop(socket);
-			drop(socket, 4013);
-			assert.deepEqual(
-				trace.slice(start).filter((item) => item.startsWith('timer:')),
-				['timer:arm:20000', 'timer:clear', 'timer:arm:20000'],
-			);
-			assert.equal(liveTimers().length, 1);
-			fireTimer();
-			assert.equal(disconnectInfo?.code, 4013);
 		} else if (mode === 'grace-offline') {
 			drop(socket);
 			online = false;
 			start = trace.length;
 			fireTimer();
-			assert.deepEqual(trace.slice(start), ['timer:fire', 'timer:arm:20000']);
+			assert.deepEqual(trace.slice(start), ['timer:fire', 'timer:arm:20000', 'listener:add:online']);
 			assert.ok(trpc.getTRPCClientIfInitialized());
 			assert.equal(liveTimers().length, 1);
 			online = true;
@@ -759,7 +985,7 @@ if (mode && newModes.includes(mode)) {
 				await tick();
 				assert.ok(!trace.slice(start).includes('handshake'));
 				assert.ok(!trace.slice(start).includes('logDebug'));
-				assert.equal(liveTimers().length, 0);
+				assert.equal(liveTimers().length, 1);
 				assert.ok(trpc.getTRPCClientIfInitialized());
 			}
 		} else if (mode === 'gate') {
