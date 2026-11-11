@@ -7,9 +7,10 @@ import { useVoiceSessionSelector } from '@/features/server/voice/voice-session-h
 import { selectReconnectAuthenticated, selectReconnectingSince } from '@/features/server/voice/voice-session-machine';
 import { logVoice } from '@/helpers/browser-logger';
 import { recordStreamEvent } from '@/helpers/stream-observability';
-import { getTRPCClient } from '@/lib/trpc';
+import { captureTRPCAttempt, getTRPCClient } from '@/lib/trpc';
 import type { TRemoteUserStreamKinds } from '@/types';
 import type { TExternalStreamTrackPresence } from './use-pending-streams';
+import { createProducerSyncAfterSubscriptionStart, PRODUCER_SYNC_ACK_FALLBACK_MS } from './voice-event-start-sync';
 import {
 	shouldStartProtectedVoiceEventSubscriptions,
 	shouldSyncExistingProducersAfterVoiceEventSubscriptionStart,
@@ -93,6 +94,7 @@ const useVoiceEvents = ({
 		}
 
 		const trpc = getTRPCClient();
+		const isCurrentClient = captureTRPCAttempt();
 
 		let isCleaningUp = false;
 		let producerRepairSyncTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -137,7 +139,47 @@ const useVoiceEvents = ({
 			}, VOICE_EVENT_PRODUCER_SYNC_DEBOUNCE_MS);
 		};
 
+		const capabilities = rtpCapabilities;
+		const startSync =
+			capabilities && shouldSyncExistingProducersAfterVoiceEventSubscriptionStart(reconnectingSince)
+				? createProducerSyncAfterSubscriptionStart({
+						isCurrentClient,
+						fallbackMs: PRODUCER_SYNC_ACK_FALLBACK_MS,
+						schedule: (callback, delayMs) => {
+							const handle = setTimeout(callback, delayMs);
+							return () => clearTimeout(handle);
+						},
+						sync: (reason) => {
+							if (isCleaningUp) return;
+							if (reason === 'acknowledged') {
+								logVoice('Syncing existing producers after voice event subscription start', {
+									channelId: currentVoiceChannelId,
+								});
+							} else {
+								logVoice('Syncing existing producers without a subscription acknowledgement', {
+									channelId: currentVoiceChannelId,
+									fallbackMs: PRODUCER_SYNC_ACK_FALLBACK_MS,
+								});
+							}
+							void syncExistingProducers(capabilities).catch((error) => {
+								if (isCleaningUp) {
+									return;
+								}
+
+								logVoice('Failed to sync existing producers after voice event subscription start', {
+									error,
+									channelId: currentVoiceChannelId,
+								});
+							});
+						},
+					})
+				: undefined;
+
 		const onVoiceNewProducerSub = trpc.voice.onNewProducer.subscribe(undefined, {
+			onStarted: () => startSync?.markStarted('newProducer'),
+			onConnectionStateChange: () => startSync?.markConnectionChanged(),
+			onComplete: () => startSync?.markEnded(),
+			onStopped: () => startSync?.markEnded(),
 			onData: ({ remoteId, kind, channelId, producerId }) => {
 				if (currentVoiceChannelId !== channelId || isCleaningUp) return;
 
@@ -162,11 +204,16 @@ const useVoiceEvents = ({
 				addPendingStream(remoteId, kind, producerId, getExternalStreamTrackPresence());
 			},
 			onError: (error) => {
+				startSync?.markEnded();
 				scheduleProducerRepairSync('onVoiceNewProducer', error);
 			},
 		});
 
 		const onVoiceProducerClosedSub = trpc.voice.onProducerClosed.subscribe(undefined, {
+			onStarted: () => startSync?.markStarted('producerClosed'),
+			onConnectionStateChange: () => startSync?.markConnectionChanged(),
+			onComplete: () => startSync?.markEnded(),
+			onStopped: () => startSync?.markEnded(),
 			onData: ({ channelId, remoteId, kind, producerId, recoverable }) => {
 				if (currentVoiceChannelId !== channelId || isCleaningUp) return;
 
@@ -226,6 +273,7 @@ const useVoiceEvents = ({
 				}
 			},
 			onError: (error) => {
+				startSync?.markEnded();
 				scheduleProducerRepairSync('onVoiceProducerClosed', error);
 			},
 		});
@@ -302,23 +350,6 @@ const useVoiceEvents = ({
 			},
 		});
 
-		if (rtpCapabilities && shouldSyncExistingProducersAfterVoiceEventSubscriptionStart(reconnectingSince)) {
-			logVoice('Syncing existing producers after voice event subscription start', {
-				channelId: currentVoiceChannelId,
-			});
-
-			void syncExistingProducers(rtpCapabilities).catch((error) => {
-				if (isCleaningUp) {
-					return;
-				}
-
-				logVoice('Failed to sync existing producers after voice event subscription start', {
-					error,
-					channelId: currentVoiceChannelId,
-				});
-			});
-		}
-
 		if (rtpCapabilities && !shouldSyncExistingProducersAfterVoiceEventSubscriptionStart(reconnectingSince)) {
 			logVoice('Skipping producer sync after voice event subscription start during reconnect recovery', {
 				channelId: currentVoiceChannelId,
@@ -329,6 +360,7 @@ const useVoiceEvents = ({
 			logVoice('Cleaning up voice events');
 
 			isCleaningUp = true;
+			startSync?.dispose();
 
 			if (producerRepairSyncTimeout !== undefined) {
 				clearTimeout(producerRepairSyncTimeout);
