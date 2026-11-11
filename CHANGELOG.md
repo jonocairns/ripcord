@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.6.0](https://github.com/jonocairns/ripcord/compare/v2.5.9...v2.6.0) (2026-11-11)
+
+
+### Features
+
+* show when the app is reconnecting to the server ([#420](https://github.com/jonocairns/ripcord/issues/420)) ([8277fe4](https://github.com/jonocairns/ripcord/commit/8277fe434dc69be08d1ad6aa4c3700d309416923))
+
+
+### Bug Fixes
+
+* show the disconnect screen 45 seconds after the connection is lost ([#422](https://github.com/jonocairns/ripcord/issues/422)) ([b0abf7d](https://github.com/jonocairns/ripcord/commit/b0abf7dd786c0223d7acc6859fea55c5aec55b99))
+* sync voice producers after the event subscriptions have started ([#423](https://github.com/jonocairns/ripcord/issues/423)) ([c93beb7](https://github.com/jonocairns/ripcord/commit/c93beb7d6016db65f1f7827d863c4240fc844ac9))
+
 ## [2.5.9](https://github.com/jonocairns/ripcord/compare/v2.5.8...v2.5.9) (2026-11-11)
 
 
