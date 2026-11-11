@@ -46,6 +46,8 @@ let serverRejoinHandler: (() => void) | null = null;
 let cachedClientInstanceId: string | null = null;
 let deferredWsReconnectOnlineListener: (() => void) | null = null;
 const connection = createConnectionStore();
+const getServerConnectionState = () => connection.getState();
+const subscribeServerConnectionState = (listener: () => void) => connection.subscribe(listener);
 let lastDrop: { code: number; reason: string; wasClean: boolean; wasConnected: boolean } | null = null;
 const sessionAuthentication = createSessionAuthenticationGate();
 
@@ -437,12 +439,14 @@ export {
 	connectToTRPC,
 	debugCloseCurrentWs,
 	disarmServerRejoin,
+	getServerConnectionState,
 	getTRPCClient,
 	getTRPCClientIfInitialized,
 	getWsClientInstanceId,
 	isTRPCSocketOpen,
 	markTRPCSessionAuthenticated,
 	reconnectTRPC,
+	subscribeServerConnectionState,
 	TRPCClientUnavailableError,
 	waitForTRPCSessionAuthentication,
 };

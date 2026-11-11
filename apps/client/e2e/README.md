@@ -56,3 +56,9 @@ client re-signs them after a token rotation. Setup that a user would do through 
 channel, calls the app's own tRPC client through `helpers/trpc.ts` with that user's session.
 
 `replaced-connection.spec.ts` holds reconnect attempts through the disconnect screen, releases the newest connection first, then checks that the retired connection closes and Leave voice removes the producer from the watcher's membership. The socket-count assertion is soft so the server-observed Leave check runs independently. Held counts include historical unreleased handlers from retired sockets; prompt retirement may avoid another server connection entirely. The server-unreachable spec covers both an active and an initially muted microphone. It also bans a connected client and observes five seconds to ensure the retired client stops reconnecting. Run it against unmodified main first: the live-connection count and banned reconnect-count assertions should fail.
+
+`reconnect-indicator.spec.ts` holds replacement sockets for a text-only user and checks that the sidebar shows
+"Reconnecting..." before the disconnect screen, then clears after authenticated rejoin and permits a new message.
+Run it on unmodified main first: the `getByRole('status').filter({ hasText: 'Reconnecting...' })` visibility assertion
+must fail there. Then run it on the branch, followed serially by `text-chat-reconnect`, `reconnect`,
+`server-unreachable`, and `session-conflict`. The sidebar drawer must be open below 768 px; that limitation is accepted.
