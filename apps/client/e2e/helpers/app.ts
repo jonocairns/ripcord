@@ -17,7 +17,7 @@ declare global {
 		__ripcordE2ePeerConnections?: RTCPeerConnection[];
 		__ripcordE2eStats?: () => Promise<PcStats>;
 		__ripcordE2eWebSockets?: WebSocket[];
-		__ripcordE2eCloseAppWebSocket?: () => boolean;
+		__ripcordE2eCloseAppWebSocket?: () => { socketCount: number } | null;
 	}
 }
 
@@ -94,9 +94,9 @@ const WS_HOOK = `
   };
   window.__ripcordE2eCloseAppWebSocket = () => {
     const socket = webSockets.findLast(({ readyState, url }) => readyState === Native.OPEN && !url.includes(':5173'));
-    if (!socket) return false;
+    if (!socket) return null;
     socket.close(4013, 'Playwright connection fault');
-    return true;
+    return { socketCount: webSockets.length };
   };
 })();
 `;
@@ -156,13 +156,22 @@ const waitForStats = async (
 	throw new Error(`Timed out waiting for ${label}. Last WebRTC stats: ${JSON.stringify(lastStats)}`);
 };
 
+// Recovery can briefly leave the page with only a connecting socket (a reconnect in flight, or the
+// app replacing its client), so wait for an open one and close it in the same poll.
 const dropAppWebSocket = async (page: Page, options: { waitForReconnect?: boolean } = {}): Promise<void> => {
-	const socketCount = await page.evaluate(() => window.__ripcordE2eWebSockets?.length ?? 0);
-	const closed = await page.evaluate(() => window.__ripcordE2eCloseAppWebSocket?.() ?? false);
-
-	if (!closed) {
-		throw new Error('No open application WebSocket was available to close');
+	const closed = await page
+		.waitForFunction(() => window.__ripcordE2eCloseAppWebSocket?.() ?? null, undefined, {
+			polling: 100,
+			timeout: 20_000,
+		})
+		.catch((error: unknown) => {
+			throw new Error('No open application WebSocket was available to close', { cause: error });
+		});
+	const result = await closed.jsonValue();
+	if (!result) {
+		throw new Error('The application WebSocket close did not report a socket count');
 	}
+	const { socketCount } = result;
 
 	if (options.waitForReconnect !== false) {
 		await page.waitForFunction(
