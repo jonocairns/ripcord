@@ -1,4 +1,5 @@
 import type { TMicrophoneStartOutcome } from '../microphone/microphone-pipeline-controller';
+import { MicPipelineSupersededError } from '../microphone/microphone-pipeline-controller';
 
 type TTransportRecoveryMicrophoneAction = 'skip' | 'publish-current' | 'start';
 
@@ -21,6 +22,7 @@ type TTransportRecoveryMicrophoneResult =
 type TRecoverTransportMicrophonePorts = {
 	start: (() => Promise<TMicrophoneStartOutcome>) | undefined;
 	publishCurrent: () => Promise<void>;
+	discardCurrent: () => Promise<void>;
 	onStartFailed: (error: unknown) => void;
 };
 
@@ -40,7 +42,7 @@ const resolveTransportRecoveryMicrophoneAction = ({
 		return 'publish-current';
 	}
 
-	if (hasCurrentStream && !micMuted && canSpeak && canStart) {
+	if (!micMuted && canSpeak && canStart) {
 		return 'start';
 	}
 
@@ -62,8 +64,15 @@ const recoverTransportMicrophone = async (
 	}
 
 	if (action === 'publish-current') {
-		await ports.publishCurrent();
-		return 'published-current';
+		try {
+			await ports.publishCurrent();
+			return 'published-current';
+		} catch (error) {
+			if (error instanceof MicPipelineSupersededError) return 'superseded';
+			await ports.discardCurrent();
+			ports.onStartFailed(error);
+			return 'continued-muted';
+		}
 	}
 
 	if (start === undefined) {

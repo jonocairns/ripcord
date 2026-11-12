@@ -61,6 +61,8 @@ type TMicrophonePipelineControllerPorts<
 	onActivityUpdate: (isSpeaking: boolean | undefined, producerId: string | undefined) => void;
 	isInVoiceChannel: () => boolean;
 	isMicMuted: () => boolean;
+	isTransmitGateOpen: () => boolean;
+	onTerminalOutputLoss: () => void;
 	reacquire: (reason: TMicrophoneRecoveryReason) => Promise<TMicrophoneStartOutcome>;
 	onRecoveryExhausted: (reason: TMicrophoneRecoveryReason) => void;
 	onProcessingRuntimeError: (error: Error) => void;
@@ -81,7 +83,7 @@ type TPrepareMicrophonePipelineInput = {
 };
 
 type TPublishMicrophonePipelineInput = {
-	source: TMicrophonePreparedPipeline | 'current';
+	source: TMicrophonePreparedPipeline;
 	isCurrent?: () => boolean;
 };
 
@@ -152,6 +154,18 @@ const createMicrophonePipelineController = <
 	const resetRawRecoveryBudget = (): void => {
 		clearRawRecoveryStabilityTimer();
 		rawRecoveryAttempts = 0;
+	};
+
+	// Reconciler passes can rebuild more than once before a recovery waiter
+	// settles (for example, another unplug during publication). Count each build.
+	const reserveRawRecoveryAttempt = (reason: TMicrophoneRecoveryReason): boolean => {
+		if (rawRecoveryAttempts >= (ports.rawRecoveryMaxAttempts ?? DEFAULT_RAW_RECOVERY_MAX_ATTEMPTS)) {
+			void cleanup();
+			ports.onRecoveryExhausted(reason);
+			return false;
+		}
+		rawRecoveryAttempts += 1;
+		return true;
 	};
 
 	const recover = (reason: TMicrophoneRecoveryReason): Promise<TMicrophoneRecoveryOutcome> => {
@@ -556,6 +570,19 @@ const createMicrophonePipelineController = <
 				outboundAudioTrack,
 			};
 			preparedPipeline = prepared;
+			// Own terminal output loss before publication can await the transport.
+			// Raw passthrough loss belongs to the separate bounded device recovery path.
+			prepared.outboundAudioTrack.onended = () => {
+				if (!owns(prepared) || prepared.outboundStream === rawMicStream) return;
+				log('Audio pipeline output track ended, cleaning up microphone');
+				const draining = cleanup();
+				ports.onTerminalOutputLoss();
+				void draining;
+			};
+			if (outboundAudioTrack.readyState === 'ended' && outboundStream !== rawMicStream) {
+				prepared.outboundAudioTrack.onended.call(outboundAudioTrack, new Event('ended'));
+				throw new MicPipelineSupersededError();
+			}
 
 			return prepared;
 		} catch (error) {
@@ -573,13 +600,9 @@ const createMicrophonePipelineController = <
 		}
 	};
 
-	const resolvePublishSource = (source: TMicrophonePreparedPipeline | 'current'): TMicrophonePreparedPipeline => {
-		const prepared = source === 'current' ? preparedPipeline : source;
-		if (!prepared || !owns(prepared)) {
-			throw new MicPipelineSupersededError();
-		}
-
-		return prepared;
+	const resolvePublishSource = (source: TMicrophonePreparedPipeline): TMicrophonePreparedPipeline => {
+		if (!owns(source)) throw new MicPipelineSupersededError();
+		return source;
 	};
 
 	const publish = async ({ source, isCurrent = () => true }: TPublishMicrophonePipelineInput): Promise<void> => {
@@ -594,7 +617,7 @@ const createMicrophonePipelineController = <
 			localPublication = ports.publishLocalStream(prepared.outboundStream);
 		}
 
-		const micMuted = ports.isMicMuted();
+		const micMuted = !ports.isTransmitGateOpen();
 		prepared.outboundAudioTrack.enabled = !micMuted;
 		processingPipeline?.setInputMuted(micMuted);
 		log('Obtained audio track', { audioTrack: prepared.outboundAudioTrack });
@@ -617,6 +640,8 @@ const createMicrophonePipelineController = <
 			throw new MicPipelineSupersededError();
 		}
 
+		prepared.outboundAudioTrack.enabled = ports.isTransmitGateOpen();
+		processingPipeline?.setInputMuted(!ports.isTransmitGateOpen());
 		localProducer = producer;
 		syncActivity();
 		log('Microphone audio producer created', { producer });
@@ -625,28 +650,9 @@ const createMicrophonePipelineController = <
 			rawRecoveryStabilityTimer = undefined;
 			rawRecoveryAttempts = 0;
 		}, ports.rawRecoveryStabilityMs ?? DEFAULT_RAW_RECOVERY_STABILITY_MS);
-
-		const publishedProducer = producer;
-		prepared.outboundAudioTrack.onended = () => {
-			if (!owns(prepared) || localProducer !== publishedProducer) {
-				return;
-			}
-
-			// The raw track's device-loss listeners own passthrough capture loss.
-			if (prepared.outboundStream === rawMicStream) {
-				return;
-			}
-
-			log('Audio pipeline output track ended, cleaning up microphone');
-			void cleanup();
-		};
 	};
 
 	const setMuted = (muted: boolean): void => {
-		if (!muted) {
-			resetRawRecoveryBudget();
-		}
-
 		preparedPipeline?.outboundStream.getAudioTracks().forEach((track) => {
 			track.enabled = !muted;
 		});
@@ -675,15 +681,17 @@ const createMicrophonePipelineController = <
 		deactivate,
 		createLifecycleLease,
 		recover,
+		reserveRawRecoveryAttempt,
 		prepare,
 		publish,
 		cleanup,
 		owns,
 		setMuted,
+		resetRawRecoveryBudget,
 		setGainVolume,
 		syncActivity,
 		getRawTrack: (): MediaStreamTrack | undefined => rawMicStream?.getAudioTracks()[0],
-		hasGainPipeline: (): boolean => gainPipeline !== undefined,
+		hasLiveProducer: (): boolean => localProducer !== undefined && !ports.isProducerClosed(localProducer),
 	};
 };
 

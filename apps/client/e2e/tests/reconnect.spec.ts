@@ -177,7 +177,8 @@ test('microphone and camera recover after confirmed server grace expiry', async 
 			const afterMic = await expectMicrophoneFlow(page, 'outbound');
 			const afterReceivedMic = await expectMicrophoneFlow(watcher.page, 'inbound');
 			expect(afterMic.peerConnectionIndex).toBeGreaterThan(beforeMic.peerConnectionIndex);
-			expect(afterMic.trackId).not.toBe(beforeMic.trackId);
+			// The new transport republishes the retained local microphone capture.
+			expect(afterMic.trackId).toBe(beforeMic.trackId);
 			expect(afterReceivedMic.trackId).not.toBe(beforeReceivedMic.trackId);
 			await expectOutboundVideoFlow(page, 'camera RTP to resume after confirmed server grace expiry', 45_000);
 			await expect(page.getByTitle('Leave voice')).toBeVisible();

@@ -6,11 +6,12 @@ import { SoundType } from '@/features/server/types';
 import {
 	clearOwnVoiceSessionAfterReconnectFailure,
 	leaveVoiceSessionAfterRecoveryFailure,
+	relayOwnVoiceState,
 	sendOwnVoiceStateUpdate,
 	updateOwnVoiceState,
 } from '@/features/server/voice/actions';
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
-import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
+import { ownMicWantedSelector, ownVoiceSessionPayloadSelector } from '@/features/server/voice/selectors';
 import type { TVoiceSessionExecutorPorts } from '@/features/server/voice/voice-session-command-executor';
 import {
 	dispatchVoiceSession,
@@ -129,7 +130,11 @@ const requestVoiceRestoreOrJoin = async (opts: {
 // timeout and producer-refresh timing. Construction performs no side effects.
 const voiceSessionRuntimeEnvironment = {
 	getServerState: useServerStore.getState,
-	getOwnVoiceState: () => ownVoiceStateSelector(useServerStore.getState()),
+	getOwnVoiceSessionPayload: () => ownVoiceSessionPayloadSelector(useServerStore.getState()),
+	isMicWanted: () => ownMicWantedSelector(useServerStore.getState()),
+	relayOwnVoiceState: () => {
+		void relayOwnVoiceState();
+	},
 	createDevice: () => Device.factory(),
 	requestVoiceRestoreOrJoin,
 	sendOwnVoiceStateUpdate,

@@ -62,10 +62,11 @@ const names = () => effects.map((command) => command.type);
 beforeEach(() => {
 	resetVoiceSessionState();
 	useServerStore.getState().resetState();
+	useServerStore.getState().setOwnVoiceIntent({ micMuted: false, soundMuted: false });
 	useServerStore.setState({
 		ownUserId: 1,
 		currentVoiceChannelId: 5,
-		ownVoiceDefaults: { micMuted: true, soundMuted: false, webcamEnabled: false, sharingScreen: false },
+		ownVoiceIntent: { micMuted: true, soundMuted: false },
 	});
 	ready = false;
 	online = true;

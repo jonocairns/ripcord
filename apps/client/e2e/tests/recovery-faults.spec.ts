@@ -25,6 +25,7 @@ declare global {
 		__ripcordE2eFailNextVoiceStateUpdate?: boolean;
 		__ripcordE2eNowOffsetMs?: number;
 		__ripcordE2eRawAudioTracks?: MediaStreamTrack[];
+		__ripcordE2eAudioAcquisitions?: number;
 	}
 }
 
@@ -164,18 +165,36 @@ test('rapid websocket flaps converge on the latest session', async ({ browser },
 });
 
 test('muted microphone state survives a websocket reconnect', async ({ browser }, testInfo) => {
-	const peer = await createPeer(browser, credentialsFor(testInfo));
-
+	const context = await browser.newContext();
+	await installPcHook(context);
+	await context.addInitScript(() => {
+		window.__ripcordE2eAudioAcquisitions = 0;
+		const nativeGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+		navigator.mediaDevices.getUserMedia = (constraints) => {
+			if (constraints?.audio) window.__ripcordE2eAudioAcquisitions = (window.__ripcordE2eAudioAcquisitions ?? 0) + 1;
+			return nativeGetUserMedia(constraints);
+		};
+	});
+	const page = await context.newPage();
+	const credentials = credentialsFor(testInfo);
+	const acquisitions = () => page.evaluate(() => window.__ripcordE2eAudioAcquisitions ?? 0);
 	try {
-		await joinVoice(peer.page);
-		await peer.page.getByTitle('Mute microphone').click();
-		await expect(peer.page.getByTitle('Unmute microphone')).toBeVisible();
-
-		await dropAppWebSocket(peer.page);
-		await expect(peer.page.getByText('Connected', { exact: true }).first()).toBeVisible();
-		await expect(peer.page.getByTitle('Unmute microphone')).toBeVisible();
+		await suppressViteHmrReload(page);
+		await login(page, credentials);
+		await joinVoice(page);
+		await expect.poll(acquisitions).toBeGreaterThan(0);
+		const before = await acquisitions();
+		await page.getByTitle('Mute microphone').click();
+		await expect(page.getByTitle('Unmute microphone')).toBeVisible();
+		await dropAppWebSocket(page);
+		await expect(page.getByText('Connected', { exact: true }).first()).toBeVisible();
+		await expect(page.getByTitle('Unmute microphone')).toBeVisible();
+		expect(await acquisitions()).toBe(before);
+		await page.getByTitle('Unmute microphone').click();
+		await expect(page.getByTitle('Mute microphone')).toBeVisible();
+		expect(await acquisitions()).toBe(before);
 	} finally {
-		await disposePeer(peer);
+		await disposePeer({ context, page, credentials });
 	}
 });
 
@@ -227,13 +246,11 @@ test('repeated default-device changes do not republish a muted microphone', asyn
 			.poll(() => micLifecycleEvents.filter((event) => event.includes('Microphone audio producer created')).length)
 			.toBeGreaterThanOrEqual(1);
 
+		const closeCountBeforeMute = micLifecycleEvents.filter((event) => event.includes('Audio producer closed')).length;
 		await page.getByTitle('Mute microphone').click();
 		await expect(page.getByTitle('Unmute microphone')).toBeVisible();
 		const producerCountBeforeDeviceChanges = micLifecycleEvents.filter((event) =>
 			event.includes('Microphone audio producer created'),
-		).length;
-		const closeCountBeforeDeviceChanges = micLifecycleEvents.filter((event) =>
-			event.includes('Audio producer closed'),
 		).length;
 
 		await page.evaluate(async () => {
@@ -245,7 +262,7 @@ test('repeated default-device changes do not republish a muted microphone', asyn
 
 		await expect
 			.poll(() => micLifecycleEvents.filter((event) => event.includes('Audio producer closed')).length)
-			.toBe(closeCountBeforeDeviceChanges + 1);
+			.toBe(closeCountBeforeMute + 1);
 		await page.waitForTimeout(2_000);
 		expect(micLifecycleEvents.filter((event) => event.includes('Microphone audio producer created'))).toHaveLength(
 			producerCountBeforeDeviceChanges,
@@ -408,10 +425,21 @@ test('transport recovery continues listen-only when microphone restart fails', a
 
 	try {
 		await joinVoice(page);
+		await page.waitForFunction(() =>
+			window.__ripcordE2ePeerConnections?.some(
+				(connection) =>
+					connection.connectionState === 'connected' &&
+					connection
+						.getSenders()
+						.some((sender) => sender.track?.kind === 'audio' && sender.track.readyState === 'live'),
+			),
+		);
 		await page.evaluate(() => {
 			window.__ripcordE2eFailMicAcquisition = true;
 			const peerConnection = window.__ripcordE2ePeerConnections?.findLast(
-				(candidate) => candidate.connectionState === 'connected',
+				(candidate) =>
+					candidate.connectionState === 'connected' &&
+					candidate.getSenders().some((sender) => sender.track?.kind === 'audio'),
 			);
 			const microphoneSender = peerConnection?.getSenders().find((sender) => sender.track?.kind === 'audio');
 			if (!microphoneSender?.track) {
@@ -446,9 +474,7 @@ test('transport recovery continues listen-only when microphone restart fails', a
 	}
 });
 
-test('a failed user microphone mutation rolls back while reconnect converges on that rollback', async ({
-	browser,
-}, testInfo) => {
+test('a failed mute send fails closed locally and resyncs after reconnect', async ({ browser }, testInfo) => {
 	const context = await browser.newContext();
 	await installPcHook(context);
 	await context.addInitScript(() => {
@@ -457,7 +483,8 @@ test('a failed user microphone mutation rolls back while reconnect converges on 
 			if (
 				window.__ripcordE2eFailNextVoiceStateUpdate &&
 				typeof data === 'string' &&
-				data.includes('voice.updateState')
+				data.includes('voice.updateState') &&
+				data.includes('"micMuted":true')
 			) {
 				window.__ripcordE2eFailNextVoiceStateUpdate = false;
 				this.close(4013, 'Injected user microphone state failure');
@@ -481,8 +508,16 @@ test('a failed user microphone mutation rolls back while reconnect converges on 
 		});
 		await page.getByTitle('Mute microphone').click();
 
+		await expect.poll(() => page.evaluate(() => window.__ripcordE2eFailNextVoiceStateUpdate)).toBe(false);
 		await expect(page.getByText('Connected', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
-		await expect(page.getByTitle('Mute microphone')).toBeVisible();
+		await expect(page.getByTitle('Unmute microphone')).toBeVisible({ timeout: 30_000 });
+		const observer = await createPeer(browser, credentialsFor(testInfo, 'observer'));
+		try {
+			await joinVoice(observer.page);
+			await expect.poll(() => getOnlyRemoteMicMuted(observer.page)).toBe(true);
+		} finally {
+			await disposePeer(observer);
+		}
 		expect(await page.evaluate(() => window.__ripcordE2eFailNextVoiceStateUpdate)).toBe(false);
 	} finally {
 		await disposePeer(peer);

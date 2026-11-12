@@ -15,6 +15,7 @@ import {
 	getVoiceSessionState,
 	resetVoiceSessionState,
 } from '@/features/server/voice/voice-session-store';
+import { createHarness as createMicrophoneHarness } from '../../microphone/__tests__/microphone-integration-fixture';
 import type {
 	TMicrophonePreparedPipeline,
 	TMicrophoneStartOutcome,
@@ -124,6 +125,7 @@ const createHarness = () => {
 		bumpVoiceSessionReconnectNonce: mock(() => {}),
 	};
 	const microphone = {
+		getRawTrack: () => undefined,
 		createLifecycleLease: () => ({ isCurrent: () => state.microphoneActive }),
 		prepare: mock(async (_isCurrent?: () => boolean): Promise<TMicrophonePreparedPipeline> => {
 			const prepared = createPreparedMicrophone();
@@ -169,7 +171,9 @@ const createHarness = () => {
 		getLocalAudioStream: (): MediaStream | undefined => undefined,
 		getProducerTransport: () => undefined,
 		getConsumerTransport: () => undefined,
-		getOwnVoiceState: () => state.own,
+		getOwnVoiceSessionPayload: () => state.own,
+		isMicWanted: () => !state.own.micMuted,
+		relayOwnVoiceState: mock(() => {}),
 		getServerState: () => server,
 		createDevice: mock(async () => device.device),
 		requestVoiceRestoreOrJoin: mock(async () => bootstrap),
@@ -334,8 +338,8 @@ describe('voice session runtime effects', () => {
 		expect(h.ports.webcam.stop).not.toHaveBeenCalled();
 		expect(h.ports.screenShare.stop).not.toHaveBeenCalled();
 		expect(h.ports.cleanupTransports).toHaveBeenLastCalledWith({ preserveRemoteMediaIntent: true });
-		// Microphone reacquisition on WS restore remains separate from video capture.
-		expect(h.ports.microphone.cleanup).toHaveBeenCalledTimes(1);
+		// Recovery preserves microphone capture alongside the other local media.
+		expect(h.ports.microphone.cleanup).not.toHaveBeenCalled();
 		h.runtime.terminalCleanup();
 		expect(h.ports.webcam.stop).toHaveBeenCalledTimes(1);
 		expect(h.ports.screenShare.stop).toHaveBeenCalledTimes(1);
@@ -916,7 +920,7 @@ describe('voice session runtime composition boundaries', () => {
 		expect(isScreenVideoLive?.()).toBe(false);
 	});
 
-	it('continues rebuild listen-only through the microphone terminal mute when restart fails', async () => {
+	it('continues rebuild listen-only when the reconciler reports restart failure', async () => {
 		const h = createHarness();
 		await h.runtime.init(capabilities, 5);
 		h.ports.createProducerTransport.mockRejectedValueOnce(missingSession);
@@ -926,7 +930,131 @@ describe('voice session runtime composition boundaries', () => {
 		}));
 		await h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext);
 		expect(h.ports.microphone.start).toHaveBeenCalledTimes(1);
-		expect(h.ports.microphone.commitTerminalMute).toHaveBeenCalledTimes(1);
+		expect(h.ports.microphone.commitTerminalMute).not.toHaveBeenCalled();
 		expect(h.ports.startMonitoring).toHaveBeenCalledTimes(2);
 	});
 });
+
+describe('current microphone failure ownership', () => {
+	it('preserves mic choice without SPEAK', async () => {
+		const h = createHarness();
+		h.state.canSpeak = false;
+		h.ports.microphone.prepare.mockRejectedValueOnce(new Error('no SPEAK'));
+		await h.runtime.init(capabilities, 5);
+		expect(h.ports.microphone.commitTerminalMute).not.toHaveBeenCalled();
+	});
+	it('uses capture demand independently of resting mute', async () => {
+		const h = createHarness();
+		h.state.own.micMuted = true;
+		h.ports.isMicWanted = () => true;
+		await h.runtime.init(capabilities, 5);
+		expect(h.ports.microphone.prepare).toHaveBeenCalledTimes(1);
+	});
+});
+for (const restore of [false, true]) {
+	for (const talkHeld of [false, true]) {
+		it(`real capture integration preserves listen-only intent on restore ${restore}, talk held ${talkHeld}`, async () => {
+			const microphone = createMicrophoneHarness();
+			const dispose = microphone.mount();
+			const h = createHarness();
+			h.state.canSpeak = false;
+			microphone.inputs.canSpeak = false;
+			microphone.inputs.currentVoiceChannelId = 5;
+			microphone.state.micMuted = talkHeld;
+			microphone.state.talkHeld = talkHeld;
+			const runtime = createVoiceSessionRuntime(() => ({
+				...h.ports,
+				microphone: microphone.integration,
+				isMicWanted: () => !microphone.state.micMuted || microphone.state.talkHeld,
+			}));
+			const unmount = mountVoiceSessionRuntime(runtime);
+			try {
+				await runtime.init(capabilities, 5, { preserveLocalMedia: restore });
+				expect(microphone.captures).toHaveLength(0);
+				expect(microphone.publications).toHaveLength(0);
+				expect(microphone.state.micMuted).toBe(talkHeld);
+				expect(microphone.state.talkHeld).toBe(talkHeld);
+				expect(microphone.state.terminalMutes).toBe(0);
+				expect(microphone.errors).toEqual([]);
+				h.state.canSpeak = true;
+				microphone.inputs.canSpeak = true;
+				microphone.inputs.currentVoiceChannelId = 6;
+				await runtime.init(capabilities, 6);
+				expect(microphone.integration.getRawTrack()?.readyState).toBe('live');
+				expect(microphone.publications).toHaveLength(1);
+				expect(microphone.state.micMuted).toBe(talkHeld);
+				expect(microphone.state.talkHeld).toBe(talkHeld);
+				expect(microphone.errors).toEqual([]);
+			} finally {
+				unmount();
+				h.unmount();
+				dispose();
+			}
+		});
+	}
+}
+
+for (const muted of [true, false]) {
+	it(`websocket restore republishes retained capture with a new owner, muted ${muted}`, async () => {
+		const microphone = createMicrophoneHarness();
+		microphone.inputs.currentVoiceChannelId = 5;
+		const dispose = microphone.mount();
+		const h = createHarness();
+		const runtime = createVoiceSessionRuntime(() => ({
+			...h.ports,
+			microphone: microphone.integration,
+			isMicWanted: () => !microphone.state.micMuted || microphone.state.talkHeld,
+			createProducerTransport: async () => {
+				microphone.newTransport();
+			},
+			cleanupTransports: () => {
+				microphone.producers.forEach((producer) => producer.close());
+				microphone.state.transport = undefined;
+			},
+		}));
+		const unmount = mountVoiceSessionRuntime(runtime);
+		try {
+			await runtime.init(capabilities, 5);
+			const raw = microphone.integration.getRawTrack();
+			microphone.state.micMuted = muted;
+			h.state.own.micMuted = muted;
+			microphone.integration.setMuted(muted);
+			runtime.recoveryCleanup();
+			await runtime.restoreVoiceSession(
+				{
+					...restoreCommand,
+					pending: { ...restoreCommand.pending, micMuted: muted },
+				},
+				h.restoreContext,
+			);
+			expect(microphone.captures).toHaveLength(1);
+			expect(microphone.integration.getRawTrack()).toBe(raw);
+			expect(raw?.readyState).toBe('live');
+			expect(microphone.publications).toHaveLength(2);
+			expect(microphone.publications.at(-1)?.transport).toBe(microphone.state.transport);
+			expect(microphone.publications.at(-1)?.options.track?.enabled).toBe(!muted);
+
+			// A detached restore can finish after its successor adopted the
+			// same pipeline; its cleanup must remain fenced by session ownership.
+			const consumption = deferred<void>();
+			h.ports.consumeExistingProducers.mockImplementationOnce(() => consumption.promise);
+			const obsolete = runtime.restoreVoiceSession(restoreCommand, h.restoreContext).catch((error: unknown) => error);
+			await flush();
+			await runtime.restoreVoiceSession(restoreCommand, h.restoreContext);
+			consumption.resolve();
+			expect(await obsolete).toBeInstanceOf(VoiceSessionExecutionSupersededError);
+			expect(microphone.integration.getRawTrack()).toBe(raw);
+			expect(raw?.readyState).toBe('live');
+			expect(microphone.producers.at(-1)?.closed).toBe(false);
+			microphone.state.talkHeld = true;
+			microphone.integration.setMuted(false);
+			expect(await microphone.integration.start()).toEqual({ status: 'started' });
+			expect(microphone.publications.at(-1)?.options.track?.enabled).toBe(true);
+			expect(microphone.captures).toHaveLength(1);
+		} finally {
+			unmount();
+			h.unmount();
+			dispose();
+		}
+	});
+}

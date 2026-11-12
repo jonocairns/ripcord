@@ -87,10 +87,7 @@ describe('media settings production integration mount', () => {
 		webcam.reject(new Error('webcam failed'));
 		await flush();
 		expect(f.events).toEqual(['mic', 'webcam']);
-		expect(f.error.mock.calls.map(([message]) => message)).toEqual([
-			'Failed to apply microphone settings',
-			'Failed to apply webcam settings',
-		]);
+		expect(f.error.mock.calls.map(([message]) => message)).toEqual(['Failed to apply webcam settings']);
 		f.dispose();
 	});
 	it('advances the comparison baseline while outside voice, without restarting on later join', async () => {
@@ -197,4 +194,12 @@ it('uses the production webcam owner to reject stale overlapping settings restar
 	expect(error).not.toHaveBeenCalled();
 	disposeSettings();
 	disposeWebcam();
+});
+
+it('delegates microphone settings changes to the capture owner', async () => {
+	const f = fixture();
+	f.changeBoth();
+	await flush();
+	expect(f.startMicrophone).toHaveBeenCalledTimes(1);
+	f.dispose();
 });

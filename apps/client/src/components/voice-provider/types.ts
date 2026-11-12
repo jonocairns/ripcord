@@ -49,6 +49,6 @@ type TVoiceProvider = {
 		ReturnType<typeof useRemoteMediaSubscriptions>,
 		'pendingStreams' | 'remoteMediaSubscriptions' | 'visibleRemoteMedia'
 	> &
-	ReturnType<typeof useVoiceControls>;
+	Omit<ReturnType<typeof useVoiceControls>, 'ensureMicStarted'>;
 
 export type { AudioVideoRefs, TConnectionStatus, TRepublishedLocalMediaState, TVoiceProvider };

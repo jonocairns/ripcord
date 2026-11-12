@@ -4,7 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExterna
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useChannelCan, useIsConnected } from '@/features/server/hooks';
 import { useServerStore } from '@/features/server/slice';
-import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
+import { useOwnVoiceState } from '@/features/server/voice/hooks';
 import { selectVoiceSessionConnectionStatus } from '@/features/server/voice/voice-session-machine';
 import { getVoiceSessionState, subscribeVoiceSession } from '@/features/server/voice/voice-session-store';
 import { logVoice } from '@/helpers/browser-logger';
@@ -51,8 +51,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		getVoiceSessionConnectionStatusSnapshot,
 	);
 	const ownVoiceState = useOwnVoiceState();
-	const ownConfirmedVoiceState = useConfirmedOwnVoiceState();
-	const confirmedOwnMicMuted = ownConfirmedVoiceState?.micMuted;
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const ownUserId = useServerStore((state) => state.ownUserId);
 	const voiceSessionReconnectNonce = useServerStore((state) => state.voiceSessionReconnectNonce);
@@ -62,7 +60,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
 	// Built before the microphone and runtime, which commit terminal mute through
 	// it; controls share the same sequence for later user mute/deafen changes.
-	const voiceStateOperations = useVoiceStateOperations(currentVoiceChannelId);
+	const voiceStateOperations = useVoiceStateOperations();
 	// Remote media and the video owners read device capabilities written by the
 	// runtime built after them. Transport failures are the one late-bound edge:
 	// the runtime binds this port while mounted.
@@ -181,10 +179,12 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	} = useTransportStats(getVideoSenderMetadata);
 
 	const microphone = useMicrophone({
+		voiceStateOperations,
 		devices,
 		currentVoiceChannelId,
 		localAudioStream,
 		isConnected,
+		canSpeak: channelCan(ChannelPermission.SPEAK),
 		ownUserId,
 		micMuted: ownVoiceState.micMuted,
 		producerTransport,
@@ -192,7 +192,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		closeProducerOnServer,
 		setLocalActivity: (userId, isSpeaking) => voiceActivityStoreRef.current.setLocalUserActivity(userId, isSpeaking),
 		commitTerminalMicMuted: () => {
-			void voiceStateOperations.commitTerminalMicMuted();
+			voiceStateOperations.commitTerminalMicMuted();
 		},
 	});
 	const { start: startMicStream } = microphone;
@@ -201,7 +201,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		devices,
 		currentVoiceChannelId,
 		webcamEnabled: ownVoiceState.webcamEnabled,
-		startMicrophone: startMicStream,
+		startMicrophone: microphone.restart,
 		restartWebcam: webcam.restart,
 	});
 
@@ -236,29 +236,37 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	});
 	const { init } = runtime;
 
-	const { isStartingScreenShare, setMicMuted, toggleMic, toggleSound, toggleWebcam, toggleScreenShare } =
-		useVoiceControls({
-			voiceStateOperations,
-			startMicStream,
-			localAudioStream,
-			setMicProcessingMuted: microphone.setMuted,
-			startWebcamStream,
-			stopWebcamStream,
-			startScreenShareStream,
-			stopScreenShareStream,
-			requestScreenShareSelection: getDesktopBridge() ? requestDesktopScreenShareSelection : undefined,
-			isScreenShareLive: screenShare.isLive,
-		});
-
-	usePushMicKeybinds({
-		pushToTalkKeybind: devices.pushToTalkKeybind,
-		pushToMuteKeybind: devices.pushToMuteKeybind,
-		pushReleaseDelayMs: devices.pushReleaseDelayMs,
-		currentVoiceChannelId,
-		canSpeak: channelCan(ChannelPermission.SPEAK),
-		confirmedMicMuted: confirmedOwnMicMuted,
+	const {
+		isStartingScreenShare,
 		setMicMuted,
+		toggleMic,
+		toggleSound,
+		toggleWebcam,
+		toggleScreenShare,
+		ensureMicStarted,
+	} = useVoiceControls({
+		voiceStateOperations,
+		startMicStream,
+		hasLiveMicCapture: () => microphone.getRawTrack()?.readyState === 'live',
+		resetMicRecoveryBudget: microphone.resetRawRecoveryBudget,
+		startWebcamStream,
+		stopWebcamStream,
+		startScreenShareStream,
+		stopScreenShareStream,
+		requestScreenShareSelection: getDesktopBridge() ? requestDesktopScreenShareSelection : undefined,
+		isScreenShareLive: screenShare.isLive,
 	});
+
+	usePushMicKeybinds(
+		{
+			pushToTalkKeybind: devices.pushToTalkKeybind,
+			pushToMuteKeybind: devices.pushToMuteKeybind,
+			pushReleaseDelayMs: devices.pushReleaseDelayMs,
+			currentVoiceChannelId,
+			canSpeak: channelCan(ChannelPermission.SPEAK),
+		},
+		ensureMicStarted,
+	);
 
 	useEffect(() => {
 		// Reference the dep so the effect re-runs on channel change; the body

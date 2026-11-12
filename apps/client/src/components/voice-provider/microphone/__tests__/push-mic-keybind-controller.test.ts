@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { resolveOwnVoiceState, type TOwnPushHold } from '@/features/server/voice/own-voice-state';
 import type {
 	TDesktopPushKeybindEvent,
 	TDesktopPushKeybindsInput,
@@ -63,6 +64,9 @@ const successfulRegistration = (): TGlobalPushKeybindRegistrationResult => ({
 
 const createHarness = (options: { micMuted?: boolean; desktop?: boolean } = {}) => {
 	const scheduler = createScheduler();
+	let hold: TOwnPushHold = { talk: false, mute: false };
+	const holdCalls: TOwnPushHold[] = [];
+	const restingMicMuted = options.micMuted ?? true;
 	const muteCalls: Array<{ micMuted: boolean; playSound: false }> = [];
 	const registrations: TDesktopPushKeybindsInput[] = [];
 	const subscriptions: Array<{ callback: (event: TDesktopPushKeybindEvent) => void; removed: boolean }> = [];
@@ -77,11 +81,6 @@ const createHarness = (options: { micMuted?: boolean; desktop?: boolean } = {}) 
 		micMuted: options.micMuted ?? true,
 		soundMuted: false,
 		pushReleaseDelayMs: 100,
-		setMicMuted: (micMuted, { playSound }) => {
-			muteCalls.push({ micMuted, playSound });
-			inputs.micMuted = micMuted;
-			return Promise.resolve();
-		},
 	};
 	const bridge: NonNullable<ReturnType<TPushMicKeybindControllerPorts['getDesktopBridge']>> = {
 		setGlobalPushKeybinds: (keybinds) => {
@@ -99,7 +98,18 @@ const createHarness = (options: { micMuted?: boolean; desktop?: boolean } = {}) 
 	let bridgeReads = 0;
 	const controller = createPushMicKeybindController({
 		getInputs: () => inputs,
-		getOwnVoiceState: () => inputs,
+		getHold: () => hold,
+		setHold: (next) => {
+			hold = next;
+			holdCalls.push(next);
+			const micMuted = resolveOwnVoiceState({
+				intent: { micMuted: restingMicMuted, soundMuted: inputs.soundMuted },
+				pushHold: hold,
+				micTestActive: false,
+			}).micMuted;
+			muteCalls.push({ micMuted, playSound: false });
+			inputs.micMuted = micMuted;
+		},
 		getDesktopBridge: () => {
 			bridgeReads += 1;
 			return options.desktop === false ? undefined : bridge;
@@ -113,6 +123,7 @@ const createHarness = (options: { micMuted?: boolean; desktop?: boolean } = {}) 
 		controller,
 		inputs,
 		scheduler,
+		holdCalls,
 		muteCalls,
 		registrations,
 		subscriptions,
@@ -165,14 +176,14 @@ describe('push mic keybind controller', () => {
 			expect(h.scheduler.pendingCount()).toBe(0);
 			for (const callback of cancelledCallbacks) callback();
 			h.scheduler.advance(100);
-			expect(h.mutedValues()).toEqual([!baseline, !baseline]);
+			expect(h.mutedValues()).toEqual([!baseline]);
 
 			h.emit(kind, false);
 			// A stale callback must not clear this key's replacement timer.
 			for (const callback of cancelledCallbacks) callback();
 			expect(h.scheduler.pendingCount()).toBe(1);
 			h.scheduler.advance(100);
-			expect(h.mutedValues()).toEqual([!baseline, !baseline, baseline]);
+			expect(h.mutedValues()).toEqual([!baseline, baseline]);
 			cleanup();
 		});
 
@@ -197,11 +208,12 @@ describe('push mic keybind controller', () => {
 
 					h.inputs.canSpeak = true;
 					h.inputs.currentVoiceChannelId = 2;
-					h.inputs.micMuted = !baseline;
+					h.emit(kind, false);
+					h.scheduler.advance(100);
 					h.emit(kind, true);
 					h.emit(kind, false);
 					h.scheduler.advance(100);
-					expect(h.inputs.micMuted).toBe(!baseline);
+					expect(h.inputs.micMuted).toBe(baseline);
 					cleanup();
 				});
 			}
@@ -274,45 +286,17 @@ describe('push mic keybind controller', () => {
 		cleanup();
 	});
 
-	it('uses the current mute baseline, control callback, release delay, and deafen state', () => {
+	it('requires a fresh press after cancellation and retains current release timing', () => {
 		const h = createHarness();
 		const cleanup = mountPushMicKeybindController(h.controller, h.inputs);
-		h.inputs.micMuted = false;
-		const currentCalls: boolean[] = [];
-		h.inputs.setMicMuted = (micMuted) => {
-			currentCalls.push(micMuted);
-			h.inputs.micMuted = micMuted;
-			return Promise.resolve();
-		};
-		h.emit('mute', true);
+		h.emit('talk', true);
+		h.controller.reconcileChannelPermission(undefined, true);
+		h.emit('talk', true);
+		expect(h.holdCalls).toHaveLength(2);
+		h.emit('talk', false);
 		h.inputs.pushReleaseDelayMs = 250;
-		h.emit('mute', false);
-		h.scheduler.advance(100);
-		expect(currentCalls).toEqual([true]);
-		h.scheduler.advance(150);
-		expect(currentCalls).toEqual([true, false]);
-		h.inputs.pushReleaseDelayMs = 0;
 		h.emit('talk', true);
-		h.inputs.soundMuted = true;
-		h.emit('talk', false);
-		expect(currentCalls).toEqual([true, false, false, true]);
-		expect(h.scheduler.pendingCount()).toBe(0);
-		expect(h.muteCalls).toEqual([]);
-		cleanup();
-	});
-
-	it('updates the restore baseline only for confirmed state that differs from the held target', () => {
-		const h = createHarness();
-		const cleanup = mountPushMicKeybindController(h.controller, h.inputs);
-		h.emit('talk', true);
-		h.controller.reconcileConfirmedMicMuted(true);
-		h.emit('mute', true);
-		h.controller.reconcileConfirmedMicMuted(false);
-		h.controller.reconcileConfirmedMicMuted(true);
-		h.emit('talk', false);
-		h.emit('mute', false);
-		h.scheduler.advance(100);
-		expect(h.mutedValues()).toEqual([false, true, true, false]);
+		expect(h.holdCalls.at(-1)).toEqual({ talk: true, mute: false });
 		cleanup();
 	});
 

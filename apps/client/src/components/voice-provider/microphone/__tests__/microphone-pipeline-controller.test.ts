@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
 import {
 	createMicrophonePipelineController,
 	MicPipelineSupersededError,
@@ -222,6 +222,8 @@ const createHarness = (options: { activate?: boolean } = {}) => {
 	let transportGeneration = 1;
 	let producerSequence = 0;
 	let micMuted = false;
+	let gateOpen = true;
+	const terminalOutputLoss = mock(() => {});
 	let inVoiceChannel = true;
 	let activityMode: 'monitor' | 'inactive' | 'unavailable' = 'monitor';
 	let getUserMediaImpl: TFakePorts['getUserMedia'] = async (_constraints) => {
@@ -293,6 +295,8 @@ const createHarness = (options: { activate?: boolean } = {}) => {
 		},
 		isInVoiceChannel: () => inVoiceChannel,
 		isMicMuted: () => micMuted,
+		isTransmitGateOpen: () => gateOpen && !micMuted,
+		onTerminalOutputLoss: terminalOutputLoss,
 		reacquire: (reason) => {
 			rawRecoveries.push(reason);
 			return reacquireImpl(reason);
@@ -312,6 +316,10 @@ const createHarness = (options: { activate?: boolean } = {}) => {
 
 	return {
 		controller,
+		terminalOutputLoss,
+		setGate: (open: boolean) => {
+			gateOpen = open;
+		},
 		scheduler,
 		streams,
 		producers,
@@ -661,11 +669,11 @@ describe('microphone pipeline controller publication', () => {
 		await harness.controller.publish({ source: prepared });
 
 		expect(prepared.outboundAudioTrack.enabled).toBe(false);
-		expect(processing.mutedValues).toEqual([true]);
+		expect(processing.mutedValues).toEqual([true, true]);
 
 		harness.controller.setMuted(false);
 		expect(prepared.outboundAudioTrack.enabled).toBe(true);
-		expect(processing.mutedValues).toEqual([true, false]);
+		expect(processing.mutedValues).toEqual([true, true, false]);
 	});
 
 	it('accepts activity only from the installed producer identity', async () => {
@@ -946,5 +954,55 @@ describe('microphone pipeline controller cleanup and raw loss', () => {
 
 		expect(harness.rawRecoveries).toEqual(['ended', 'ended']);
 		expect(harness.rawRecoveryExhaustions).toEqual([]);
+	});
+});
+
+describe('local transmit gate ownership', () => {
+	it('publishes disabled output while capture is wanted and rereads gate after a deferred publication', async () => {
+		const h = createHarness();
+		const processing = createProcessingPipeline('gate');
+		h.setCreateProcessingPipeline(async () => processing);
+		const prepared = await prepare(h);
+		const pending = createDeferred<TFakeProducer>();
+		h.setPublishProducer(() => pending.promise);
+		const publishing = h.controller.publish({ source: prepared });
+		h.setGate(false);
+		pending.resolve(createProducer('late'));
+		await publishing;
+		expect(prepared.outboundAudioTrack.enabled).toBe(false);
+		expect(processing.mutedValues.at(-1)).toBe(true);
+		await h.controller.publish({ source: prepared });
+		expect(prepared.outboundAudioTrack.enabled).toBe(false);
+	});
+	it('recovers raw loss with closed gate and never resets retries on gate opening', async () => {
+		const h = createHarness();
+		h.setGate(false);
+		const prepared = await prepare(h);
+		await h.controller.publish({ source: prepared });
+		h.setReacquire(async () => ({ status: 'failed', error: new Error('lost') }));
+		h.controller.setMuted(false);
+		await h.controller.recover('ended');
+		expect(h.rawRecoveryExhaustions).toEqual(['ended']);
+		h.setGate(true);
+		h.controller.setMuted(false);
+		await h.controller.recover('ended');
+		expect(h.rawRecoveryExhaustions).toEqual(['ended', 'ended']);
+		h.controller.resetRawRecoveryBudget();
+		h.setReacquire(async () => ({ status: 'started' }));
+		expect(await h.controller.recover('ended')).toEqual({ status: 'started' });
+	});
+	it('commits current processed output loss once and ignores a replaced output callback', async () => {
+		const h = createHarness();
+		h.setCreateProcessingPipeline(async () => createProcessingPipeline('processed'));
+		const first = await prepare(h);
+		await h.controller.publish({ source: first });
+		const oldEnd = first.outboundAudioTrack.onended;
+		const second = await prepare(h);
+		await h.controller.publish({ source: second });
+		oldEnd?.call(first.outboundAudioTrack, new Event('ended'));
+		expect(h.terminalOutputLoss).not.toHaveBeenCalled();
+		second.outboundAudioTrack.onended?.call(second.outboundAudioTrack, new Event('ended'));
+		expect(h.terminalOutputLoss).toHaveBeenCalledTimes(1);
+		expect(second.outboundAudioTrack.readyState).toBe('ended');
 	});
 });

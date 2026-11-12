@@ -1,22 +1,26 @@
-import { StreamKind } from '@sharkord/shared';
+import { ChannelPermission, StreamKind } from '@sharkord/shared';
 import type { AppData, Transport } from 'mediasoup-client/types';
 import { type Dispatch, type MutableRefObject, type SetStateAction, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
+import { canUseChannel } from '@/features/server/channels/can-use-channel';
 import { channelByIdSelector } from '@/features/server/channels/selectors';
 import { useServerStore } from '@/features/server/slice';
-import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
+import { ownMicWantedSelector, ownTransmittingSelector } from '@/features/server/voice/selectors';
 import { logVoice } from '@/helpers/browser-logger';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import { getTRPCClientIfInitialized } from '@/lib/trpc';
+import type { TVoiceStateOperations } from '../voice-state-operation';
 import { getStoredVolume, OWN_MIC_VOLUME_KEY } from '../volume-control-storage';
 import { startLocalVoiceActivityMonitor } from './local-voice-activity';
 import { createMicAudioProcessingPipeline } from './mic-audio-processing';
 import { createMicGainPipeline } from './mic-gain-pipeline';
 import { createMicrophoneIntegration, type TMicrophoneIntegrationInputs } from './microphone-integration';
+import { mountOwnMicGateSync } from './own-mic-gate-sync';
 import { useMicrophonePipelineControllerLifecycle } from './use-microphone-pipeline-controller-lifecycle';
 
 type TUseMicrophoneParams = TMicrophoneIntegrationInputs & {
 	micMuted: boolean;
+	voiceStateOperations: TVoiceStateOperations;
 	producerTransport: MutableRefObject<Transport<AppData> | undefined>;
 	setLocalAudioStream: Dispatch<SetStateAction<MediaStream | undefined>>;
 	closeProducerOnServer: (kind: StreamKind, producerId: string) => Promise<void>;
@@ -29,8 +33,12 @@ const useMicrophone = (inputs: TUseMicrophoneParams) => {
 	const integrationRef = useRef<ReturnType<typeof createMicrophoneIntegration> | undefined>(undefined);
 	if (!integrationRef.current) {
 		integrationRef.current = createMicrophoneIntegration({
+			canSpeak: (channel) => canUseChannel(useServerStore.getState(), channel, ChannelPermission.SPEAK),
 			getInputs: () => inputsRef.current,
-			isMicMuted: () => ownVoiceStateSelector(useServerStore.getState()).micMuted,
+			isMicMuted: () => !ownMicWantedSelector(useServerStore.getState()),
+			isTransmitGateOpen: () => ownTransmittingSelector(useServerStore.getState()),
+			beginOperation: () => inputsRef.current.voiceStateOperations.begin(),
+			isOperationCurrent: (token) => inputsRef.current.voiceStateOperations.isCurrent(token),
 			getProducerTransport: () => inputsRef.current.producerTransport.current,
 			getChannelSettings: () => {
 				const channelId = inputsRef.current.currentVoiceChannelId;
@@ -66,6 +74,15 @@ const useMicrophone = (inputs: TUseMicrophoneParams) => {
 		});
 	}
 	const integration = integrationRef.current;
+	useEffect(
+		() =>
+			mountOwnMicGateSync({
+				isTransmitting: () => ownTransmittingSelector(useServerStore.getState()),
+				subscribe: useServerStore.subscribe,
+				apply: integration.setMuted,
+			}),
+		[integration],
+	);
 	// Activate and fence queued work before passive executor setup/cleanup. The
 	// same retained integration can be mounted again during Strict Mode replay.
 	useMicrophonePipelineControllerLifecycle(integration);
@@ -76,6 +93,7 @@ const useMicrophone = (inputs: TUseMicrophoneParams) => {
 		void inputs.isConnected;
 		void inputs.ownUserId;
 		void inputs.micMuted;
+		void inputs.canSpeak;
 		integration.syncInputs();
 	}, [
 		integration,
@@ -84,6 +102,7 @@ const useMicrophone = (inputs: TUseMicrophoneParams) => {
 		inputs.isConnected,
 		inputs.ownUserId,
 		inputs.micMuted,
+		inputs.canSpeak,
 	]);
 	return integration;
 };

@@ -1,18 +1,14 @@
-import type { TVoiceUserState } from '@sharkord/shared';
 import { Circle, Mic, X } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import {
-	createMicAudioProcessingPipeline,
-	type TMicAudioProcessingPipeline,
-} from '@/components/voice-provider/microphone/mic-audio-processing';
-import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
-import { sendOwnVoiceStateUpdate, updateOwnVoiceState } from '@/features/server/voice/actions';
-import { useConfirmedOwnVoiceState, useOwnVoiceState, useVoice } from '@/features/server/voice/hooks';
+import { createMicAudioProcessingPipeline } from '@/components/voice-provider/microphone/mic-audio-processing';
+import { setOwnMicTestActive } from '@/features/server/voice/actions';
 import { useLatestRef } from '@/hooks/use-latest-ref';
+import { createMicTestResources, runMicTestSetup } from './mic-test-resources';
+import { createMicTestRunOwner } from './mic-test-run-owner';
 
 const ANALYSER_FFT_SIZE = 512;
 const ANALYSER_SMOOTHING = 0.8;
@@ -37,14 +33,12 @@ type TResolvedMicTestProcessingConfig = {
 };
 
 type TWasmDenoiseDiagSnapshot = NonNullable<Window['wasmDenoiseDiag']>;
-type TMicTestPreviewState = 'browser-capture' | 'browser-wasm' | 'in-call-stream';
+type TMicTestPreviewState = 'browser-capture' | 'browser-wasm';
 
 const getMicTestPreviewLabel = (previewState: TMicTestPreviewState | undefined): string => {
 	switch (previewState) {
 		case 'browser-wasm':
 			return 'Browser WASM';
-		case 'in-call-stream':
-			return 'In-call stream';
 		case 'browser-capture':
 		default:
 			return 'Browser capture';
@@ -92,12 +86,6 @@ const resolveMicTestProcessingConfig = ({
 
 const MicrophoneTestPanel = memo(
 	({ microphoneId, noiseSuppression, wasmNoiseSuppressionEnabled, autoGainControl }: TMicrophoneTestPanelProps) => {
-		const currentVoiceChannelId = useCurrentVoiceChannelId();
-		const { localAudioStream } = useVoice();
-		const ownVoiceState = useOwnVoiceState();
-		const ownConfirmedVoiceState = useConfirmedOwnVoiceState();
-		const confirmedMicMuted = ownConfirmedVoiceState?.micMuted;
-		const confirmedSoundMuted = ownConfirmedVoiceState?.soundMuted;
 		const [isTestingMic, setIsTestingMic] = useState(false);
 		const [monitorEnabled, setMonitorEnabled] = useState(false);
 		const levelBarRef = useRef<HTMLDivElement>(null);
@@ -107,24 +95,15 @@ const MicrophoneTestPanel = memo(
 		const [wasmDiagnostics, setWasmDiagnostics] = useState<TWasmDenoiseDiagSnapshot | undefined>(undefined);
 		const [recordingError, setRecordingError] = useState<string | undefined>(undefined);
 		const [recordedClipUrl, setRecordedClipUrl] = useState<string | undefined>(undefined);
-		const rawStreamRef = useRef<MediaStream | undefined>(undefined);
 		const outputStreamRef = useRef<MediaStream | undefined>(undefined);
-		const audioContextRef = useRef<AudioContext | undefined>(undefined);
-		const analyserRef = useRef<AnalyserNode | undefined>(undefined);
 		const monitorGainNodeRef = useRef<GainNode | undefined>(undefined);
 		const animationFrameRef = useRef<number | undefined>(undefined);
-		const runVersionRef = useRef(0);
-		const micAudioPipelineRef = useRef<TMicAudioProcessingPipeline | undefined>(undefined);
 		const mediaRecorderRef = useRef<MediaRecorder | undefined>(undefined);
 		const recordingTimeoutRef = useRef<number | undefined>(undefined);
 		const recordingChunksRef = useRef<BlobPart[]>([]);
 		const recordingStopPromiseRef = useRef<Promise<void> | undefined>(undefined);
 		const recordingStopResolveRef = useRef<(() => void) | undefined>(undefined);
 		const recordedClipUrlRef = useRef<string | undefined>(undefined);
-		const micMutedRef = useRef(ownVoiceState.micMuted);
-		const soundMutedRef = useRef(ownVoiceState.soundMuted);
-		const micMutedBeforeTestRef = useRef<boolean | undefined>(undefined);
-		const soundMutedBeforeTestRef = useRef<boolean | undefined>(undefined);
 		const monitorEnabledRef = useLatestRef(monitorEnabled);
 		const resolvedMicProcessingConfig = useMemo(() => {
 			return resolveMicTestProcessingConfig({
@@ -221,6 +200,10 @@ const MicrophoneTestPanel = memo(
 			}
 
 			if (recorder.state === 'inactive') {
+				if (recordingStopPromiseRef.current) {
+					await recordingStopPromiseRef.current;
+					return;
+				}
 				mediaRecorderRef.current = undefined;
 				recordingChunksRef.current = [];
 				setIsRecordingClip(false);
@@ -238,266 +221,149 @@ const MicrophoneTestPanel = memo(
 			await recordingStopPromiseRef.current;
 		}, []);
 
-		const setMutedStateForTest = useCallback(
-			async ({ nextMicMuted, nextSoundMuted }: { nextMicMuted: boolean; nextSoundMuted: boolean }) => {
-				if (micMutedRef.current === nextMicMuted && soundMutedRef.current === nextSoundMuted) {
-					return;
-				}
-
-				const previousMicMuted = micMutedRef.current;
-				const previousSoundMuted = soundMutedRef.current;
-				micMutedRef.current = nextMicMuted;
-				soundMutedRef.current = nextSoundMuted;
-				updateOwnVoiceState({
-					micMuted: nextMicMuted,
-					soundMuted: nextSoundMuted,
-				});
-
-				if (currentVoiceChannelId === undefined) {
-					return;
-				}
-
-				try {
-					await sendOwnVoiceStateUpdate({
-						micMuted: nextMicMuted,
-						soundMuted: nextSoundMuted,
-					});
-				} catch {
-					micMutedRef.current = previousMicMuted;
-					soundMutedRef.current = previousSoundMuted;
-					updateOwnVoiceState({
-						micMuted: previousMicMuted,
-						soundMuted: previousSoundMuted,
-					} satisfies Partial<TVoiceUserState>);
-				}
-			},
-			[currentVoiceChannelId],
-		);
-
-		const maybeMuteForTest = useCallback(async () => {
-			if (currentVoiceChannelId === undefined) {
-				return;
-			}
-
-			if (typeof micMutedBeforeTestRef.current === 'boolean' || typeof soundMutedBeforeTestRef.current === 'boolean') {
-				return;
-			}
-
-			micMutedBeforeTestRef.current = micMutedRef.current;
-			soundMutedBeforeTestRef.current = soundMutedRef.current;
-
-			if (!micMutedRef.current || !soundMutedRef.current) {
-				await setMutedStateForTest({
-					nextMicMuted: true,
-					nextSoundMuted: true,
-				});
-			}
-		}, [currentVoiceChannelId, setMutedStateForTest]);
-
-		const maybeRestoreMuteAfterTest = useCallback(async () => {
-			const previousMicMuted = micMutedBeforeTestRef.current;
-			const previousSoundMuted = soundMutedBeforeTestRef.current;
-
-			if (typeof previousMicMuted !== 'boolean' || typeof previousSoundMuted !== 'boolean') {
-				return;
-			}
-
-			micMutedBeforeTestRef.current = undefined;
-			soundMutedBeforeTestRef.current = undefined;
-			await setMutedStateForTest({
-				nextMicMuted: previousMicMuted,
-				nextSoundMuted: previousSoundMuted,
-			});
-		}, [setMutedStateForTest]);
-
-		const stopTest = useCallback(async () => {
-			runVersionRef.current += 1;
-			await stopRecordingClip();
-
-			if (animationFrameRef.current !== undefined) {
-				cancelAnimationFrame(animationFrameRef.current);
-				animationFrameRef.current = undefined;
-			}
-
-			const rawStream = rawStreamRef.current;
-			rawStreamRef.current = undefined;
-			rawStream?.getTracks().forEach((track) => {
-				track.stop();
-			});
+		const resourcesRef = useRef<ReturnType<typeof createMicTestResources> | undefined>(undefined);
+		const teardown = useCallback(() => {
+			const resources = resourcesRef.current;
+			resourcesRef.current = undefined;
+			const resourceDrain = resources?.detach();
+			// Detach and stop everything before the first await; newer runs await the drain.
+			const recording = stopRecordingClip();
+			if (animationFrameRef.current !== undefined) cancelAnimationFrame(animationFrameRef.current);
+			animationFrameRef.current = undefined;
 			outputStreamRef.current = undefined;
-
-			analyserRef.current = undefined;
 			monitorGainNodeRef.current = undefined;
-
-			const micAudioPipeline = micAudioPipelineRef.current;
-			micAudioPipelineRef.current = undefined;
-
-			if (micAudioPipeline) {
-				await micAudioPipeline.destroy().catch(() => {
-					// ignore cleanup failures
-				});
-			}
-
-			const audioContext = audioContextRef.current;
-			audioContextRef.current = undefined;
-
-			if (audioContext) {
-				await audioContext.close().catch(() => {
-					// ignore cleanup failures
-				});
-			}
-
 			setIsTestingMic(false);
 			setTestPreviewState(undefined);
 			setWasmDiagnostics(undefined);
-			if (levelBarRef.current) {
-				levelBarRef.current.style.width = '0%';
-			}
-			await maybeRestoreMuteAfterTest();
-		}, [maybeRestoreMuteAfterTest, stopRecordingClip]);
+			if (levelBarRef.current) levelBarRef.current.style.width = '0%';
+			const drain = Promise.all([recording, resourceDrain]).then(() => {});
+			return drain;
+		}, [stopRecordingClip]);
+		const teardownLatest = useLatestRef(teardown);
+		const ownerRef = useRef<ReturnType<typeof createMicTestRunOwner> | undefined>(undefined);
+		if (!ownerRef.current)
+			ownerRef.current = createMicTestRunOwner({
+				detach: () => teardownLatest.current(),
+				setActive: setOwnMicTestActive,
+			});
+		const owner = ownerRef.current;
+		const stopTest = useCallback(() => owner.stop(), [owner]);
 
 		const startTest = useCallback(async () => {
-			const runVersion = runVersionRef.current + 1;
-			await stopTest();
-			runVersionRef.current = runVersion;
+			const run = owner.begin();
+			try {
+				await run.ready;
+			} catch (error) {
+				if (run.isCurrent()) {
+					setMicTestError(error instanceof Error ? error.message : 'Unable to stop microphone test.');
+					await run.fail();
+				}
+				return;
+			}
+			if (!run.isCurrent()) return;
 			setMicTestError(undefined);
-			await maybeMuteForTest();
 
 			const AudioContextClass = window.AudioContext || window.webkitAudioContext;
 
 			if (!AudioContextClass) {
 				setMicTestError('Microphone testing is not supported in this browser.');
+				await run.fail();
 				return;
 			}
 
-			let rawStream: MediaStream | undefined;
-			let micAudioPipeline: TMicAudioProcessingPipeline | undefined;
-			let audioContext: AudioContext | undefined;
+			run.activate();
+			setIsTestingMic(true);
+			const resources = createMicTestResources(run.isCurrent);
+			resourcesRef.current = resources;
+			await run.track(
+				(async () => {
+					try {
+						await runMicTestSetup({
+							resources,
+							isCurrent: run.isCurrent,
+							capture: () => navigator.mediaDevices.getUserMedia({ audio: resolveMicAudioConstraints() }),
+							stopCapture: (stream) => {
+								stream.getTracks().forEach((track) => track.stop());
+							},
+							pipeline: (raw) => {
+								const rawTrack = raw.getAudioTracks()[0];
+								if (!rawTrack) throw new Error('Unable to access microphone track for testing.');
+								return createMicAudioProcessingPipeline({
+									inputTrack: rawTrack,
+									wasmNoiseSuppressionEnabled: resolvedMicProcessingConfig.wasmNoiseSuppressionEnabled,
+									onWasmError: (error) => {
+										if (run.isCurrent()) {
+											setMicTestError(error.message);
+											void run.fail();
+										}
+									},
+								});
+							},
+							destroyPipeline: (pipeline) => pipeline?.destroy(),
+							monitor: (raw, pipeline) => {
+								const outputStream = pipeline?.backend === 'browser-wasm' ? pipeline.stream : raw;
+								const audioContext = resources.own(new AudioContextClass(), (context) => context.close());
+								const source = audioContext.createMediaStreamSource(outputStream);
+								const analyser = audioContext.createAnalyser();
+								const monitorGainNode = resources.own(audioContext.createGain(), (node) => node.disconnect());
+								analyser.fftSize = ANALYSER_FFT_SIZE;
+								analyser.smoothingTimeConstant = ANALYSER_SMOOTHING;
+								monitorGainNode.gain.value = monitorEnabledRef.current ? 1 : 0;
+								source.connect(analyser);
+								source.connect(monitorGainNode);
+								monitorGainNode.connect(audioContext.destination);
+								monitorGainNodeRef.current = monitorGainNode;
+								outputStreamRef.current = outputStream;
+								return {
+									audioContext,
+									analyser,
+									previewState:
+										pipeline?.backend === 'browser-wasm' ? ('browser-wasm' as const) : ('browser-capture' as const),
+								};
+							},
+							resume: async ({ audioContext }) => {
+								if (audioContext.state !== 'running') await audioContext.resume();
+							},
+							onReady: ({ analyser, previewState }) => {
+								const timeDomainData = new Float32Array(analyser.fftSize);
+								let displayLevel = 0;
+								const ATTACK_COEFF = 0.3;
+								const RELEASE_COEFF = 0.08;
+								const updateInputLevel = () => {
+									analyser.getFloatTimeDomainData(timeDomainData);
 
-			try {
-				const inVoiceChannel = currentVoiceChannelId !== undefined;
-				let outputStream = localAudioStream;
-				let previewState: TMicTestPreviewState = 'browser-capture';
+									let sumSquares = 0;
+									for (let index = 0; index < timeDomainData.length; index += 1) {
+										const sample = timeDomainData[index] ?? 0;
+										sumSquares += sample * sample;
+									}
 
-				if (inVoiceChannel && outputStream) {
-					previewState = 'in-call-stream';
-				} else {
-					rawStream = await navigator.mediaDevices.getUserMedia({
-						audio: resolveMicAudioConstraints(),
-					});
-					const rawTrack = rawStream.getAudioTracks()[0];
+									const rms = Math.sqrt(sumSquares / timeDomainData.length);
+									const targetLevel = Math.min(
+										LEVEL_CEILING,
+										Math.max(LEVEL_FLOOR, (rms / RMS_NORMALIZATION) * LEVEL_CEILING),
+									);
+									const coeff = targetLevel > displayLevel ? ATTACK_COEFF : RELEASE_COEFF;
+									displayLevel += (targetLevel - displayLevel) * coeff;
+									if (levelBarRef.current) {
+										levelBarRef.current.style.width = `${displayLevel}%`;
+									}
+									animationFrameRef.current = requestAnimationFrame(updateInputLevel);
+								};
 
-					if (!rawTrack) {
-						throw new Error('Unable to access microphone track for testing.');
+								setTestPreviewState(previewState);
+								updateInputLevel();
+							},
+						});
+					} catch (error) {
+						await resources.detach();
+						if (!run.isCurrent()) return;
+						setMicTestError(error instanceof Error ? error.message : 'Unable to access microphone for testing.');
+						await stopTest();
 					}
-
-					micAudioPipeline = await createMicAudioProcessingPipeline({
-						inputTrack: rawTrack,
-						wasmNoiseSuppressionEnabled: resolvedMicProcessingConfig.wasmNoiseSuppressionEnabled,
-						onWasmError: (error) => {
-							setMicTestError(error.message);
-							void stopTest();
-						},
-					});
-
-					if (micAudioPipeline?.backend === 'browser-wasm') {
-						outputStream = micAudioPipeline.stream;
-						previewState = 'browser-wasm';
-					} else {
-						outputStream = rawStream;
-						previewState = 'browser-capture';
-					}
-				}
-
-				if (!outputStream) {
-					throw new Error('Unable to access an audio stream for microphone testing.');
-				}
-
-				audioContext = new AudioContextClass();
-				const source = audioContext.createMediaStreamSource(outputStream);
-				const analyser = audioContext.createAnalyser();
-				const monitorGainNode = audioContext.createGain();
-
-				analyser.fftSize = ANALYSER_FFT_SIZE;
-				analyser.smoothingTimeConstant = ANALYSER_SMOOTHING;
-				monitorGainNode.gain.value = monitorEnabledRef.current ? 1 : 0;
-
-				source.connect(analyser);
-				source.connect(monitorGainNode);
-				monitorGainNode.connect(audioContext.destination);
-
-				if (audioContext.state !== 'running') {
-					await audioContext.resume();
-				}
-
-				if (runVersionRef.current !== runVersion) {
-					rawStream?.getTracks().forEach((track) => {
-						track.stop();
-					});
-					await micAudioPipeline?.destroy().catch(() => {
-						// ignore stale cleanup failures
-					});
-					await audioContext.close().catch(() => {
-						// ignore stale cleanup failures
-					});
-					return;
-				}
-
-				const timeDomainData = new Float32Array(analyser.fftSize);
-				let displayLevel = 0;
-				const ATTACK_COEFF = 0.3;
-				const RELEASE_COEFF = 0.08;
-				const updateInputLevel = () => {
-					analyser.getFloatTimeDomainData(timeDomainData);
-
-					let sumSquares = 0;
-					for (let index = 0; index < timeDomainData.length; index += 1) {
-						const sample = timeDomainData[index] ?? 0;
-						sumSquares += sample * sample;
-					}
-
-					const rms = Math.sqrt(sumSquares / timeDomainData.length);
-					const targetLevel = Math.min(LEVEL_CEILING, Math.max(LEVEL_FLOOR, (rms / RMS_NORMALIZATION) * LEVEL_CEILING));
-					const coeff = targetLevel > displayLevel ? ATTACK_COEFF : RELEASE_COEFF;
-					displayLevel += (targetLevel - displayLevel) * coeff;
-					if (levelBarRef.current) {
-						levelBarRef.current.style.width = `${displayLevel}%`;
-					}
-					animationFrameRef.current = requestAnimationFrame(updateInputLevel);
-				};
-
-				rawStreamRef.current = rawStream;
-				outputStreamRef.current = outputStream;
-				audioContextRef.current = audioContext;
-				analyserRef.current = analyser;
-				monitorGainNodeRef.current = monitorGainNode;
-				micAudioPipelineRef.current = micAudioPipeline;
-
-				setIsTestingMic(true);
-				setTestPreviewState(previewState);
-				setMicTestError(undefined);
-				updateInputLevel();
-			} catch (error) {
-				rawStream?.getTracks().forEach((track) => {
-					track.stop();
-				});
-				await micAudioPipeline?.destroy().catch(() => {
-					// ignore setup cleanup failures
-				});
-				await audioContext?.close().catch(() => {
-					// ignore setup cleanup failures
-				});
-				setMicTestError(error instanceof Error ? error.message : 'Unable to access microphone for testing.');
-				await stopTest();
-			}
-		}, [
-			maybeMuteForTest,
-			localAudioStream,
-			currentVoiceChannelId,
-			resolvedMicProcessingConfig,
-			resolveMicAudioConstraints,
-			stopTest,
-		]);
+				})(),
+			);
+		}, [owner, resolvedMicProcessingConfig, resolveMicAudioConstraints, stopTest]);
 
 		const startRecordingClip = useCallback(async () => {
 			if (isRecordingClip) {
@@ -544,12 +410,14 @@ const MicrophoneTestPanel = memo(
 				recordingChunksRef.current = [];
 
 				recorder.ondataavailable = (event) => {
+					if (mediaRecorderRef.current !== recorder) return;
 					if (event.data && event.data.size > 0) {
 						recordingChunksRef.current.push(event.data);
 					}
 				};
 
 				recorder.onerror = (event) => {
+					if (mediaRecorderRef.current !== recorder) return;
 					setRecordingError(event.error?.message || 'Failed to record microphone clip.');
 
 					if (recordingTimeoutRef.current !== undefined) {
@@ -575,6 +443,7 @@ const MicrophoneTestPanel = memo(
 				};
 
 				recorder.onstop = () => {
+					if (mediaRecorderRef.current !== recorder) return;
 					if (recordingTimeoutRef.current !== undefined) {
 						clearTimeout(recordingTimeoutRef.current);
 						recordingTimeoutRef.current = undefined;
@@ -623,33 +492,6 @@ const MicrophoneTestPanel = memo(
 
 			monitorGainNode.gain.value = monitorEnabled ? 1 : 0;
 		}, [monitorEnabled]);
-
-		useEffect(() => {
-			micMutedRef.current = ownVoiceState.micMuted;
-		}, [ownVoiceState.micMuted]);
-
-		useEffect(() => {
-			soundMutedRef.current = ownVoiceState.soundMuted;
-		}, [ownVoiceState.soundMuted]);
-
-		useEffect(() => {
-			if (
-				!isTestingMic ||
-				typeof micMutedBeforeTestRef.current !== 'boolean' ||
-				typeof soundMutedBeforeTestRef.current !== 'boolean'
-			) {
-				return;
-			}
-
-			if (confirmedMicMuted === undefined || confirmedSoundMuted === undefined) {
-				return;
-			}
-
-			if (confirmedMicMuted !== true || confirmedSoundMuted !== true) {
-				micMutedBeforeTestRef.current = confirmedMicMuted;
-				soundMutedBeforeTestRef.current = confirmedSoundMuted;
-			}
-		}, [isTestingMic, confirmedMicMuted, confirmedSoundMuted]);
 
 		useEffect(() => {
 			return () => {

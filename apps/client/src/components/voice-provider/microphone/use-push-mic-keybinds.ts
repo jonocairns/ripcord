@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { useServerStore } from '@/features/server/slice';
-import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
+import { setOwnPushHold } from '@/features/server/voice/actions';
 import { logVoice } from '@/helpers/browser-logger';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
@@ -11,22 +11,28 @@ import {
 	type TPushMicKeybindInputs,
 } from './push-mic-keybind-controller';
 
-type TUsePushMicKeybindsParams = TPushMicKeybindInputs & {
-	confirmedMicMuted: boolean | undefined;
-};
-
-const usePushMicKeybinds = (inputs: TUsePushMicKeybindsParams): void => {
+const usePushMicKeybinds = (
+	inputs: TPushMicKeybindInputs,
+	ensureMicStarted: (options?: { resetRecoveryBudget?: boolean }) => Promise<void>,
+): void => {
 	const inputsRef = useLatestRef(inputs);
 	// Match the provider's current control callback even during effect cleanup;
 	// channel, permission and settings retain their committed useLatestRef timing.
-	const setMicMutedRef = useRef(inputs.setMicMuted);
-	setMicMutedRef.current = inputs.setMicMuted;
+	const ensureMicStartedRef = useRef(ensureMicStarted);
+	ensureMicStartedRef.current = ensureMicStarted;
 	const controllerRef = useRef<ReturnType<typeof createPushMicKeybindController> | undefined>(undefined);
 	if (!controllerRef.current) {
 		controllerRef.current = createPushMicKeybindController({
-			getInputs: () => ({ ...inputsRef.current, setMicMuted: setMicMutedRef.current }),
+			getInputs: () => inputsRef.current,
 			// Read live mute/deafen state when events arrive before the next React commit.
-			getOwnVoiceState: () => ownVoiceStateSelector(useServerStore.getState()),
+			getHold: () => useServerStore.getState().ownPushHold,
+			setHold: (hold) => {
+				const previous = useServerStore.getState().ownPushHold;
+				setOwnPushHold(hold);
+				void ensureMicStartedRef.current({
+					resetRecoveryBudget: (hold.talk && !previous.talk) || (hold.mute && !previous.mute),
+				});
+			},
 			getDesktopBridge,
 			setTimeout: (callback, milliseconds) => window.setTimeout(callback, milliseconds),
 			clearTimeout: (handle) => window.clearTimeout(handle),
@@ -35,10 +41,6 @@ const usePushMicKeybinds = (inputs: TUsePushMicKeybindsParams): void => {
 		});
 	}
 	const controller = controllerRef.current;
-
-	useEffect(() => {
-		controller.reconcileConfirmedMicMuted(inputs.confirmedMicMuted);
-	}, [controller, inputs.confirmedMicMuted]);
 
 	useEffect(
 		() =>

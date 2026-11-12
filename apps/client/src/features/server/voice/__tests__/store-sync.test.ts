@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'bun:test';
 import type { TVoiceUserState } from '@sharkord/shared';
 import type { TInitialServerData } from '@/features/server/slice';
 import { useServerStore } from '../../slice';
-import { ownConfirmedVoiceStateSelector, ownVoiceStateSelector } from '../selectors';
+import { ownVoiceStateSelector } from '../selectors';
 
 const createVoiceState = (overrides: Partial<TVoiceUserState> = {}): TVoiceUserState => ({
 	micMuted: false,
@@ -15,90 +15,20 @@ const createVoiceState = (overrides: Partial<TVoiceUserState> = {}): TVoiceUserS
 describe('voice store own state derivation', () => {
 	beforeEach(() => {
 		useServerStore.getState().resetState();
+		useServerStore.getState().setOwnVoiceIntent({ micMuted: false, soundMuted: false });
 	});
 
-	it('stores off-channel voice defaults from initial voice data', () => {
-		const initialVoiceState = createVoiceState({
-			micMuted: true,
-			soundMuted: true,
-			webcamEnabled: true,
-			sharingScreen: true,
-		});
-		const data: TInitialServerData = {
-			serverId: 'server-1',
-			categories: [],
-			channels: [],
-			users: [],
-			ownUserId: 42,
-			mustChangePassword: false,
-			roles: [],
-			emojis: [],
-			publicSettings: undefined,
-			voiceMap: {
-				7: {
-					users: {
-						42: initialVoiceState,
-					},
-				},
-			},
-			externalStreamsMap: {},
-			channelPermissions: {},
-			readStates: {},
-		};
-
-		useServerStore.getState().setInitialData(data);
-
-		expect(useServerStore.getState().ownVoiceDefaults).toEqual(
-			createVoiceState({
-				micMuted: true,
-				soundMuted: true,
-			}),
-		);
-	});
-
-	it('returns undefined confirmed state and falls back to own defaults when not in voice', () => {
-		const ownVoiceDefaults = createVoiceState({
-			micMuted: true,
-			soundMuted: true,
-		});
-
-		useServerStore.setState({
-			ownUserId: 42,
-			currentVoiceChannelId: undefined,
-			ownVoiceDefaults,
-		});
-
-		expect(ownConfirmedVoiceStateSelector(useServerStore.getState())).toBeUndefined();
-		expect(ownVoiceStateSelector(useServerStore.getState())).toEqual(ownVoiceDefaults);
-	});
-
-	it('derives own voice state from the confirmed voice map when the own user is in voice', () => {
-		const joinedVoiceState = createVoiceState({
-			micMuted: true,
-			webcamEnabled: true,
-		});
-
-		useServerStore.setState({
-			ownUserId: 42,
-			currentVoiceChannelId: 7,
-			ownVoiceDefaults: createVoiceState({
-				micMuted: false,
-				webcamEnabled: false,
-			}),
-		});
-
+	it('uses local audio intent and server video while returning stable snapshots', () => {
+		useServerStore.setState({ ownUserId: 42, currentVoiceChannelId: 7 });
 		useServerStore.getState().addUserToVoiceChannel({
 			channelId: 7,
 			userId: 42,
-			state: joinedVoiceState,
+			state: createVoiceState({ micMuted: true, webcamEnabled: true }),
 		});
-
-		expect(ownVoiceStateSelector(useServerStore.getState())).toEqual(joinedVoiceState);
-		expect(useServerStore.getState().ownVoiceDefaults).toEqual(
-			createVoiceState({
-				micMuted: true,
-			}),
-		);
+		const state = useServerStore.getState();
+		expect(ownVoiceStateSelector(state)).toEqual(createVoiceState({ webcamEnabled: true }));
+		expect(ownVoiceStateSelector(state)).toBe(ownVoiceStateSelector(state));
+		expect(state.ownVoiceIntent).toEqual({ micMuted: false, soundMuted: false });
 	});
 
 	it('optimistically updates the own-user voice map entry instead of a parallel live field', () => {
@@ -114,15 +44,15 @@ describe('voice store own state derivation', () => {
 					},
 				},
 			},
-			ownVoiceDefaults: initialVoiceState,
+			ownVoiceIntent: initialVoiceState,
 		});
 
+		useServerStore.getState().setOwnVoiceIntent({ micMuted: true });
 		useServerStore.getState().updateOwnVoiceState({
-			micMuted: true,
 			webcamEnabled: true,
 		});
 
-		expect(ownConfirmedVoiceStateSelector(useServerStore.getState())).toEqual(
+		expect(useServerStore.getState().voiceMap[7]?.users[42]).toEqual(
 			createVoiceState({
 				micMuted: true,
 				webcamEnabled: true,
@@ -134,14 +64,10 @@ describe('voice store own state derivation', () => {
 				webcamEnabled: true,
 			}),
 		);
-		expect(useServerStore.getState().ownVoiceDefaults).toEqual(
-			createVoiceState({
-				micMuted: true,
-			}),
-		);
+		expect(useServerStore.getState().ownVoiceIntent.micMuted).toBe(true);
 	});
 
-	it('reconcileVoiceChannelUsers yields to server state when no optimistic update is pending', () => {
+	it('reconcile keeps local audio when no video update is pending', () => {
 		useServerStore.setState({
 			ownUserId: 42,
 			currentVoiceChannelId: 7,
@@ -152,7 +78,7 @@ describe('voice store own state derivation', () => {
 					},
 				},
 			},
-			ownVoiceDefaults: createVoiceState(),
+			ownVoiceIntent: createVoiceState(),
 			ownOptimisticStateExpiresAt: undefined,
 		});
 
@@ -161,7 +87,9 @@ describe('voice store own state derivation', () => {
 			users: [{ userId: 42, state: createVoiceState({ micMuted: true }) }],
 		});
 
-		expect(ownConfirmedVoiceStateSelector(useServerStore.getState())).toEqual(createVoiceState({ micMuted: true }));
+		expect(useServerStore.getState().voiceMap[7]?.users[42]?.micMuted).toBe(
+			useServerStore.getState().ownVoiceIntent.micMuted,
+		);
 	});
 
 	it('reconcileVoiceChannelUsers preserves local state while an optimistic update is still pending', () => {
@@ -175,7 +103,7 @@ describe('voice store own state derivation', () => {
 					},
 				},
 			},
-			ownVoiceDefaults: createVoiceState({ micMuted: true }),
+			ownVoiceIntent: createVoiceState({ micMuted: true }),
 			ownOptimisticStateExpiresAt: Date.now() + 5_000,
 		});
 
@@ -185,7 +113,9 @@ describe('voice store own state derivation', () => {
 		});
 
 		// Local optimistic state (micMuted: true) wins over the server snapshot.
-		expect(ownConfirmedVoiceStateSelector(useServerStore.getState())).toEqual(createVoiceState({ micMuted: true }));
+		expect(useServerStore.getState().voiceMap[7]?.users[42]?.micMuted).toBe(
+			useServerStore.getState().ownVoiceIntent.micMuted,
+		);
 	});
 
 	it('reconcileVoiceChannelUsers yields to server state when the optimistic TTL has expired', () => {
@@ -199,7 +129,7 @@ describe('voice store own state derivation', () => {
 					},
 				},
 			},
-			ownVoiceDefaults: createVoiceState(),
+			ownVoiceIntent: createVoiceState(),
 			ownOptimisticStateExpiresAt: Date.now() - 1,
 		});
 
@@ -208,8 +138,10 @@ describe('voice store own state derivation', () => {
 			users: [{ userId: 42, state: createVoiceState({ micMuted: true }) }],
 		});
 
-		// TTL has lapsed — server's admin-muted state wins.
-		expect(ownConfirmedVoiceStateSelector(useServerStore.getState())).toEqual(createVoiceState({ micMuted: true }));
+		// Audio remains client-owned after the video window expires.
+		expect(useServerStore.getState().voiceMap[7]?.users[42]?.micMuted).toBe(
+			useServerStore.getState().ownVoiceIntent.micMuted,
+		);
 		// Expired sentinel is cleared in the same set call.
 		expect(useServerStore.getState().ownOptimisticStateExpiresAt).toBeUndefined();
 	});
@@ -225,7 +157,7 @@ describe('voice store own state derivation', () => {
 					},
 				},
 			},
-			ownVoiceDefaults: createVoiceState(),
+			ownVoiceIntent: createVoiceState(),
 			ownOptimisticStateExpiresAt: Date.now() + 5_000,
 		});
 
@@ -247,21 +179,21 @@ describe('voice store own state derivation', () => {
 			voiceMap: {
 				7: {
 					users: {
-						42: createVoiceState({ micMuted: true }),
+						42: createVoiceState({ webcamEnabled: true }),
 					},
 				},
 			},
-			ownVoiceDefaults: createVoiceState({ micMuted: true }),
+			ownVoiceIntent: createVoiceState({ webcamEnabled: true }),
 			ownOptimisticStateExpiresAt: optimisticExpiresAt,
 		});
 
 		useServerStore.getState().updateVoiceUserState({
 			channelId: 7,
 			userId: 42,
-			newState: { micMuted: false },
+			newState: { webcamEnabled: false },
 		});
 
-		expect(ownConfirmedVoiceStateSelector(useServerStore.getState())).toEqual(createVoiceState({ micMuted: true }));
+		expect(useServerStore.getState().voiceMap[7]?.users[42]?.webcamEnabled).toBe(true);
 		expect(useServerStore.getState().ownOptimisticStateExpiresAt).toBe(optimisticExpiresAt);
 	});
 
@@ -295,49 +227,16 @@ describe('voice store own state derivation', () => {
 		expect(useServerStore.getState().screenShareWatchers).toEqual({});
 	});
 
-	it('keeps derived and confirmed own voice state aligned when the server updates the own user', () => {
-		const initialVoiceState = createVoiceState();
-
+	it('overlays audio intent on server updates', () => {
 		useServerStore.setState({
 			ownUserId: 42,
 			currentVoiceChannelId: 7,
-			voiceMap: {
-				7: {
-					users: {
-						42: initialVoiceState,
-					},
-				},
-			},
-			ownVoiceDefaults: initialVoiceState,
+			voiceMap: { 7: { users: { 42: createVoiceState() } } },
 		});
-
-		useServerStore.getState().updateVoiceUserState({
-			channelId: 7,
-			userId: 42,
-			newState: {
-				micMuted: true,
-				soundMuted: true,
-			},
-		});
-
-		expect(ownConfirmedVoiceStateSelector(useServerStore.getState())).toEqual(
-			createVoiceState({
-				micMuted: true,
-				soundMuted: true,
-			}),
-		);
-		expect(ownVoiceStateSelector(useServerStore.getState())).toEqual(
-			createVoiceState({
-				micMuted: true,
-				soundMuted: true,
-			}),
-		);
-		expect(useServerStore.getState().ownVoiceDefaults).toEqual(
-			createVoiceState({
-				micMuted: true,
-				soundMuted: true,
-			}),
-		);
+		useServerStore
+			.getState()
+			.updateVoiceUserState({ channelId: 7, userId: 42, newState: { micMuted: true, soundMuted: true } });
+		expect(ownVoiceStateSelector(useServerStore.getState())).toEqual(createVoiceState());
 	});
 
 	it('clears screen share watchers when the local own share state changes', () => {
@@ -366,7 +265,7 @@ describe('voice store own state derivation', () => {
 					},
 				},
 			},
-			ownVoiceDefaults: createVoiceState(),
+			ownVoiceIntent: createVoiceState(),
 			screenShareWatchers: {
 				10: true,
 			},

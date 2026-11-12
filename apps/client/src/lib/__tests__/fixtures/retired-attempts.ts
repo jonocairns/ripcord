@@ -100,6 +100,7 @@ const deferred = <T>() => {
 };
 let disconnectInfo: TDisconnectInfo | undefined;
 const state = {
+	setOwnVoiceIntent: () => {},
 	connected: true,
 	connecting: false,
 	resetState: () => {

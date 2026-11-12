@@ -25,8 +25,7 @@ flow must distinguish:
 
 The recurring failure pattern is that a controller or pure policy owns only one
 part of the transition. Its adapter then starts asynchronous work without a
-result it can commit, reuses a rollback-capable user mutation for a terminal
-safety transition, or scopes one retry budget across several independently
+result it can commit, lets a failed relay override local safety intent, or scopes one retry budget across several independently
 changing resources. Isolated policy tests cannot prove those crossings.
 
 ## Shared invariants
@@ -42,9 +41,9 @@ changing resources. Isolated policy tests cannot prove those crossings.
   recovery budget or strand one-shot state.
 - Terminal local resource loss stops or detaches the local resource before the
   UI reports it inactive.
-- User-requested mutations may optimistically roll back after server failure.
-  Safety-driven terminal state is locally authoritative and must not be rolled
-  back merely because best-effort server synchronization failed.
+- User microphone and deafen intent is client-owned. Failed relays never roll it back.
+  Current microphone acquisition failure, terminal output loss, and exhausted recovery
+  fail closed locally and cancel push holds, even when server synchronization fails.
 - Safety-driven state changes participate in the same operation ordering as
   user intent so stale confirmations and failures cannot overwrite a newer
   mute, push-to-talk, camera, or screen-share decision.
@@ -61,7 +60,7 @@ changing resources. Isolated policy tests cannot prove those crossings.
 
 | Flow | Recovery owner | Stable or terminal state | Boundary cases to prove |
 | --- | --- | --- | --- |
-| Default microphone move | Microphone controller and device-change adapter | Muted capture is stopped until a later unmute; unmuted capture moves once to the new default | Repeated device events, unavailable identities, cleanup overlap, and unmute after teardown |
+| Default microphone move | Microphone controller and device-change adapter | Capture moves when locally wanted, including during push-mute or a mic test; otherwise it stops until demanded | Repeated device events, unavailable identities, cleanup overlap, and unmute after teardown |
 | Raw microphone loss | Microphone controller, then the local mute adapter | Capture is stopped, local state remains muted, server sync is best-effort, and a later unmute reacquires capture | `voice.updateState` failure, WebSocket reconnect, missing server seat, and overlapping user mute intent |
 | Transport failure | Server liveness watchdog, voice session machine, and command executor | Only current, accepted failures consume the rapid-failure budget; rebuild/reconnect success begins probation, and exhaustion leaves voice through normal terminal cleanup | Watchdog-paced failure, failure during WebSocket reconnect, duplicate callbacks, in-flight samples from replaced transports, stale rebuild completion, and channel changes |
 | Remote-media repair | Producer-scoped subscription ledger and repair runner | Repair backs off and stops for the same channel/producer identity; replacement identity receives a fresh budget | Producer replacement, channel changes, timeout cleanup, failed consume/resume, and stale completion ordering |
@@ -75,7 +74,7 @@ defines callback ownership across controlled tRPC client replacement.
 ### Remediated findings
 
 1. **Terminal raw-microphone exhaustion is locally authoritative.** Capture is
-   stopped first, terminal mute bypasses optimistic rollback, reconnect intent
+   stopped first, terminal mute commits local intent and cancels push holds, reconnect intent
    is updated, and server synchronization is best-effort.
 2. **Microphone reacquisition reports an explicit outcome.** Default-device and
    raw-loss recovery receive `started`, `failed`, or `superseded`; accepted
@@ -109,8 +108,8 @@ defines callback ownership across controlled tRPC client replacement.
 ## Completed remediation
 
 1. The microphone transition boundary reports explicit outcomes, commits
-   terminal mute locally, updates reconnect intent, and synchronizes without
-   rollback.
+   terminal mute locally, cancels push holds, updates reconnect intent, and relays
+   the result best-effort without allowing a relay failure to change local intent.
 2. Transport circuit timing advances from accepted machine events, records
    successful rebuild completion as the beginning of probation, and preserves
    the prior failure count until that probation outlives the server watchdog.
@@ -126,9 +125,10 @@ defines callback ownership across controlled tRPC client replacement.
   machines or side effects. An adapter should be able to report that an action
   was accepted, ignored, superseded, or terminal before policy state is
   committed.
-- Keep normal user-toggle rollback semantics separate from terminal local safety
-  transitions. A terminal microphone mute may reuse shared operation sequencing,
-  but a failed server update must not claim that stopped capture is active.
+- User mute and deafen intent never rolls back after a failed relay. Current
+  microphone acquisition failure, terminal output loss, and recovery exhaustion
+  commit a fail-closed mute through shared operation sequencing and cancel holds.
+  A failed server update cannot claim that stopped capture is active.
 - Keep resource cleanup, local state publication, and best-effort server
   synchronization in an intentional order. Do not infer resource state from a
   mutation result.
@@ -144,7 +144,7 @@ Owner-relative test paths below are under
 
 | Acceptance boundary | Focused or browser coverage |
 | --- | --- |
-| Normal user mute rolls back after server failure | `recovery-faults.spec.ts`: “a failed user microphone mutation rolls back while reconnect converges on that rollback” |
+| Local mute survives server failure | `recovery-faults.spec.ts`: “a failed mute send keeps the local mute and reconnect restores it” |
 | Terminal raw-capture exhaustion remains muted through failed sync or disconnect, then unmute retries capture | `recovery-faults.spec.ts`: “terminal microphone mute survives failed server sync and reconnect restore” |
 | Newer microphone intent wins over stale synchronization or restore completion | `voice-state-operation.test.ts`: “ignores an older async result after a newer operation starts”; `voice-session-machine.test.ts`: “replaces an active restore command when microphone intent changes”; `recovery-faults.spec.ts`: “the latest microphone intent wins across repeated reconnects” |
 | Failed default-device or raw-loss reacquisition advances bounded recovery | `microphone/__tests__/default-input-device.test.ts`: default-device decision cases; `microphone/__tests__/microphone-pipeline-controller.test.ts`: “counts failed acquisition or publication outcomes in the same bounded recovery operation”; `recovery-faults.spec.ts`: “failed raw microphone reacquisition exhausts once and a later unmute retries capture” |

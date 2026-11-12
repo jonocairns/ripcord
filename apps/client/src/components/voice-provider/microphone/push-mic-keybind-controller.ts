@@ -1,22 +1,16 @@
+import type { TOwnPushHold } from '@/features/server/voice/own-voice-state';
 import type { TDesktopBridge, TDesktopPushKeybindEvent, TDesktopPushKeybindsInput } from '@/runtime/types';
-import {
-	clearHeldPushMicState,
-	resolveHeldPushMicTarget,
-	resolvePushMicState,
-	type TPushMicState,
-	updatePushMicStateForKeyEvent,
-} from './push-mic-state';
 
 type TPushMicKeybindInputs = TDesktopPushKeybindsInput & {
 	currentVoiceChannelId: number | undefined;
 	canSpeak: boolean;
 	pushReleaseDelayMs: number;
-	setMicMuted: (micMuted: boolean, options: { playSound: false }) => Promise<void>;
 };
 
 type TPushMicKeybindControllerPorts = {
 	getInputs: () => TPushMicKeybindInputs;
-	getOwnVoiceState: () => { micMuted: boolean; soundMuted: boolean };
+	getHold: () => TOwnPushHold;
+	setHold: (hold: TOwnPushHold) => void;
 	getDesktopBridge: () =>
 		| Pick<TDesktopBridge, 'setGlobalPushKeybinds' | 'subscribeGlobalPushKeybindEvents'>
 		| undefined;
@@ -27,11 +21,7 @@ type TPushMicKeybindControllerPorts = {
 };
 
 const createPushMicKeybindController = (ports: TPushMicKeybindControllerPorts) => {
-	let state: TPushMicState = {
-		isPushToTalkHeld: false,
-		isPushToMuteHeld: false,
-		micMutedBeforePush: undefined,
-	};
+	const physicalDown = { talk: false, mute: false };
 	const releaseTimers: Partial<Record<TDesktopPushKeybindEvent['kind'], number>> = {};
 	let cleanupMount: (() => void) | undefined;
 
@@ -46,37 +36,15 @@ const createPushMicKeybindController = (ports: TPushMicKeybindControllerPorts) =
 		}
 	};
 
-	const applyOverride = (): void => {
-		const inputs = ports.getInputs();
-		const resolution = resolvePushMicState(state, ports.getOwnVoiceState().soundMuted);
-
-		if (resolution.targetMicMuted !== undefined) {
-			void inputs.setMicMuted(resolution.targetMicMuted, { playSound: false });
-		}
-		if (resolution.shouldClearMicMutedBeforePush) {
-			state = { ...state, micMutedBeforePush: undefined };
-		}
-	};
-
 	const clearHeldKeys = (): void => {
 		clearPendingRelease();
-		state = clearHeldPushMicState(state);
-		applyOverride();
+		const hold = ports.getHold();
+		if (hold.talk || hold.mute) ports.setHold({ talk: false, mute: false });
 	};
 
 	const reconcileChannelPermission = (currentVoiceChannelId: number | undefined, canSpeak: boolean): void => {
 		if (currentVoiceChannelId === undefined || !canSpeak) {
 			clearHeldKeys();
-		}
-	};
-
-	const reconcileConfirmedMicMuted = (confirmedMicMuted: boolean | undefined): void => {
-		const pushTarget = resolveHeldPushMicTarget(state);
-		if (pushTarget === undefined || state.micMutedBeforePush === undefined || confirmedMicMuted === undefined) {
-			return;
-		}
-		if (confirmedMicMuted !== pushTarget) {
-			state = { ...state, micMutedBeforePush: confirmedMicMuted };
 		}
 	};
 
@@ -103,12 +71,14 @@ const createPushMicKeybindController = (ports: TPushMicKeybindControllerPorts) =
 			});
 
 		const applyEvent = (event: TDesktopPushKeybindEvent): void => {
-			state = updatePushMicStateForKeyEvent(state, event, ports.getOwnVoiceState().micMuted);
-			applyOverride();
+			if (ports.getHold()[event.kind] === event.active) return;
+			ports.setHold({ ...ports.getHold(), [event.kind]: event.active });
 		};
 
 		const removeSubscription = desktopBridge.subscribeGlobalPushKeybindEvents((event) => {
 			if (!mounted) return;
+			if (event.active && physicalDown[event.kind]) return;
+			physicalDown[event.kind] = event.active;
 			const inputs = ports.getInputs();
 			if (inputs.currentVoiceChannelId === undefined || !inputs.canSpeak) {
 				clearHeldKeys();
@@ -141,6 +111,8 @@ const createPushMicKeybindController = (ports: TPushMicKeybindControllerPorts) =
 			cleanupMount = undefined;
 			removeSubscription();
 			clearHeldKeys();
+			physicalDown.talk = false;
+			physicalDown.mute = false;
 			void desktopBridge.setGlobalPushKeybinds({}).catch((error: unknown) => {
 				ports.log('Failed to clear global push keybinds', { error });
 			});
@@ -149,7 +121,7 @@ const createPushMicKeybindController = (ports: TPushMicKeybindControllerPorts) =
 		return cleanup;
 	};
 
-	return { mount, reconcileChannelPermission, reconcileConfirmedMicMuted };
+	return { mount, reconcileChannelPermission };
 };
 
 type TPushMicKeybindController = ReturnType<typeof createPushMicKeybindController>;

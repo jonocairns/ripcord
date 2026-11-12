@@ -25,6 +25,11 @@ let leaveVoice: typeof import('../actions').leaveVoice;
 let joinVoice: typeof import('../actions').joinVoice;
 let handleVoiceSessionReplaced: typeof import('../actions').handleVoiceSessionReplaced;
 let resetVoiceSwitchStateForTests: typeof import('../actions').__resetVoiceSwitchStateForTests;
+let relayOwnVoiceState: typeof import('../actions').relayOwnVoiceState;
+let setOwnVoiceIntent: typeof import('../actions').setOwnVoiceIntent;
+let setOwnPushHold: typeof import('../actions').setOwnPushHold;
+let authenticated = true;
+let connectionListener = () => {};
 const playSound = mock(() => {});
 const runVoiceProviderCleanup = mock(() => {});
 const sessionAuthentication = createSessionAuthenticationGate();
@@ -71,6 +76,10 @@ const updateStateMutate = mock(async (_input?: unknown) => {
 	await waitBeforeUpdateStateResolve;
 });
 
+let clientIdentity = {
+	voice: { join: { mutate: joinMutate }, leave: { mutate: leaveMutate }, updateState: { mutate: updateStateMutate } },
+};
+let screenShareCardType: TPinnedCardState['type'];
 type TPinnedCardState = NonNullable<ReturnType<typeof useServerStore.getState>['pinnedCard']>;
 
 const createChannel = (id: number, type: ChannelType): TPublicChannel =>
@@ -196,25 +205,23 @@ describe('voice actions', () => {
 		mock.module('@/lib/trpc', () => ({
 			waitForTRPCSessionAuthentication: sessionAuthentication.wait,
 			getWsClientInstanceId: () => 'own-client-instance',
-			getTRPCClient: () => ({
-				voice: {
-					join: {
-						mutate: joinMutate,
-					},
-					leave: {
-						mutate: leaveMutate,
-					},
-					updateState: {
-						mutate: updateStateMutate,
-					},
-				},
-			}),
+			getTRPCClient: () => clientIdentity,
+			getTRPCClientIfInitialized: () => clientIdentity,
+			isTRPCSessionAuthenticated: () => authenticated,
+			subscribeServerConnectionState: (listener: () => void) => {
+				connectionListener = listener;
+				return () => {};
+			},
+			TRPCClientUnavailableError: class extends Error {},
 		}));
 		mock.module('../provider-cleanup', () => ({
 			runVoiceProviderCleanup,
 		}));
 
 		({
+			relayOwnVoiceState,
+			setOwnVoiceIntent,
+			setOwnPushHold,
 			addUserToVoiceChannel,
 			clearOwnVoiceSessionAfterReconnectFailure,
 			leaveVoiceSessionAfterRecoveryFailure,
@@ -228,10 +235,13 @@ describe('voice actions', () => {
 			updateVoiceUserState,
 			flushVoiceForDesktopQuit,
 		} = await import('../actions'));
+		screenShareCardType = (await import('@/components/channel-view/voice/hooks/use-pin-card-controller')).PinnedCardType
+			.SCREEN_SHARE;
 	});
 
 	beforeEach(() => {
 		useServerStore.getState().resetState();
+		useServerStore.getState().setOwnVoiceIntent({ micMuted: false, soundMuted: false });
 		resetVoiceSessionState();
 		playSound.mockClear();
 		runVoiceProviderCleanup.mockClear();
@@ -240,6 +250,7 @@ describe('voice actions', () => {
 		updateStateMutate.mockClear();
 		waitBeforeUpdateStateResolve = undefined;
 		resetVoiceSwitchStateForTests();
+		authenticated = true;
 		sessionAuthentication.cancel(new Error('Test reset'));
 		sessionAuthentication.authenticate();
 		joinShouldFail = false;
@@ -266,11 +277,9 @@ describe('voice actions', () => {
 					},
 				},
 			},
-			ownVoiceDefaults: {
+			ownVoiceIntent: {
 				micMuted: false,
 				soundMuted: false,
-				webcamEnabled: true,
-				sharingScreen: true,
 			},
 			pinnedCard: {
 				id: 'screen-share-42',
@@ -286,11 +295,9 @@ describe('voice actions', () => {
 		expect(state.currentVoiceChannelId).toBeUndefined();
 		expect(state.selectedChannelId).toBe(9);
 		expect(state.voiceMap[7]?.users[42]).toBeUndefined();
-		expect(state.ownVoiceDefaults).toEqual({
+		expect(state.ownVoiceIntent).toEqual({
 			micMuted: false,
 			soundMuted: false,
-			webcamEnabled: false,
-			sharingScreen: false,
 		});
 		expect(ownVoiceStateSelector(state)).toEqual({
 			micMuted: false,
@@ -585,13 +592,14 @@ describe('voice actions', () => {
 	});
 
 	it('serializes own voice-state updates and stamps a monotonically increasing seq', async () => {
+		useServerStore.setState({ currentVoiceChannelId: 7 });
 		let resolveFirstUpdate: (() => void) | undefined;
 		waitBeforeUpdateStateResolve = new Promise<void>((resolve) => {
 			resolveFirstUpdate = resolve;
 		});
 
-		const firstUpdate = sendOwnVoiceStateUpdate({ micMuted: true });
-		const secondUpdate = sendOwnVoiceStateUpdate({ micMuted: false });
+		const firstUpdate = sendOwnVoiceStateUpdate({ webcamEnabled: true });
+		const secondUpdate = sendOwnVoiceStateUpdate({ webcamEnabled: false });
 		await Promise.resolve();
 
 		// The second update must wait for the first to settle.
@@ -602,8 +610,8 @@ describe('voice actions', () => {
 		await secondUpdate;
 
 		expect(updateStateMutate).toHaveBeenCalledTimes(2);
-		expect(updateStateMutate.mock.calls[0]?.[0]).toEqual({ micMuted: true, seq: 1 });
-		expect(updateStateMutate.mock.calls[1]?.[0]).toEqual({ micMuted: false, seq: 2 });
+		expect(updateStateMutate.mock.calls[0]?.[0]).toEqual({ webcamEnabled: true, seq: 1 });
+		expect(updateStateMutate.mock.calls[1]?.[0]).toEqual({ webcamEnabled: false, seq: 2 });
 	});
 
 	it('tracks screen share watchers by watcher id so duplicate events do not drift the badge count', () => {
@@ -683,11 +691,9 @@ describe('voice actions', () => {
 	it('snapshots reconnect intent before clearing own voice state when reconnecting', () => {
 		setJoinedVoiceChannelState({
 			ownUserId: 42,
-			ownVoiceDefaults: {
+			ownVoiceIntent: {
 				micMuted: true,
 				soundMuted: false,
-				webcamEnabled: false,
-				sharingScreen: false,
 			},
 			voiceMap: {
 				7: {
@@ -787,11 +793,9 @@ describe('voice actions', () => {
 					},
 				},
 			},
-			ownVoiceDefaults: {
+			ownVoiceIntent: {
 				micMuted: false,
 				soundMuted: false,
-				webcamEnabled: true,
-				sharingScreen: true,
 			},
 		});
 		setVoiceReconnectSuppression({
@@ -955,11 +959,9 @@ describe('voice actions', () => {
 					},
 				},
 			},
-			ownVoiceDefaults: {
+			ownVoiceIntent: {
 				micMuted: false,
 				soundMuted: false,
-				webcamEnabled: true,
-				sharingScreen: true,
 			},
 		});
 		setVoiceReconnectSuppression({
@@ -1020,5 +1022,195 @@ describe('voice actions', () => {
 		});
 
 		expect(playSound).not.toHaveBeenCalledWith(SoundType.REMOTE_USER_STARTED_STREAM);
+	});
+});
+
+describe('own mute relay queue', () => {
+	const flush = async () => {
+		for (let i = 0; i < 8; i += 1) await Promise.resolve();
+	};
+	beforeEach(() => {
+		useServerStore.getState().resetState();
+		useServerStore.setState({ currentVoiceChannelId: 7, ownVoiceIntent: { micMuted: false, soundMuted: false } });
+		resetVoiceSwitchStateForTests();
+		authenticated = true;
+		updateStateMutate.mockClear();
+		waitBeforeUpdateStateResolve = undefined;
+	});
+	it('coalesces queued changes and reads the latest full pair when sent', async () => {
+		const first = relayOwnVoiceState();
+		setOwnVoiceIntent({ micMuted: true });
+		const second = relayOwnVoiceState();
+		expect(second).toBe(first);
+		await first;
+		expect(updateStateMutate.mock.calls.map(([input]) => input)).toEqual([
+			{ micMuted: true, soundMuted: false, seq: 1 },
+		]);
+	});
+	it('sends exactly one trailing latest pair after an in-flight relay', async () => {
+		let release = () => {};
+		waitBeforeUpdateStateResolve = new Promise<void>((yes) => {
+			release = yes;
+		});
+		const first = relayOwnVoiceState();
+		await flush();
+		setOwnVoiceIntent({ micMuted: true });
+		setOwnVoiceIntent({ soundMuted: true });
+		const trailing = relayOwnVoiceState();
+		release();
+		await Promise.all([first, trailing]);
+		expect(updateStateMutate.mock.calls.map(([input]) => input)).toEqual([
+			{ micMuted: false, soundMuted: false, seq: 1 },
+			{ micMuted: true, soundMuted: true, seq: 2 },
+		]);
+	});
+	for (const retirement of ['leave-rejoin', 'socket-reopen', 'client-replacement'] as const)
+		it(`rejects retired video and skips retired relay after ${retirement}`, async () => {
+			let release = () => {};
+			waitBeforeUpdateStateResolve = new Promise<void>((yes) => {
+				release = yes;
+			});
+			const blocking = sendOwnVoiceStateUpdate({ webcamEnabled: true });
+			await flush();
+			const oldRelay = relayOwnVoiceState();
+			const oldVideo = sendOwnVoiceStateUpdate({ sharingScreen: true }).then(
+				() => false,
+				() => true,
+			);
+			if (retirement === 'leave-rejoin') {
+				useServerStore.getState().setCurrentVoiceChannelId(undefined);
+				useServerStore.getState().setCurrentVoiceChannelId(7);
+			}
+			if (retirement === 'socket-reopen') {
+				authenticated = false;
+				connectionListener();
+				authenticated = true;
+				connectionListener();
+			}
+			if (retirement === 'client-replacement') clientIdentity = { ...clientIdentity };
+			release();
+			await blocking;
+			await oldRelay;
+			expect(await oldVideo).toBe(true);
+			expect(updateStateMutate).toHaveBeenCalledTimes(1);
+			await relayOwnVoiceState();
+			expect(updateStateMutate).toHaveBeenCalledTimes(2);
+		});
+	it('skips unauthenticated and off-channel sends while keeping intent', async () => {
+		authenticated = false;
+		setOwnVoiceIntent({ micMuted: true });
+		await relayOwnVoiceState();
+		expect(updateStateMutate).not.toHaveBeenCalled();
+		authenticated = true;
+		useServerStore.getState().setCurrentVoiceChannelId(undefined);
+		await relayOwnVoiceState();
+		expect(updateStateMutate).not.toHaveBeenCalled();
+		expect(useServerStore.getState().ownVoiceIntent.micMuted).toBe(true);
+	});
+	it('contains relay failure and later sends current intent', async () => {
+		updateStateMutate.mockImplementationOnce(async () => {
+			throw new Error('socket');
+		});
+		setOwnVoiceIntent({ micMuted: true });
+		await relayOwnVoiceState();
+		expect(useServerStore.getState().ownVoiceIntent.micMuted).toBe(true);
+		setOwnVoiceIntent({ soundMuted: true });
+		await relayOwnVoiceState();
+		expect(updateStateMutate.mock.calls.at(-1)?.[0]).toMatchObject({ micMuted: true, soundMuted: true });
+	});
+	it('orders sequence numbers at send time across relay and video', async () => {
+		const relay = relayOwnVoiceState();
+		const video = sendOwnVoiceStateUpdate({ webcamEnabled: true });
+		await Promise.all([relay, video]);
+		expect(updateStateMutate.mock.calls.map(([input]) => input)).toEqual([
+			{ micMuted: false, soundMuted: false, seq: 1 },
+			{ webcamEnabled: true, seq: 2 },
+		]);
+	});
+});
+
+describe('own session presentation boundaries', () => {
+	beforeEach(() => {
+		useServerStore.getState().resetState();
+		useServerStore.getState().setOwnVoiceIntent({ micMuted: true, soundMuted: false });
+		resetVoiceSessionState();
+		resetVoiceSwitchStateForTests();
+		updateStateMutate.mockClear();
+		authenticated = true;
+	});
+	it('a hold relays the effective pair without changing reconnect intent', async () => {
+		useServerStore.setState({ ownUserId: 42, currentVoiceChannelId: 7 });
+		const before = selectVoiceSessionState((state) => state);
+		setOwnPushHold({ talk: true, mute: false });
+		await relayOwnVoiceState();
+		expect(updateStateMutate.mock.calls.at(-1)?.[0]).toMatchObject({ micMuted: false, soundMuted: false });
+		setOwnPushHold({ talk: false, mute: false });
+		await relayOwnVoiceState();
+		expect(selectVoiceSessionState((state) => state)).toBe(before);
+		expect(updateStateMutate.mock.calls.at(-1)?.[0]).toMatchObject({ micMuted: true, soundMuted: false });
+		expect(useServerStore.getState().ownVoiceIntent.micMuted).toBe(true);
+	});
+	for (const current of [7, undefined])
+		it(`another channel cannot unpin this session: ${current}`, () => {
+			useServerStore.setState({
+				currentVoiceChannelId: current,
+				ownUserId: 42,
+				pinnedCard: { id: 'screen-share-42', type: screenShareCardType, userId: 42 },
+				voiceMap: {
+					8: { users: { 42: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: true } } },
+				},
+			});
+			updateVoiceUserState(42, 8, { sharingScreen: false });
+			expect(useServerStore.getState().pinnedCard?.id).toBe('screen-share-42');
+		});
+	it('does not unpin a share picker on a false-to-false own echo', () => {
+		useServerStore.setState({
+			currentVoiceChannelId: 7,
+			ownUserId: 42,
+			pinnedCard: { id: 'screen-share-42', type: screenShareCardType, userId: 42 },
+			voiceMap: {
+				7: { users: { 42: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: false } } },
+			},
+		});
+		updateVoiceUserState(42, 7, { sharingScreen: false });
+		expect(useServerStore.getState().pinnedCard?.id).toBe('screen-share-42');
+	});
+	it('a fresh client with a handshake-adopted high-seq seat waits for explicit join before its low-seq relay', async () => {
+		let lastSeq = 9000;
+		const applied: number[] = [];
+		updateStateMutate.mockImplementation(async (input) => {
+			if (
+				typeof input === 'object' &&
+				input !== null &&
+				'seq' in input &&
+				typeof input.seq === 'number' &&
+				input.seq > lastSeq
+			) {
+				lastSeq = input.seq;
+				applied.push(input.seq);
+			}
+		});
+		useServerStore.setState({
+			ownUserId: 42,
+			currentVoiceChannelId: undefined,
+			voiceMap: {
+				7: { users: { 42: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: false } } },
+			},
+		});
+		setOwnVoiceIntent({ micMuted: true });
+		await relayOwnVoiceState();
+		expect(updateStateMutate).not.toHaveBeenCalled();
+		expect(getPendingVoiceReconnect()).toBeUndefined();
+		beforeJoinResolve = () => {
+			lastSeq = 0;
+		};
+		await joinVoice(7, { silent: true });
+		await relayOwnVoiceState();
+		expect(applied[0]).toBe(1);
+		expect(joinMutate.mock.calls.at(-1)?.[0]).toMatchObject({ state: { micMuted: true, soundMuted: false } });
+		updateStateMutate.mockImplementation(async () => {
+			await waitBeforeUpdateStateResolve;
+		});
+		beforeJoinResolve = undefined;
 	});
 });

@@ -19,6 +19,7 @@ describe('transport recovery microphone boundary', () => {
 		await expect(
 			recoverTransportMicrophone(input({ micMuted: true }), {
 				start,
+				discardCurrent: async () => {},
 				publishCurrent,
 				onStartFailed,
 			}),
@@ -35,6 +36,7 @@ describe('transport recovery microphone boundary', () => {
 		await expect(
 			recoverTransportMicrophone(input(), {
 				start: async () => ({ status: 'failed', error }),
+				discardCurrent: async () => {},
 				publishCurrent: async () => {},
 				onStartFailed,
 			}),
@@ -47,6 +49,7 @@ describe('transport recovery microphone boundary', () => {
 		await expect(
 			recoverTransportMicrophone(input(), {
 				start: async () => ({ status: 'superseded' }),
+				discardCurrent: async () => {},
 				publishCurrent: async () => {},
 				onStartFailed: () => {},
 			}),
@@ -59,6 +62,7 @@ describe('transport recovery microphone boundary', () => {
 		await expect(
 			recoverTransportMicrophone(input({ recoveryJoined: false, hasCurrentStream: true, currentTrackLive: true }), {
 				start: async () => ({ status: 'started' }),
+				discardCurrent: async () => {},
 				publishCurrent,
 				onStartFailed: () => {},
 			}),
@@ -74,4 +78,23 @@ describe('transport recovery microphone boundary', () => {
 			}),
 		).toBe('skip');
 	});
+});
+
+it('discards an unpublished current capture before reporting failure', async () => {
+	const events: string[] = [];
+	expect(
+		await recoverTransportMicrophone(input({ recoveryJoined: false, hasCurrentStream: true, currentTrackLive: true }), {
+			start: undefined,
+			publishCurrent: async () => {
+				throw Error('publish');
+			},
+			discardCurrent: async () => {
+				events.push('discard');
+			},
+			onStartFailed: () => {
+				events.push('failure');
+			},
+		}),
+	).toBe('continued-muted');
+	expect(events).toEqual(['discard', 'failure']);
 });

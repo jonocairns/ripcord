@@ -36,7 +36,6 @@ const mountMediaSettingsIntegration = (deps: TMediaSettingsDependencies): (() =>
 				const outcome = await deps.startMicrophone();
 				if (outcome.status === 'failed') {
 					deps.log('Failed to apply microphone settings live', { error: outcome.error });
-					deps.error('Failed to apply microphone settings');
 				}
 			}
 			if (shouldRestartWebcam) {
