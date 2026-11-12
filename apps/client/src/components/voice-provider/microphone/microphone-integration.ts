@@ -297,12 +297,6 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 								});
 								if (current() && controller.getRawTrack()?.readyState !== 'live' && !recovering)
 									void controller.recover('ended');
-								if (
-									current() &&
-									controller.getRawTrack()?.readyState === 'live' &&
-									pipeline.outboundAudioTrack.readyState !== 'live'
-								)
-									throw new Error('Microphone output ended during setup');
 								if (current() && gainVolume !== ports.getStoredVolume())
 									controller.setGainVolume(ports.getStoredVolume());
 								if (!current()) {

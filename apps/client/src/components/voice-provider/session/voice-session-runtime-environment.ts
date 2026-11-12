@@ -135,7 +135,6 @@ const voiceSessionRuntimeEnvironment = {
 	relayOwnVoiceState: () => {
 		void relayOwnVoiceState();
 	},
-
 	createDevice: () => Device.factory(),
 	requestVoiceRestoreOrJoin,
 	sendOwnVoiceStateUpdate,

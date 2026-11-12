@@ -47,7 +47,7 @@ const createVoiceStateOperations = (ports: TVoiceStateOperationPorts) => {
 		ports.cancelPushHold();
 	};
 
-	return { begin, capture: () => latestOperationToken, isCurrent, commitTerminalMicMuted };
+	return { begin, isCurrent, commitTerminalMicMuted };
 };
 
 type TVoiceStateOperations = ReturnType<typeof createVoiceStateOperations>;

@@ -124,7 +124,7 @@ it('a live ensure leaves operation and recovery budget unchanged', async () => {
 	const h = harness();
 	useServerStore.getState().setOwnVoiceIntent({ micMuted: false });
 	h.setLive(true);
-	const token = h.operations.capture();
+	const token = h.operations.begin();
 	await h.controls.ensureMicStarted();
 	expect(h.operations.isCurrent(token)).toBe(true);
 	expect(h.reset).not.toHaveBeenCalled();

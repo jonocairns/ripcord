@@ -192,7 +192,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		closeProducerOnServer,
 		setLocalActivity: (userId, isSpeaking) => voiceActivityStoreRef.current.setLocalUserActivity(userId, isSpeaking),
 		commitTerminalMicMuted: () => {
-			void voiceStateOperations.commitTerminalMicMuted();
+			voiceStateOperations.commitTerminalMicMuted();
 		},
 	});
 	const { start: startMicStream } = microphone;
