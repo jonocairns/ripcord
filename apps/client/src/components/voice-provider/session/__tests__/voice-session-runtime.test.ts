@@ -124,7 +124,6 @@ const createHarness = () => {
 		bumpVoiceSessionReconnectNonce: mock(() => {}),
 	};
 	const microphone = {
-		restart: mock(async (): Promise<TMicrophoneStartOutcome> => ({ status: 'started' })),
 		getRawTrack: () => undefined,
 		createLifecycleLease: () => ({ isCurrent: () => state.microphoneActive }),
 		prepare: mock(async (_isCurrent?: () => boolean): Promise<TMicrophonePreparedPipeline> => {
@@ -948,7 +947,7 @@ describe('current microphone failure ownership', () => {
 				await h.runtime.init(capabilities, 5);
 				expect(h.ports.microphone.commitTerminalMute).toHaveBeenCalledTimes(current ? 1 : 0);
 				expect(h.ports.notifyMicrophoneStartFailed).toHaveBeenCalledTimes(current ? 1 : 0);
-				expect(h.ports.microphone.restart).toHaveBeenCalledTimes(current ? 0 : 1);
+				expect(h.ports.microphone.start).toHaveBeenCalledTimes(current ? 0 : 1);
 				if (phase === 'publish') expect(h.ports.microphone.cleanup).toHaveBeenCalled();
 			});
 	it('preserves mic choice without SPEAK', async () => {
@@ -976,7 +975,7 @@ it('retries a stale transport-start failure once without committing stale mute o
 		return { status: 'failed', error: Error('stale transport start') };
 	});
 	await h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext);
-	expect(h.ports.microphone.restart).toHaveBeenCalledTimes(1);
+	expect(h.ports.microphone.start).toHaveBeenCalledTimes(2);
 	expect(h.ports.microphone.commitTerminalMute).not.toHaveBeenCalled();
 	expect(h.ports.notifyMicrophoneStartFailed).not.toHaveBeenCalled();
 });

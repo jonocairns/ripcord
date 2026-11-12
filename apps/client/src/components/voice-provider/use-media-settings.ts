@@ -1,7 +1,5 @@
 import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
-import { useServerStore } from '@/features/server/slice';
-import { ownMicWantedSelector } from '@/features/server/voice/selectors';
 import { logVoice } from '@/helpers/browser-logger';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import {
@@ -19,7 +17,6 @@ const useMediaSettings = (inputs: TUseMediaSettingsInputs) => {
 		() =>
 			mountMediaSettingsIntegration({
 				getInputs: () => inputsRef.current,
-				isMicWanted: () => ownMicWantedSelector(useServerStore.getState()),
 				subscribeInputs: (listener) => {
 					listenerRef.current = listener;
 					return () => {

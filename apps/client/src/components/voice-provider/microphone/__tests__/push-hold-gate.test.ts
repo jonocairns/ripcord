@@ -23,6 +23,8 @@ const harness = () => {
 	const results: Promise<TMicrophoneStartOutcome>[] = [];
 	const start = mock(() => results.shift() ?? Promise.resolve<TMicrophoneStartOutcome>({ status: 'started' }));
 	const error = mock((_message: string) => {});
+	const reset = mock(() => {});
+	let live = false;
 	const apply = mock((_muted: boolean) => {});
 	const controls = createOwnMicControls({
 		getIntent: () => store().ownVoiceIntent,
@@ -35,9 +37,9 @@ const harness = () => {
 		commitMicFailure: operations.commitTerminalMicMuted,
 		getCurrentVoiceChannelId: () => store().currentVoiceChannelId,
 		captureSession: () => () => true,
-		hasLiveMicCapture: () => false,
+		hasLiveMicCapture: () => live,
 		startMicStream: start,
-		resetMicRecoveryBudget: () => {},
+		resetMicRecoveryBudget: reset,
 		beginOperation: operations.begin,
 		isOperationCurrent: operations.isCurrent,
 		playSound: () => {},
@@ -55,8 +57,11 @@ const harness = () => {
 		}),
 		getHold: () => store().ownPushHold,
 		setHold: (hold) => {
+			const previous = store().ownPushHold;
 			store().setOwnPushHold(hold);
-			void controls.ensureMicStarted();
+			void controls.ensureMicStarted({
+				resetRecoveryBudget: (hold.talk && !previous.talk) || (hold.mute && !previous.mute),
+			});
 		},
 		getDesktopBridge: () => ({
 			setGlobalPushKeybinds: async () => ({ talkRegistered: true, muteRegistered: true, errors: [] }),
@@ -84,6 +89,10 @@ const harness = () => {
 	});
 	return {
 		controls,
+		reset,
+		setLive: (value: boolean) => {
+			live = value;
+		},
 		operations,
 		writes,
 		results,
@@ -191,5 +200,26 @@ it('an old start failure cannot cancel a fresh press and current capture is atte
 	expect(h.error).not.toHaveBeenCalled();
 	expect(store().ownPushHold.talk).toBe(true);
 	expect(h.start).toHaveBeenCalledTimes(2);
+	h.cleanup();
+});
+
+it('fresh talk from absent resets recovery once, repeats and live key events preserve it', async () => {
+	const h = harness();
+	h.emit('talk', true);
+	await Promise.resolve();
+	expect(h.reset).toHaveBeenCalledTimes(1);
+	expect(h.start).toHaveBeenCalledTimes(1);
+	h.emit('talk', true);
+	expect(h.reset).toHaveBeenCalledTimes(1);
+	expect(h.start).toHaveBeenCalledTimes(1);
+	store().setOwnVoiceIntent({ micMuted: false });
+	h.emit('talk', false);
+	h.release();
+	expect(h.reset).toHaveBeenCalledTimes(1);
+	h.setLive(true);
+	h.emit('talk', false);
+	h.release();
+	h.emit('talk', true);
+	expect(h.reset).toHaveBeenCalledTimes(1);
 	h.cleanup();
 });

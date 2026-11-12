@@ -11,7 +11,6 @@ type TMediaSettingsInputs = {
 };
 type TMediaSettingsDependencies = {
 	getInputs: () => TMediaSettingsInputs;
-	isMicWanted: () => boolean;
 	subscribeInputs: (listener: () => void) => () => void;
 	startMicrophone: () => Promise<TMicrophoneStartOutcome>;
 	restartWebcam: () => Promise<void>;

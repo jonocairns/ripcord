@@ -12,7 +12,6 @@ type TOwnMicControlPorts = {
 	commitMicFailure: () => void;
 	getCurrentVoiceChannelId: () => number | undefined;
 	hasLiveMicCapture: () => boolean;
-	getPendingMicStart?: () => Promise<TMicrophoneStartOutcome> | undefined;
 	captureSession: () => () => boolean;
 	startMicStream: () => Promise<TMicrophoneStartOutcome>;
 	resetMicRecoveryBudget: () => void;
@@ -22,54 +21,23 @@ type TOwnMicControlPorts = {
 	showError: (message: string) => void;
 };
 const createOwnMicControls = (ports: TOwnMicControlPorts) => {
-	let pending: { promise: Promise<TMicrophoneStartOutcome>; token: number; channel: number } | undefined;
-	const ensureMicStarted = async (retry = true): Promise<void> => {
+	const ensureMicStarted = async (options?: { resetRecoveryBudget?: boolean }): Promise<void> => {
 		const isSessionCurrent = ports.captureSession();
 		const channel = ports.getCurrentVoiceChannelId();
 		if (channel === undefined || !ports.isMicWanted()) return;
-		const inFlight = pending?.promise ?? ports.getPendingMicStart?.();
-		if (inFlight) {
-			const token = ports.beginOperation();
-			await inFlight;
-			if (
-				ports.isOperationCurrent(token) &&
-				isSessionCurrent() &&
-				ports.getCurrentVoiceChannelId() === channel &&
-				ports.isMicWanted() &&
-				(ports.getPendingMicStart?.() !== undefined || !ports.hasLiveMicCapture())
-			)
-				await ensureMicStarted(false);
-			return;
-		}
-		if (ports.hasLiveMicCapture()) return;
-		const token = ports.beginOperation();
-		ports.resetMicRecoveryBudget();
-		const attempt = { token, channel, promise: ports.startMicStream() };
-		pending = attempt;
-		let outcome: TMicrophoneStartOutcome;
-		try {
-			outcome = await attempt.promise;
-			if (
-				outcome.status === 'failed' &&
-				ports.isOperationCurrent(token) &&
-				isSessionCurrent() &&
-				ports.getCurrentVoiceChannelId() === channel
-			) {
-				ports.commitMicFailure();
-				ports.showError(getTrpcError(outcome.error, 'Failed to start microphone'));
-			}
-		} finally {
-			if (pending === attempt) pending = undefined;
-		}
+		if (options?.resetRecoveryBudget && !ports.hasLiveMicCapture()) ports.resetMicRecoveryBudget();
+		const token = ports.hasLiveMicCapture() ? undefined : ports.beginOperation();
+		const outcome = await ports.startMicStream();
 		if (
-			retry &&
-			(outcome.status === 'superseded' || (outcome.status === 'failed' && !ports.isOperationCurrent(token))) &&
+			outcome.status === 'failed' &&
+			token !== undefined &&
+			ports.isOperationCurrent(token) &&
 			isSessionCurrent() &&
-			ports.getCurrentVoiceChannelId() === channel &&
-			ports.isMicWanted() &&
-			!ports.hasLiveMicCapture()
-		)
-			await ensureMicStarted(false);
+			ports.getCurrentVoiceChannelId() === channel
+		) {
+			ports.commitMicFailure();
+			ports.showError(getTrpcError(outcome.error, 'Failed to start microphone'));
+		}
 	};
 	const setMicMuted = async (next: boolean, options?: { playSound?: boolean }) => {
 		const intent = ports.getIntent();
@@ -78,14 +46,15 @@ const createOwnMicControls = (ports: TOwnMicControlPorts) => {
 			ports.beginOperation();
 			ports.setOwnVoiceIntent({ micMuted: true });
 			ports.cancelPushHold();
+			if (!intent.micMuted && options?.playSound !== false) ports.playSound(SoundType.OWN_USER_MUTED_MIC);
+			return;
 		}
-		if (next === intent.micMuted) return;
+		if (!intent.micMuted) return;
 		ports.beginOperation();
-		ports.setOwnVoiceIntent({ micMuted: next });
-		if (!next) ports.resetMicRecoveryBudget();
-		if (options?.playSound !== false)
-			ports.playSound(next ? SoundType.OWN_USER_MUTED_MIC : SoundType.OWN_USER_UNMUTED_MIC);
-		if (!next) await ensureMicStarted();
+		ports.setOwnVoiceIntent({ micMuted: false });
+		ports.resetMicRecoveryBudget();
+		if (options?.playSound !== false) ports.playSound(SoundType.OWN_USER_UNMUTED_MIC);
+		await ensureMicStarted();
 	};
 	const toggleSound = async (options?: { forceUnmute?: boolean }) => {
 		ports.beginOperation();

@@ -10,7 +10,7 @@ import {
 } from '@/components/voice-provider/microphone/mic-audio-processing';
 import { setOwnMicTestActive } from '@/features/server/voice/actions';
 import { useLatestRef } from '@/hooks/use-latest-ref';
-import { createMicTestResources } from './mic-test-resources';
+import { createMicTestResources, runMicTestSetup } from './mic-test-resources';
 import { createMicTestRunOwner } from './mic-test-run-owner';
 
 const ANALYSER_FFT_SIZE = 512;
@@ -237,14 +237,9 @@ const MicrophoneTestPanel = memo(
 			const recording = stopRecordingClip();
 			if (animationFrameRef.current !== undefined) cancelAnimationFrame(animationFrameRef.current);
 			animationFrameRef.current = undefined;
-			const raw = rawStreamRef.current;
 			rawStreamRef.current = undefined;
-			if (!resources) raw?.getTracks().forEach((track) => track.stop());
-			const pipeline = micAudioPipelineRef.current;
 			micAudioPipelineRef.current = undefined;
-			const context = audioContextRef.current;
 			audioContextRef.current = undefined;
-			if (!resources) monitorGainNodeRef.current?.disconnect();
 			outputStreamRef.current = undefined;
 			analyserRef.current = undefined;
 			monitorGainNodeRef.current = undefined;
@@ -252,12 +247,7 @@ const MicrophoneTestPanel = memo(
 			setTestPreviewState(undefined);
 			setWasmDiagnostics(undefined);
 			if (levelBarRef.current) levelBarRef.current.style.width = '0%';
-			const drain = Promise.all([
-				recording,
-				resourceDrain,
-				!resources ? pipeline?.destroy().catch(() => {}) : undefined,
-				!resources ? context?.close().catch(() => {}) : undefined,
-			]).then(() => {});
+			const drain = Promise.all([recording, resourceDrain]).then(() => {});
 			return drain;
 		}, [stopRecordingClip]);
 		const teardownLatest = useLatestRef(teardown);
@@ -298,104 +288,88 @@ const MicrophoneTestPanel = memo(
 			resourcesRef.current = resources;
 			await run.track(
 				(async () => {
-					let rawStream: MediaStream | undefined;
-					let micAudioPipeline: TMicAudioProcessingPipeline | undefined;
-					let audioContext: AudioContext | undefined;
-
 					try {
-						const raw = await resources.acquire(
-							navigator.mediaDevices.getUserMedia({ audio: resolveMicAudioConstraints() }),
-							(stream) => {
+						await runMicTestSetup({
+							resources,
+							isCurrent: run.isCurrent,
+							capture: () => navigator.mediaDevices.getUserMedia({ audio: resolveMicAudioConstraints() }),
+							stopCapture: (stream) => {
 								stream.getTracks().forEach((track) => track.stop());
 							},
-						);
-						if (!raw) return;
-						rawStream = raw;
-						if (!run.isCurrent()) {
-							raw.getTracks().forEach((track) => track.stop());
-							return;
-						}
-						rawStreamRef.current = raw;
-						const rawTrack = raw.getAudioTracks()[0];
-						if (!rawTrack) throw new Error('Unable to access microphone track for testing.');
-						micAudioPipeline = await resources.acquire(
-							createMicAudioProcessingPipeline({
-								inputTrack: rawTrack,
-								wasmNoiseSuppressionEnabled: resolvedMicProcessingConfig.wasmNoiseSuppressionEnabled,
-								onWasmError: (error) => {
-									if (!run.isCurrent()) return;
-									setMicTestError(error.message);
-									void run.fail();
-								},
-							}),
-							(pipeline) => pipeline?.destroy(),
-						);
-						if (!run.isCurrent()) {
-							return;
-						}
-						micAudioPipelineRef.current = micAudioPipeline;
-						const outputStream = micAudioPipeline?.backend === 'browser-wasm' ? micAudioPipeline.stream : raw;
-						const previewState: TMicTestPreviewState =
-							micAudioPipeline?.backend === 'browser-wasm' ? 'browser-wasm' : 'browser-capture';
+							pipeline: (raw) => {
+								rawStreamRef.current = raw;
+								const rawTrack = raw.getAudioTracks()[0];
+								if (!rawTrack) throw new Error('Unable to access microphone track for testing.');
+								return createMicAudioProcessingPipeline({
+									inputTrack: rawTrack,
+									wasmNoiseSuppressionEnabled: resolvedMicProcessingConfig.wasmNoiseSuppressionEnabled,
+									onWasmError: (error) => {
+										if (run.isCurrent()) {
+											setMicTestError(error.message);
+											void run.fail();
+										}
+									},
+								});
+							},
+							destroyPipeline: (pipeline) => pipeline?.destroy(),
+							monitor: (raw, pipeline) => {
+								micAudioPipelineRef.current = pipeline;
+								const outputStream = pipeline?.backend === 'browser-wasm' ? pipeline.stream : raw;
+								const audioContext = resources.own(new AudioContextClass(), (context) => context.close());
+								audioContextRef.current = audioContext;
+								const source = audioContext.createMediaStreamSource(outputStream);
+								const analyser = audioContext.createAnalyser();
+								const monitorGainNode = resources.own(audioContext.createGain(), (node) => node.disconnect());
+								analyser.fftSize = ANALYSER_FFT_SIZE;
+								analyser.smoothingTimeConstant = ANALYSER_SMOOTHING;
+								monitorGainNode.gain.value = monitorEnabledRef.current ? 1 : 0;
+								source.connect(analyser);
+								source.connect(monitorGainNode);
+								monitorGainNode.connect(audioContext.destination);
+								monitorGainNodeRef.current = monitorGainNode;
+								outputStreamRef.current = outputStream;
+								analyserRef.current = analyser;
+								return {
+									audioContext,
+									analyser,
+									previewState:
+										pipeline?.backend === 'browser-wasm' ? ('browser-wasm' as const) : ('browser-capture' as const),
+								};
+							},
+							resume: async ({ audioContext }) => {
+								if (audioContext.state !== 'running') await audioContext.resume();
+							},
+							onReady: ({ analyser, previewState }) => {
+								const timeDomainData = new Float32Array(analyser.fftSize);
+								let displayLevel = 0;
+								const ATTACK_COEFF = 0.3;
+								const RELEASE_COEFF = 0.08;
+								const updateInputLevel = () => {
+									analyser.getFloatTimeDomainData(timeDomainData);
 
-						audioContext = resources.own(new AudioContextClass(), (context) => context.close());
-						audioContextRef.current = audioContext;
-						const source = audioContext.createMediaStreamSource(outputStream);
-						const analyser = audioContext.createAnalyser();
-						const monitorGainNode = resources.own(audioContext.createGain(), (node) => node.disconnect());
+									let sumSquares = 0;
+									for (let index = 0; index < timeDomainData.length; index += 1) {
+										const sample = timeDomainData[index] ?? 0;
+										sumSquares += sample * sample;
+									}
 
-						analyser.fftSize = ANALYSER_FFT_SIZE;
-						analyser.smoothingTimeConstant = ANALYSER_SMOOTHING;
-						monitorGainNode.gain.value = monitorEnabledRef.current ? 1 : 0;
+									const rms = Math.sqrt(sumSquares / timeDomainData.length);
+									const targetLevel = Math.min(
+										LEVEL_CEILING,
+										Math.max(LEVEL_FLOOR, (rms / RMS_NORMALIZATION) * LEVEL_CEILING),
+									);
+									const coeff = targetLevel > displayLevel ? ATTACK_COEFF : RELEASE_COEFF;
+									displayLevel += (targetLevel - displayLevel) * coeff;
+									if (levelBarRef.current) {
+										levelBarRef.current.style.width = `${displayLevel}%`;
+									}
+									animationFrameRef.current = requestAnimationFrame(updateInputLevel);
+								};
 
-						source.connect(analyser);
-						source.connect(monitorGainNode);
-						monitorGainNode.connect(audioContext.destination);
-						monitorGainNodeRef.current = monitorGainNode;
-
-						if (audioContext.state !== 'running') {
-							await audioContext.resume();
-						}
-
-						if (!run.isCurrent()) return;
-
-						const timeDomainData = new Float32Array(analyser.fftSize);
-						let displayLevel = 0;
-						const ATTACK_COEFF = 0.3;
-						const RELEASE_COEFF = 0.08;
-						const updateInputLevel = () => {
-							analyser.getFloatTimeDomainData(timeDomainData);
-
-							let sumSquares = 0;
-							for (let index = 0; index < timeDomainData.length; index += 1) {
-								const sample = timeDomainData[index] ?? 0;
-								sumSquares += sample * sample;
-							}
-
-							const rms = Math.sqrt(sumSquares / timeDomainData.length);
-							const targetLevel = Math.min(
-								LEVEL_CEILING,
-								Math.max(LEVEL_FLOOR, (rms / RMS_NORMALIZATION) * LEVEL_CEILING),
-							);
-							const coeff = targetLevel > displayLevel ? ATTACK_COEFF : RELEASE_COEFF;
-							displayLevel += (targetLevel - displayLevel) * coeff;
-							if (levelBarRef.current) {
-								levelBarRef.current.style.width = `${displayLevel}%`;
-							}
-							animationFrameRef.current = requestAnimationFrame(updateInputLevel);
-						};
-
-						rawStreamRef.current = rawStream;
-						outputStreamRef.current = outputStream;
-						audioContextRef.current = audioContext;
-						analyserRef.current = analyser;
-						monitorGainNodeRef.current = monitorGainNode;
-						micAudioPipelineRef.current = micAudioPipeline;
-
-						setIsTestingMic(true);
-						setTestPreviewState(previewState);
-						setMicTestError(undefined);
-						updateInputLevel();
+								setTestPreviewState(previewState);
+								updateInputLevel();
+							},
+						});
 					} catch (error) {
 						await resources.detach();
 						if (!run.isCurrent()) return;

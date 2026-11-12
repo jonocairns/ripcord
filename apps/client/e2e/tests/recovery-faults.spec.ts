@@ -227,13 +227,14 @@ test('repeated default-device changes do not republish a muted microphone', asyn
 			.poll(() => micLifecycleEvents.filter((event) => event.includes('Microphone audio producer created')).length)
 			.toBeGreaterThanOrEqual(1);
 
+		const closeCountBeforeMute = micLifecycleEvents.filter((event) => event.includes('Audio producer closed')).length;
 		await page.getByTitle('Mute microphone').click();
+		await expect
+			.poll(() => micLifecycleEvents.filter((event) => event.includes('Audio producer closed')).length)
+			.toBe(closeCountBeforeMute + 1);
 		await expect(page.getByTitle('Unmute microphone')).toBeVisible();
 		const producerCountBeforeDeviceChanges = micLifecycleEvents.filter((event) =>
 			event.includes('Microphone audio producer created'),
-		).length;
-		const closeCountBeforeDeviceChanges = micLifecycleEvents.filter((event) =>
-			event.includes('Audio producer closed'),
 		).length;
 
 		await page.evaluate(async () => {
@@ -245,7 +246,7 @@ test('repeated default-device changes do not republish a muted microphone', asyn
 
 		await expect
 			.poll(() => micLifecycleEvents.filter((event) => event.includes('Audio producer closed')).length)
-			.toBe(closeCountBeforeDeviceChanges + 1);
+			.toBe(closeCountBeforeMute + 1);
 		await page.waitForTimeout(2_000);
 		expect(micLifecycleEvents.filter((event) => event.includes('Microphone audio producer created'))).toHaveLength(
 			producerCountBeforeDeviceChanges,

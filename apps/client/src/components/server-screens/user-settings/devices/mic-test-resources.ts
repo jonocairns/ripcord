@@ -37,4 +37,25 @@ const createMicTestResources = (isCurrent: () => boolean) => {
 	return { own, acquire, detach };
 };
 
-export { createMicTestResources };
+const runMicTestSetup = async <Capture, Pipeline, Monitor>(ports: {
+	resources: ReturnType<typeof createMicTestResources>;
+	isCurrent: () => boolean;
+	capture: () => Promise<Capture>;
+	stopCapture: (capture: Capture) => void;
+	pipeline: (capture: Capture) => Promise<Pipeline>;
+	destroyPipeline: (pipeline: Pipeline) => void | Promise<void>;
+	monitor: (capture: Capture, pipeline: Pipeline | undefined) => Monitor;
+	resume: (monitor: Monitor) => Promise<void>;
+	onReady: (monitor: Monitor) => void;
+}): Promise<void> => {
+	const capture = await ports.resources.acquire(ports.capture(), ports.stopCapture);
+	if (capture === undefined || !ports.isCurrent()) return;
+	const pipeline = await ports.resources.acquire(ports.pipeline(capture), ports.destroyPipeline);
+	if (!ports.isCurrent()) return;
+	// An undefined pipeline means browser passthrough, not a failed acquisition.
+	const monitor = ports.monitor(capture, pipeline);
+	await ports.resume(monitor);
+	if (ports.isCurrent()) ports.onReady(monitor);
+};
+
+export { createMicTestResources, runMicTestSetup };

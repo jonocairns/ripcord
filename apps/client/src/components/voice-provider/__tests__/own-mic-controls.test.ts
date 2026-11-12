@@ -65,7 +65,7 @@ it('starts unmute immediately without any relay dependency, including ended reta
 	const result = h.controls.setMicMuted(false);
 	expect(h.start).toHaveBeenCalledTimes(1);
 	await result;
-	expect(h.reset).toHaveBeenCalledTimes(2);
+	expect(h.reset).toHaveBeenCalledTimes(1);
 });
 it('commits only current failed acquisition and not superseded acquisition', async () => {
 	for (const status of ['failed', 'superseded'] as const) {
@@ -84,7 +84,7 @@ it('commits only current failed acquisition and not superseded acquisition', asy
 	expect(ownTransmittingSelector(useServerStore.getState())).toBe(false);
 	expect(useServerStore.getState().ownPushHold.talk).toBe(false);
 });
-it('shares pending acquisition without adopting its stale failure, then starts current demand once', async () => {
+it('lets each caller await reconciliation without adopting a stale failure', async () => {
 	const h = harness();
 	const old = deferred<TMicrophoneStartOutcome>();
 	h.starts.push(old.promise);
@@ -92,7 +92,7 @@ it('shares pending acquisition without adopting its stale failure, then starts c
 	const first = h.controls.ensureMicStarted();
 	h.operations.begin();
 	const second = h.controls.ensureMicStarted();
-	expect(h.start).toHaveBeenCalledTimes(1);
+	expect(h.start).toHaveBeenCalledTimes(2);
 	old.resolve({ status: 'failed', error: new Error('old') });
 	await Promise.all([first, second]);
 	expect(h.error).not.toHaveBeenCalled();
@@ -154,11 +154,11 @@ it('a live ensure leaves operation and recovery budget unchanged', async () => {
 	expect(h.reset).not.toHaveBeenCalled();
 });
 
-it('re-evaluates demand once after a superseded start without a waiting caller', async () => {
+it('leaves superseded capture demand to the reconciler', async () => {
 	const h = harness();
 	useServerStore.getState().setOwnPushHold({ talk: true, mute: false });
 	h.starts.push(Promise.resolve({ status: 'superseded' }));
 	await h.controls.ensureMicStarted();
-	expect(h.start).toHaveBeenCalledTimes(2);
+	expect(h.start).toHaveBeenCalledTimes(1);
 	expect(h.error).not.toHaveBeenCalled();
 });

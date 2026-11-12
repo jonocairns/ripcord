@@ -1,5 +1,5 @@
 import { expect, it } from 'bun:test';
-import { createMicTestResources } from '../mic-test-resources';
+import { createMicTestResources, runMicTestSetup } from '../mic-test-resources';
 import { createMicTestRunOwner } from '../mic-test-run-owner';
 
 for (const phase of ['capture', 'pipeline', 'resume'] as const) {
@@ -20,26 +20,26 @@ for (const phase of ['capture', 'pipeline', 'resume'] as const) {
 			release = resolve;
 		});
 		const setup = run.track(
-			(async () => {
-				const capture = await bundle.acquire(
-					phase === 'capture' ? pending.then(() => 'capture') : Promise.resolve('capture'),
-					() => {
-						events.push('stop');
-					},
-				);
-				if (!capture || !run.isCurrent()) return;
-				const pipeline = await bundle.acquire(
-					phase === 'pipeline' ? pending.then(() => 'pipeline') : Promise.resolve('pipeline'),
-					() => {
-						events.push('destroy');
-					},
-				);
-				if (!pipeline || !run.isCurrent()) return;
-				bundle.own('monitor', () => {
-					events.push('disconnect');
-				});
-				if (phase === 'resume') await pending;
-			})(),
+			runMicTestSetup({
+				resources: bundle,
+				isCurrent: run.isCurrent,
+				capture: () => (phase === 'capture' ? pending.then(() => 'capture') : Promise.resolve('capture')),
+				stopCapture: () => {
+					events.push('stop');
+				},
+				pipeline: () => (phase === 'pipeline' ? pending.then(() => 'pipeline') : Promise.resolve('pipeline')),
+				destroyPipeline: () => {
+					events.push('destroy');
+				},
+				monitor: () =>
+					bundle.own('monitor', () => {
+						events.push('disconnect');
+					}),
+				resume: async () => {
+					if (phase === 'resume') await pending;
+				},
+				onReady: () => {},
+			}),
 		);
 		for (let n = 0; n < 10; n++) await Promise.resolve();
 		await owner.stop();

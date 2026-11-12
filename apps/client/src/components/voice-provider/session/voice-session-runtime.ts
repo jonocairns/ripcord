@@ -80,7 +80,6 @@ type TVoiceSessionRuntimeDependencies = Pick<
 			| 'cleanup'
 			| 'owns'
 			| 'commitTerminalMute'
-			| 'restart'
 			| 'getRawTrack'
 		>;
 		webcam: Pick<ReturnType<typeof createWebcamController>, 'stop' | 'detachProducer' | 'republish'>;
@@ -517,7 +516,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 						// part of startMicStream. Running them concurrently with device.load()
 						// and transport creation saves ~200-300ms on join.
 						micPrepPromise = getDependencies()
-							.microphone.prepare(isCurrent)
+							.microphone.prepare(isCurrent, channelId)
 							.catch((error) => {
 								// microphone.prepare cleans up after its own failures, and a
 								// superseded build must not touch the successor's pipeline —
@@ -573,7 +572,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 						getDependencies().isMicWanted() &&
 						getDependencies().microphone.getRawTrack()?.readyState !== 'live'
 					) {
-						void getDependencies().microphone.restart();
+						void getDependencies().microphone.start();
 					}
 					throwIfRecoverySuperseded();
 
@@ -848,7 +847,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 										getDependencies().isMicWanted() &&
 										getDependencies().microphone.getRawTrack()?.readyState !== 'live'
 									) {
-										void getDependencies().microphone.restart();
+										void getDependencies().microphone.start();
 									}
 								},
 							},

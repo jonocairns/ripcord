@@ -11,7 +11,10 @@ import {
 	type TPushMicKeybindInputs,
 } from './push-mic-keybind-controller';
 
-const usePushMicKeybinds = (inputs: TPushMicKeybindInputs, ensureMicStarted: () => Promise<void>): void => {
+const usePushMicKeybinds = (
+	inputs: TPushMicKeybindInputs,
+	ensureMicStarted: (options?: { resetRecoveryBudget?: boolean }) => Promise<void>,
+): void => {
 	const inputsRef = useLatestRef(inputs);
 	// Match the provider's current control callback even during effect cleanup;
 	// channel, permission and settings retain their committed useLatestRef timing.
@@ -24,8 +27,11 @@ const usePushMicKeybinds = (inputs: TPushMicKeybindInputs, ensureMicStarted: () 
 			// Read live mute/deafen state when events arrive before the next React commit.
 			getHold: () => useServerStore.getState().ownPushHold,
 			setHold: (hold) => {
+				const previous = useServerStore.getState().ownPushHold;
 				setOwnPushHold(hold);
-				void ensureMicStartedRef.current();
+				void ensureMicStartedRef.current({
+					resetRecoveryBudget: (hold.talk && !previous.talk) || (hold.mute && !previous.mute),
+				});
 			},
 			getDesktopBridge,
 			setTimeout: (callback, milliseconds) => window.setTimeout(callback, milliseconds),

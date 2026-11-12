@@ -249,7 +249,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		startMicStream,
 		captureMicSession: microphone.createSessionLease,
 		hasLiveMicCapture: () => microphone.getRawTrack()?.readyState === 'live',
-		getPendingMicStart: microphone.getPendingStart,
 		resetMicRecoveryBudget: microphone.resetRawRecoveryBudget,
 		startWebcamStream,
 		stopWebcamStream,

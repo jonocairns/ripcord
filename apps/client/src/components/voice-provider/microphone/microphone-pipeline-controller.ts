@@ -156,6 +156,18 @@ const createMicrophonePipelineController = <
 		rawRecoveryAttempts = 0;
 	};
 
+	// Reconciler passes can rebuild more than once before a recovery waiter
+	// settles (for example, another unplug during publication). Count each build.
+	const reserveRawRecoveryAttempt = (reason: TMicrophoneRecoveryReason): boolean => {
+		if (rawRecoveryAttempts >= (ports.rawRecoveryMaxAttempts ?? DEFAULT_RAW_RECOVERY_MAX_ATTEMPTS)) {
+			void cleanup();
+			ports.onRecoveryExhausted(reason);
+			return false;
+		}
+		rawRecoveryAttempts += 1;
+		return true;
+	};
+
 	const recover = (reason: TMicrophoneRecoveryReason): Promise<TMicrophoneRecoveryOutcome> => {
 		if (recoveryOperation) {
 			return recoveryOperation;
@@ -677,6 +689,7 @@ const createMicrophonePipelineController = <
 		deactivate,
 		createLifecycleLease,
 		recover,
+		reserveRawRecoveryAttempt,
 		prepare,
 		publish,
 		cleanup,
@@ -686,7 +699,7 @@ const createMicrophonePipelineController = <
 		setGainVolume,
 		syncActivity,
 		getRawTrack: (): MediaStreamTrack | undefined => rawMicStream?.getAudioTracks()[0],
-		hasGainPipeline: (): boolean => gainPipeline !== undefined,
+		hasLiveProducer: (): boolean => localProducer !== undefined && !ports.isProducerClosed(localProducer),
 	};
 };
 

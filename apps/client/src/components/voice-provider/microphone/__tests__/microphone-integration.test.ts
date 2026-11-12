@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'bun:test';
-import { StreamKind } from '@sharkord/shared';
 import type { AppData, Producer, ProducerOptions, Transport } from 'mediasoup-client/types';
 import { DEFAULT_DEVICE_SETTINGS } from '../../../devices-provider/migrate-device-settings';
 import { createOwnMicControls } from '../../own-mic-controls';
+import { recoverTransportMicrophone } from '../../session/transport-recovery-microphone';
 import { OWN_MIC_VOLUME_KEY, VOLUME_SETTINGS_UPDATED_EVENT } from '../../volume-control-storage';
 import type { TMicGainPipeline } from '../mic-gain-pipeline';
 import {
 	createMicrophoneIntegration,
 	mountMicrophoneIntegration,
+	resolveCaptureAction,
 	type TMicrophoneIntegrationInputs,
 	type TMicrophoneIntegrationPorts,
 } from '../microphone-integration';
@@ -205,7 +206,21 @@ const createHarness = () => {
 		getStoredVolume: () => state.volume,
 		createProcessingPipeline: (input) => {
 			processingInputs.push(input);
-			return Promise.resolve(undefined);
+			if (!input.wasmNoiseSuppressionEnabled) return Promise.resolve(undefined);
+			const stream = createStream('wasm');
+			return Promise.resolve({
+				sessionId: 'wasm',
+				sampleRate: 48000,
+				channels: 1,
+				framesPerBuffer: 480,
+				stream,
+				track: stream.track,
+				backend: 'browser-wasm' as const,
+				setInputMuted: () => {},
+				destroy: async () => {
+					stream.track.stop();
+				},
+			});
 		},
 		createGainPipeline: async (_stream, volume) => {
 			const stream = createStream('gain');
@@ -374,10 +389,11 @@ describe('microphone integration', () => {
 		cleanup();
 		expect(h.inputs.localAudioStream).toBeUndefined();
 		const replayCleanup = h.mount();
-		const prepared = await h.integration.prepare();
-		await h.integration.publish(prepared);
+		const preparing = h.integration.prepare();
 		const oldProducer = createProducer('old-producer');
 		publication.resolve(oldProducer);
+		const prepared = await preparing;
+		await h.integration.publish(prepared);
 		expect(await start).toEqual({ status: 'superseded' });
 		await flush();
 		expect(oldProducer.closed).toBe(true);
@@ -388,7 +404,7 @@ describe('microphone integration', () => {
 		expect(h.integration.owns(prepared)).toBe(true);
 		replayCleanup();
 	});
-	it('reads current committed settings when a queued start enters the mutex', async () => {
+	it('reads current committed settings when a queued reconciliation builds', async () => {
 		const h = createHarness();
 		const cleanup = h.mount();
 		h.inputs.devices = { ...h.inputs.devices, microphoneId: 'old-input' };
@@ -418,7 +434,7 @@ describe('microphone integration', () => {
 				sampleRate: 48000,
 			},
 		]);
-		expect(h.processingInputs.map((input) => input.wasmNoiseSuppressionEnabled)).toEqual([false, true]);
+		expect(h.processingInputs.map((input) => input.wasmNoiseSuppressionEnabled)).toEqual([true]);
 		expect(h.gains.map((gain) => gain.volume)).toEqual([40]);
 		cleanup();
 	});
@@ -432,13 +448,9 @@ describe('microphone integration', () => {
 		h.newTransport();
 		h.state.channelSettings = { voiceBitrate: 48_000, voiceDtx: true };
 		h.state.micMuted = true;
-		await h.integration.publish(prepared);
-		expect(prepared.outboundAudioTrack.enabled).toBe(false);
-		expect(h.publications[0]?.options).toMatchObject({
-			appData: { kind: StreamKind.AUDIO },
-			encodings: [{ maxBitrate: 48_000 }],
-			codecOptions: { opusMaxAverageBitrate: 48_000, opusDtx: true },
-		});
+		await expect(h.integration.publish(prepared)).rejects.toBeInstanceOf(MicPipelineSupersededError);
+		expect(prepared.outboundAudioTrack.readyState).toBe('ended');
+		expect(h.publications).toHaveLength(0);
 		cleanup();
 	});
 	for (const boundary of ['cleanup', 'replacement'] as const) {
@@ -451,10 +463,11 @@ describe('microphone integration', () => {
 			await flush();
 			if (boundary === 'cleanup') cleanup();
 			const replayCleanup = boundary === 'cleanup' ? h.mount() : cleanup;
-			const prepared = await h.integration.prepare();
-			await h.integration.publish(prepared);
+			const preparing = h.integration.prepare();
 			const oldStream = createStream('old-capture');
 			capture.resolve(oldStream);
+			const prepared = await preparing;
+			await h.integration.publish(prepared);
 			expect(await oldResult).toBeInstanceOf(MicPipelineSupersededError);
 			expect(oldStream.track.readyState).toBe('ended');
 			expect(h.inputs.localAudioStream).toBe(prepared.outboundStream);
@@ -474,10 +487,11 @@ describe('microphone integration', () => {
 		expect(lifecycle.isCurrent()).toBe(false);
 		expect(prepared.outboundAudioTrack.readyState).toBe('ended');
 		const replayCleanup = h.mount();
-		const fresh = await h.integration.prepare();
-		await h.integration.publish(fresh);
+		const preparing = h.integration.prepare();
 		const staleProducer = createProducer('stale');
 		publication.resolve(staleProducer);
+		const fresh = await preparing;
+		await h.integration.publish(fresh);
 		expect(await pending).toBeInstanceOf(MicPipelineSupersededError);
 		expect(staleProducer.closed).toBe(true);
 		await expect(h.integration.prepare(lifecycle.isCurrent)).rejects.toBeInstanceOf(MicPipelineSupersededError);
@@ -494,10 +508,11 @@ describe('microphone integration', () => {
 		h.publicationResults.push(publication.promise);
 		const pending = h.integration.publish(prepared).catch((error: unknown) => error);
 		h.newTransport();
-		await h.integration.publish('current');
+		const republishing = h.integration.publish('current');
 		const staleProducer = createProducer('stale-transport');
 		publication.resolve(staleProducer);
-		expect(await pending).toBeInstanceOf(MicPipelineSupersededError);
+		await republishing;
+		expect(await pending).toBeUndefined();
 		expect(staleProducer.closed).toBe(true);
 		expect(h.closedOnServer).toContain('stale-transport');
 		expect(prepared.outboundAudioTrack.readyState).toBe('live');
@@ -512,7 +527,7 @@ describe('microphone integration', () => {
 		if (!oldMonitor) throw new Error('Expected activity monitor');
 		oldMonitor.onUpdate(false);
 		oldMonitor.onUpdate(true);
-		await h.integration.start();
+		await h.integration.restart();
 		expect(oldMonitor.removed).toBe(true);
 		oldMonitor.onUpdate(true);
 		const monitor = h.monitors[1];
@@ -629,7 +644,7 @@ describe('microphone integration', () => {
 		h.integration.commitTerminalMute();
 		expect(h.terminalCommitTrackStates).toEqual([false]);
 		expect(h.state.terminalMutes).toBe(1);
-		expect(track?.readyState).toBe('live');
+		expect(track?.readyState).toBe('ended');
 		cleanup();
 	});
 	for (const boundary of ['cleanup', 'replacement', 'selection', 'channel'] as const) {
@@ -644,7 +659,7 @@ describe('microphone integration', () => {
 			await flush();
 			expect(h.state.enumerationCalls).toBe(1);
 			if (boundary === 'cleanup') cleanup();
-			if (boundary === 'replacement') await h.integration.start();
+			if (boundary === 'replacement') await h.integration.restart();
 			if (boundary === 'selection') h.inputs.devices = { ...h.inputs.devices, microphoneId: 'explicit' };
 			if (boundary === 'channel') h.inputs.currentVoiceChannelId = 2;
 			if (boundary === 'selection' || boundary === 'channel') h.integration.syncInputs();
@@ -654,7 +669,7 @@ describe('microphone integration', () => {
 			await flush();
 			expect(h.inputs.localAudioStream).toBe(currentStream);
 			expect(h.captures).toHaveLength(boundary === 'replacement' ? 2 : 1);
-			expect(h.scheduler.pending()).toBe(boundary === 'cleanup' ? 0 : 1);
+			expect(h.scheduler.pending()).toBe(boundary === 'cleanup' || boundary === 'channel' ? 0 : 1);
 			cleanup();
 		});
 	}
@@ -737,14 +752,15 @@ describe('shared capture boundary', () => {
 			h.publicationResults.push(publication.promise);
 			let result: Promise<unknown> | undefined;
 			if (path === 'settings') result = h.integration.restart();
-			else if (path === 'transport') result = h.integration.start();
-			else {
+			else if (path === 'transport') {
+				h.newTransport();
+				result = h.integration.start();
+			} else {
 				const track = h.integration.getRawTrack();
 				track?.dispatchEvent(new Event('ended'));
 				h.scheduler.advance(1000);
 			}
 			await flush();
-			expect(h.integration.getPendingStart()).toBeDefined();
 			expect(h.integration.getRawTrack()?.readyState).toBe('live');
 			let ensured = false;
 			const controls = createOwnMicControls({
@@ -758,7 +774,6 @@ describe('shared capture boundary', () => {
 				},
 				getCurrentVoiceChannelId: () => h.inputs.currentVoiceChannelId,
 				hasLiveMicCapture: () => h.integration.getRawTrack()?.readyState === 'live',
-				getPendingMicStart: h.integration.getPendingStart,
 				captureSession: h.integration.createSessionLease,
 				startMicStream: h.integration.start,
 				resetMicRecoveryBudget: h.integration.resetRawRecoveryBudget,
@@ -807,45 +822,233 @@ describe('shared capture boundary', () => {
 	}
 });
 
-it('shares the join preparation boundary until publication finishes', async () => {
+for (const join of [false, true])
+	it(`rebuilds raw loss during pending ${join ? 'join' : 'start'} with gain`, async () => {
+		const h = createHarness();
+		const dispose = h.mount();
+		h.volumeChange(70);
+		h.inputs.devices = { ...h.inputs.devices, wasmNoiseSuppressionEnabled: true };
+		const publication = deferred<Producer<AppData>>();
+		h.publicationResults.push(publication.promise);
+		const result = join ? h.integration.prepare().then((p) => h.integration.publish(p)) : h.integration.start();
+		await flush();
+		const raw = h.integration.getRawTrack();
+		raw?.stop();
+		raw?.dispatchEvent(new Event('ended'));
+		publication.resolve(createProducer('dead'));
+		await result;
+		await flush();
+		expect(h.integration.getRawTrack()?.readyState).toBe('live');
+		expect(h.captures).toHaveLength(2);
+		expect(h.producers.at(-1)?.closed).toBe(false);
+		expect(h.inputs.localAudioStream?.getAudioTracks()[0]?.readyState).toBe('live');
+		expect(h.errors).toEqual([]);
+		expect(h.state.terminalMutes).toBe(0);
+		dispose();
+	});
+for (const cleanup of [false, true])
+	it(`gives current owner its own capture after retirement, cleanup=${cleanup}`, async () => {
+		const h = createHarness();
+		const dispose = h.mount();
+		const capture = deferred<MediaStream>();
+		h.captureResults.push(capture.promise);
+		let current = true;
+		const old = h.integration.start(() => current);
+		await flush();
+		current = false;
+		if (cleanup) await h.integration.cleanup();
+		const successor = h.integration.start();
+		capture.resolve(createStream());
+		expect((await old).status).toBe('superseded');
+		expect((await successor).status).toBe('started');
+		expect(h.integration.getRawTrack()?.readyState).toBe('live');
+		expect(h.captures).toHaveLength(2);
+		dispose();
+	});
+it('failed join after direct muted teardown cannot strand an unmute', async () => {
 	const h = createHarness();
 	const dispose = h.mount();
-	const prepared = await h.integration.prepare();
-	const pending = h.integration.getPendingStart();
-	expect(pending).toBeDefined();
-	if (!pending) throw Error('Missing pending join');
-	expect(h.integration.start()).toBe(pending);
-	const publication = deferred<Producer<AppData>>();
-	h.publicationResults.push(publication.promise);
-	const publishing = h.integration.publish(prepared);
+	await h.integration.prepare();
+	h.state.micMuted = true;
+	const raw = h.integration.getRawTrack();
+	raw?.stop();
+	raw?.dispatchEvent(new Event('ended'));
 	await flush();
-	let settled = false;
-	void pending?.then(() => {
-		settled = true;
-	});
-	await flush();
-	expect(settled).toBe(false);
-	publication.resolve(createProducer('joined'));
-	await publishing;
-	expect(await pending).toEqual({ status: 'started' });
-	expect(h.captures).toHaveLength(1);
+	h.state.micMuted = false;
+	const result = await Promise.race([
+		h.integration.start(),
+		new Promise<{ status: 'timeout' }>((resolve) => setTimeout(() => resolve({ status: 'timeout' }), 100)),
+	]);
+	expect(result.status).toBe('started');
+	expect(h.integration.getRawTrack()?.readyState).toBe('live');
 	dispose();
 });
-
-it('a retired prepare cannot settle the successor boundary', async () => {
+it('ensure after pending success does not rebuild', async () => {
 	const h = createHarness();
 	const dispose = h.mount();
 	const capture = deferred<MediaStream>();
 	h.captureResults.push(capture.promise);
-	const old = h.integration.prepare().catch(() => undefined);
+	const first = h.integration.start();
+	const second = h.integration.start();
+	capture.resolve(createStream());
+	expect((await first).status).toBe('started');
+	expect((await second).status).toBe('started');
+	await h.integration.start();
+	expect(h.captures).toHaveLength(1);
+	dispose();
+});
+it('exhaustively resolves desired and actual capture states', () => {
+	// Bits: wanted, present, matches, publication required, published.
+	const outcomes = [
+		'idle',
+		'idle',
+		'idle',
+		'idle',
+		'idle',
+		'idle',
+		'idle',
+		'idle',
+		'discard',
+		'discard',
+		'discard',
+		'discard',
+		'discard',
+		'discard',
+		'discard',
+		'discard',
+		'build',
+		'build',
+		'build',
+		'build',
+		'build',
+		'build',
+		'build',
+		'build',
+		'discard',
+		'discard',
+		'discard',
+		'discard',
+		'idle',
+		'idle',
+		'publish',
+		'idle',
+	] as const;
+	for (const [bits, outcome] of outcomes.entries()) {
+		expect(
+			resolveCaptureAction({
+				wanted: Boolean(bits & 16),
+				present: Boolean(bits & 8),
+				matches: Boolean(bits & 4),
+				publicationRequired: Boolean(bits & 2),
+				published: Boolean(bits & 1),
+			}),
+		).toBe(outcome);
+	}
+});
+
+it('bounds repeated raw losses before one recovery has settled', async () => {
+	const h = createHarness();
+	const dispose = h.mount();
+	h.volumeChange(70);
+	const deferredPublications = Array.from({ length: 5 }, () => deferred<Producer<AppData>>());
+	h.publicationResults.push(...deferredPublications.map((p) => p.promise));
+	const starting = h.integration.start();
+	for (const [index, publication] of deferredPublications.entries()) {
+		await flush();
+		const raw = h.integration.getRawTrack();
+		if (!raw) break;
+		raw.stop();
+		raw.dispatchEvent(new Event('ended'));
+		publication.resolve(createProducer(`lost-${index}`));
+	}
+	await starting;
 	await flush();
-	await h.integration.cleanup();
+	expect(h.state.terminalMutes).toBe(1);
+	expect(h.integration.getRawTrack()).toBeUndefined();
+	expect(h.captures.length).toBeLessThanOrEqual(4);
+	dispose();
+});
+it('a fresh talk demand after exhaustion gets one deliberately reset attempt', async () => {
+	const h = createHarness();
+	const dispose = h.mount();
+	await h.integration.start();
+	for (let n = 0; n < 4; n++) {
+		const raw = h.integration.getRawTrack();
+		raw?.stop();
+		raw?.dispatchEvent(new Event('ended'));
+		await flush();
+	}
+	expect(h.state.terminalMutes).toBe(1);
+	h.state.talkHeld = true;
+	h.integration.resetRawRecoveryBudget();
+	const before = h.captures.length;
+	expect((await h.integration.start()).status).toBe('started');
+	expect(h.captures.length).toBe(before + 1);
+	const raw = h.integration.getRawTrack();
+	raw?.stop();
+	raw?.dispatchEvent(new Event('ended'));
+	await flush();
+	expect(h.state.terminalMutes).toBe(1);
+	expect(h.integration.getRawTrack()?.readyState).toBe('live');
+	dispose();
+});
+
+it('transport recovery waits for its own current capture when the previous caller retired', async () => {
+	const h = createHarness();
+	const dispose = h.mount();
+	const capture = deferred<MediaStream>();
+	h.captureResults.push(capture.promise);
+	let current = true;
+	const retired = h.integration.start(() => current);
+	await flush();
+	current = false;
+	const recovery = recoverTransportMicrophone(
+		{ recoveryJoined: true, micMuted: false, canSpeak: true, hasCurrentStream: false, currentTrackLive: false },
+		{
+			start: () => h.integration.start(() => true),
+			publishCurrent: () => h.integration.publish('current'),
+			discardCurrent: h.integration.cleanup,
+			onStartFailed: () => {
+				throw Error('unexpected failure');
+			},
+		},
+	);
+	capture.resolve(createStream());
+	expect(await recovery).toBe('started');
+	expect((await retired).status).toBe('superseded');
+	expect(h.integration.getRawTrack()?.readyState).toBe('live');
+	dispose();
+});
+
+it('join publication settles a replacement after raw loss between preparation and transport readiness', async () => {
+	const h = createHarness();
+	const dispose = h.mount();
+	h.state.transport = undefined;
+	h.volumeChange(70);
 	const prepared = await h.integration.prepare();
-	const successor = h.integration.getPendingStart();
-	capture.reject(Error('retired'));
-	await old;
-	expect(h.integration.getPendingStart()).toBe(successor);
+	const raw = h.integration.getRawTrack();
+	raw?.stop();
+	raw?.dispatchEvent(new Event('ended'));
+	await flush();
+	h.newTransport();
 	await h.integration.publish(prepared);
+	expect(h.integration.getRawTrack()?.readyState).toBe('live');
+	expect(h.captures).toHaveLength(2);
+	expect(h.state.terminalMutes).toBe(0);
+	dispose();
+});
+it('volume shape changes during capture invalidate the build before publication', async () => {
+	const h = createHarness();
+	const dispose = h.mount();
+	const capture = deferred<MediaStream>();
+	h.captureResults.push(capture.promise);
+	const pending = h.integration.start();
+	await flush();
+	h.volumeChange(70);
+	capture.resolve(createStream());
+	expect((await pending).status).toBe('started');
+	expect(h.gains.at(-1)?.volume).toBe(70);
+	expect(h.captures).toHaveLength(2);
 	dispose();
 });
 
@@ -882,7 +1085,6 @@ for (const retirement of ['same-channel cleanup', 'deactivate/reactivate'] as co
 				commitMicFailure: h.integration.commitTerminalMute,
 				getCurrentVoiceChannelId: () => h.inputs.currentVoiceChannelId,
 				hasLiveMicCapture: () => h.integration.getRawTrack()?.readyState === 'live',
-				getPendingMicStart: h.integration.getPendingStart,
 				captureSession: h.integration.createSessionLease,
 				startMicStream: h.integration.start,
 				resetMicRecoveryBudget: h.integration.resetRawRecoveryBudget,
@@ -891,7 +1093,6 @@ for (const retirement of ['same-channel cleanup', 'deactivate/reactivate'] as co
 				playSound: () => {},
 				showError: (error) => h.errors.push(error),
 			});
-			const successorBoundary = h.integration.getPendingStart();
 			let ensured = false;
 			const ensure = controls.ensureMicStarted().then(() => {
 				ensured = true;
@@ -903,16 +1104,12 @@ for (const retirement of ['same-channel cleanup', 'deactivate/reactivate'] as co
 			await flush();
 			const ensuredBeforeJoin = ensured;
 			const capturesBeforeJoin = h.captures.length;
-			const boundaryAfterRetirement = h.integration.getPendingStart();
 			h.newTransport();
 			const successor = createStream('new-session');
 			newCapture.resolve(successor);
 			const result = await joinPrepared;
 			if ('prepared' in result) await h.integration.publish(result.prepared);
 			await ensure;
-			expect(successorBoundary).toBeDefined();
-			expect(successorBoundary).not.toBe(old);
-			expect(boundaryAfterRetirement).toBe(successorBoundary);
 			expect(ensuredBeforeJoin).toBe(false);
 			expect(capturesBeforeJoin).toBe(2);
 			expect(h.captures).toHaveLength(2);
@@ -928,3 +1125,62 @@ for (const retirement of ['same-channel cleanup', 'deactivate/reactivate'] as co
 		}
 	});
 }
+
+it('a stale prepare cannot retire or strand a live successor', async () => {
+	const h = createHarness();
+	const dispose = h.mount();
+	await h.integration.start();
+	const track = h.integration.getRawTrack();
+	await expect(h.integration.prepare(() => false)).rejects.toBeInstanceOf(MicPipelineSupersededError);
+	h.integration.syncInputs();
+	expect((await h.integration.start()).status).toBe('started');
+	expect(h.integration.getRawTrack()).toBe(track);
+	expect(h.captures).toHaveLength(1);
+	dispose();
+});
+
+it('re-evaluates current waiters when their earlier owner retires after they requested capture', async () => {
+	const h = createHarness();
+	const dispose = h.mount();
+	const capture = deferred<MediaStream>();
+	h.captureResults.push(capture.promise);
+	let current = true;
+	const old = h.integration.start(() => current);
+	await flush();
+	const successor = h.integration.start(() => true);
+	current = false;
+	capture.resolve(createStream());
+	expect((await old).status).toBe('superseded');
+	expect((await successor).status).toBe('started');
+	expect(h.captures).toHaveLength(2);
+	expect(h.integration.getRawTrack()?.readyState).toBe('live');
+	dispose();
+});
+
+it('restore captures for its requested channel before UI publication and survives attempt completion', async () => {
+	const h = createHarness();
+	const dispose = h.mount();
+	h.inputs.currentVoiceChannelId = undefined;
+	let current = true;
+	const prepared = await h.integration.prepare(() => current, 1);
+	await h.integration.publish(prepared, () => current);
+	h.inputs.currentVoiceChannelId = 1;
+	current = false;
+	h.integration.syncInputs();
+	expect((await h.integration.start()).status).toBe('started');
+	expect(h.captures).toHaveLength(1);
+	expect(h.integration.getRawTrack()?.readyState).toBe('live');
+	dispose();
+});
+
+it('recovers a capture already ended before its loss listener could be attached', async () => {
+	const h = createHarness();
+	const dispose = h.mount();
+	const ended = createStream();
+	ended.track.stop();
+	h.captureResults.push(Promise.resolve(ended));
+	expect((await h.integration.start()).status).toBe('started');
+	expect(h.captures).toHaveLength(2);
+	expect(h.integration.getRawTrack()?.readyState).toBe('live');
+	dispose();
+});

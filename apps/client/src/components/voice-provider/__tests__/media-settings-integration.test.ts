@@ -5,7 +5,7 @@ import type { TMicrophoneStartOutcome } from '../microphone/microphone-pipeline-
 import { createWebcamController, mountWebcamController } from '../video/webcam-controller';
 import { createCapture, createVideoFixture, deferred, flush } from './video-controller-fixture';
 
-const fixture = (micWanted = true) => {
+const fixture = () => {
 	let inputs: TMediaSettingsInputs = {
 		devices: { ...DEFAULT_DEVICE_SETTINGS },
 		currentVoiceChannelId: 1,
@@ -25,7 +25,6 @@ const fixture = (micWanted = true) => {
 	});
 	const error = mock((_message: string) => {});
 	const dispose = mountMediaSettingsIntegration({
-		isMicWanted: () => micWanted,
 		getInputs: () => inputs,
 		subscribeInputs: (cb) => {
 			listener = cb;
@@ -158,7 +157,6 @@ it('uses the production webcam owner to reject stale overlapping settings restar
 	const events: string[] = [];
 	const error = mock((_message: string) => {});
 	const disposeSettings = mountMediaSettingsIntegration({
-		isMicWanted: () => true,
 		getInputs: () => ({ devices: f.getDevices(), currentVoiceChannelId: 1, webcamEnabled: true }),
 		subscribeInputs: (listener) => {
 			notify = listener;
@@ -198,8 +196,8 @@ it('uses the production webcam owner to reject stale overlapping settings restar
 	disposeWebcam();
 });
 
-it('routes muted settings changes through restart so retained capture is invalidated', async () => {
-	const f = fixture(false);
+it('delegates microphone settings changes to the capture owner', async () => {
+	const f = fixture();
 	f.changeBoth();
 	await flush();
 	expect(f.startMicrophone).toHaveBeenCalledTimes(1);

@@ -1,7 +1,8 @@
+import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
-import { createPeer, credentialsFor, disposePeer, joinVoice, type pcStats } from '../helpers/app';
+import { createPeer, credentialsFor, disposePeer, joinVoice } from '../helpers/app';
 
-const getRemoteMicMuted = async (page: Parameters<typeof pcStats>[0], userId: number): Promise<boolean | undefined> => {
+const getRemoteMicMuted = async (page: Page, userId: number): Promise<boolean | undefined> => {
 	return page.evaluate(async (userId) => {
 		const modulePath = '/src/features/server/slice.ts';
 		const serverModule: unknown = await import(modulePath);
