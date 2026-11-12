@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.6.1](https://github.com/jonocairns/ripcord/compare/v2.6.0...v2.6.1) (2026-11-11)
+
+
+### Bug Fixes
+
+* log voice mute changes on the server and keep clock-skewed diagnostics ([#427](https://github.com/jonocairns/ripcord/issues/427)) ([94d0c88](https://github.com/jonocairns/ripcord/commit/94d0c8874f106e7f00747494b8552adcc7cd8f06))
+* wait for an open app WebSocket before the E2E helper drops it ([#425](https://github.com/jonocairns/ripcord/issues/425)) ([eb69449](https://github.com/jonocairns/ripcord/commit/eb694494c9444a423f621dac2e7b22481e2e2375))
+
 ## [2.6.0](https://github.com/jonocairns/ripcord/compare/v2.5.9...v2.6.0) (2026-11-11)
 
 
