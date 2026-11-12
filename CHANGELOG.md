@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.3](https://github.com/jonocairns/ripcord/compare/v2.6.2...v2.6.3) (2026-11-12)
+
+
+### Bug Fixes
+
+* stop a stale server copy muting you or undoing your mute ([#431](https://github.com/jonocairns/ripcord/issues/431)) ([95bc65c](https://github.com/jonocairns/ripcord/commit/95bc65cf494a49757cd175c52b8d12eb44ada91d))
+
 ## [2.6.2](https://github.com/jonocairns/ripcord/compare/v2.6.1...v2.6.2) (2026-11-12)
 
 
