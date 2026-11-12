@@ -39,8 +39,8 @@ import { initSubscriptions } from './subscriptions';
 import type { TDisconnectInfo } from './types';
 import {
 	clearVoiceReconnectRecovery,
-	ensureVoiceReconnectStarted,
 	getValidPendingVoiceReconnect,
+	startVoiceReconnectFromStagedIntent,
 } from './voice/reconnect-coordinator';
 import { resolveWsRejoinFailureAction } from './ws-rejoin-failure-policy';
 
@@ -343,7 +343,7 @@ const rejoinAfterSocketReopen = () => {
 			logDebug('Voice reconnect recovery scheduled', {
 				channelId: pendingVoiceReconnect.channelId,
 			});
-			ensureVoiceReconnectStarted();
+			startVoiceReconnectFromStagedIntent();
 		}
 
 		return 'joined';

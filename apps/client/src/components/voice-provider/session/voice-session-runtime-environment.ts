@@ -22,7 +22,12 @@ import { recordDesktopDiagnostic } from '@/helpers/desktop-diagnostics';
 import { setStreamReconnectAttemptId } from '@/helpers/stream-observability';
 import { traceSpan } from '@/helpers/telemetry/tracing';
 import { getTrpcErrorData } from '@/helpers/trpc-error-data';
-import { getTRPCClient, TRPCClientUnavailableError } from '@/lib/trpc';
+import {
+	getTRPCClient,
+	isTRPCSessionAuthenticated,
+	subscribeServerConnectionState,
+	TRPCClientUnavailableError,
+} from '@/lib/trpc';
 import { voiceSessionCommandObserver } from './voice-session-command-observer';
 import type { TVoiceSessionRuntimeDependencies } from './voice-session-runtime';
 
@@ -154,6 +159,8 @@ const voiceSessionRuntimeExecutorEnvironment = {
 	random: Math.random,
 	delay: delayVoiceSessionCommand,
 	isOnline: isVoiceReconnectOnline,
+	isSessionReady: isTRPCSessionAuthenticated,
+	subscribeSessionReadiness: subscribeServerConnectionState,
 	reportCommandError: (command, error) => {
 		// A command that raced the socket going down is expected fallout of the
 		// disconnect, not a command defect. The reconnect machinery already
@@ -215,6 +222,8 @@ const voiceSessionRuntimeExecutorEnvironment = {
 	| 'random'
 	| 'delay'
 	| 'isOnline'
+	| 'isSessionReady'
+	| 'subscribeSessionReadiness'
 	| 'reportCommandError'
 	| 'reportRebuildDetached'
 	| 'reportRebuildTerminalFailure'

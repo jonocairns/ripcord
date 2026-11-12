@@ -8,13 +8,7 @@ import { shouldRestoreVoiceAfterDisconnect } from '@/features/server/disconnect-
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
-import {
-	captureVoiceReconnectIntentForCurrentSession,
-	clearVoiceReconnectRecovery,
-	ensureVoiceReconnectStarted,
-	markVoiceReconnectSessionAuthenticated,
-	markVoiceReconnectSessionUnauthenticated,
-} from '@/features/server/voice/reconnect-coordinator';
+import { clearVoiceReconnectRecovery, reportVoiceSocketDropped } from '@/features/server/voice/reconnect-coordinator';
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
 import { resetServerScreens } from '@/features/server-screens/actions';
 import { recordVoiceDiagnostic } from '@/helpers/browser-logger';
@@ -313,6 +307,9 @@ const waitForTRPCSessionAuthentication = (signal: AbortSignal): Promise<void> =>
 const isTRPCSocketOpen = () =>
 	typeof WebSocket !== 'undefined' && wsClient?.connection?.ws?.readyState === WebSocket.OPEN;
 
+const isTRPCSessionAuthenticated = (): boolean =>
+	connection.getState().phase.name === 'ready' && isTRPCSocketOpen();
+
 const debugCloseCurrentWs = (opts: { code?: number; reason?: string } = {}) => {
 	const ws = wsClient?.connection?.ws;
 
@@ -403,11 +400,7 @@ const run = (commands: TConnectionCommand[]) => {
 				retireTRPCClient();
 				break;
 			case 'voice-socket-dropped':
-				markVoiceReconnectSessionUnauthenticated();
-				if (captureVoiceReconnectIntentForCurrentSession()) ensureVoiceReconnectStarted();
-				break;
-			case 'voice-session-authenticated':
-				markVoiceReconnectSessionAuthenticated();
+				reportVoiceSocketDropped();
 				break;
 			case 'run-rejoin':
 				serverRejoinHandler?.();
@@ -440,6 +433,7 @@ export {
 	getTRPCClient,
 	getTRPCClientIfInitialized,
 	getWsClientInstanceId,
+	isTRPCSessionAuthenticated,
 	isTRPCSocketOpen,
 	markTRPCSessionAuthenticated,
 	reconnectTRPC,

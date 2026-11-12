@@ -176,7 +176,6 @@ describe('transport rebuild machine orchestration', () => {
 			pending,
 			now: 100,
 			online: true,
-			authenticated: true,
 		}).state;
 		const result = reduceVoiceSession(reconnecting, { type: 'TransportRecoveryExhausted', channelId: 7 });
 
@@ -305,7 +304,6 @@ describe('transport rebuild machine orchestration', () => {
 			pending: pendingReconnect(),
 			now: 100,
 			online: true,
-			authenticated: false,
 		});
 
 		expect(commands[0]).toEqual(expect.objectContaining({ type: 'CaptureRecoverySnapshot' }));
@@ -324,7 +322,6 @@ describe('transport rebuild machine orchestration', () => {
 			pending: pendingReconnect(),
 			now: 100,
 			online: true,
-			authenticated: false,
 		});
 
 		expect(preempted.state.phase).toMatchObject({

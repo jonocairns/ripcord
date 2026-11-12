@@ -175,3 +175,11 @@ executor, and existing failure/retry/draining policy stays unchanged. Disconnect
 after transport creation and after republishing reproduced false success before
 the correction. State synchronization already checked currency and retains that
 regression coverage. This does not repair the long-offline restore hang.
+
+Voice socket drops enter the session machine through one `WsDropped` event.
+The connection store owns readiness; the executor subscribes to readiness and
+voice-state changes while waiting, then probes and dispatches `AuthReady` in
+one synchronous step. The machine has no authentication flag. Voice-event
+subscriptions observe the connection phase, so joining voice no longer causes
+an authentication-flag-driven subscription restart. Producer snapshots still
+wait for both live producer subscription acknowledgements.

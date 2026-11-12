@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import {
 	selectPendingVoiceReconnect,
-	selectReconnectAuthenticated,
 	selectReconnectingSince,
 	selectVoiceReconnectSuppression,
 	VOICE_RECONNECT_SUPPRESSION_MS,
@@ -307,16 +306,10 @@ describe('voice session store', () => {
 			pending: pendingReconnect,
 			now: 111,
 			online: true,
-			authenticated: false,
 		});
 
 		expect(selectVoiceSessionState(selectPendingVoiceReconnect)).toEqual(pendingReconnect);
 		expect(selectVoiceSessionState(selectReconnectingSince)).toBe(111);
-		expect(selectVoiceSessionState(selectReconnectAuthenticated)).toBe(false);
-
-		dispatchVoiceSession({ type: 'SocketAuthenticated' });
-
-		expect(selectVoiceSessionState(selectReconnectAuthenticated)).toBe(true);
 
 		const suppression = { channelId: 5, peerUserIds: [10], expiresAt: 20_000 };
 
@@ -340,13 +333,12 @@ describe('voice session store', () => {
 		expect(selectVoiceSessionState(selectVoiceReconnectSuppression)).toEqual(suppression);
 	});
 
-	it('falls back to the facade mirror fields when not reconnecting', () => {
+	it('selects staged intent without a recovery start time outside recovery', () => {
 		dispatchVoiceSession({ type: 'ReconnectIntentCaptured', pending: pendingReconnect });
 
 		expect(getVoiceSessionState().phase.phase).toBe('idle');
 		expect(selectVoiceSessionState(selectPendingVoiceReconnect)).toEqual(pendingReconnect);
 		expect(selectVoiceSessionState(selectReconnectingSince)).toBeUndefined();
-		expect(selectVoiceSessionState(selectReconnectAuthenticated)).toBe(false);
 	});
 
 	it('notifies state-only listeners before command delivery without exposing commands', () => {
@@ -370,12 +362,11 @@ describe('voice session store', () => {
 		// A runner that reads the direct selectors when it receives the command
 		// must see the post-dispatch reconnect. Observing pre-dispatch state here
 		// would abort recovery as 'cleared'.
-		let observed: { since: number | undefined; authenticated: boolean } | undefined;
+		let observed: { since: number | undefined } | undefined;
 		const unregister = registerVoiceSessionCommandRunner((commands) => {
 			if (commands[0]?.type === 'WaitAuth') {
 				observed = {
 					since: selectVoiceSessionState(selectReconnectingSince),
-					authenticated: selectVoiceSessionState(selectReconnectAuthenticated),
 				};
 			}
 		});
@@ -383,10 +374,10 @@ describe('voice session store', () => {
 		dispatchVoiceSession({ type: 'ReconnectIntentCaptured', pending: pendingReconnect });
 
 		const [snapshotCommand] = dispatchVoiceSession({
-			type: 'ReconnectStarted',
+			type: 'WsDropped',
+			pending: pendingReconnect,
 			now: 1234,
 			online: true,
-			authenticated: false,
 		});
 
 		if (snapshotCommand?.type !== 'CaptureRecoverySnapshot') {
@@ -401,7 +392,7 @@ describe('voice session store', () => {
 		});
 		unregister();
 
-		expect(observed).toEqual({ since: 1234, authenticated: false });
+		expect(observed).toEqual({ since: 1234 });
 	});
 
 	it('keeps command identity monotonic across reset so a stale identity can never recur', () => {

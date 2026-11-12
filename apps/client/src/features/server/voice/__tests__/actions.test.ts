@@ -143,7 +143,12 @@ const setPendingVoiceReconnect = (pending: TPendingVoiceReconnect): void => {
 };
 
 const startVoiceReconnect = (now: number): void => {
-	dispatchVoiceSession({ type: 'ReconnectStarted', now, online: true, authenticated: false });
+	dispatchVoiceSession({
+		type: 'WsDropped',
+		pending: selectVoiceSessionState(selectPendingVoiceReconnect),
+		now,
+		online: true,
+	});
 };
 
 const setVoiceReconnectSuppression = (suppression: TVoiceReconnectSuppression): void => {
@@ -152,7 +157,6 @@ const setVoiceReconnectSuppression = (suppression: TVoiceReconnectSuppression): 
 		pending: { ...suppression, micMuted: false, soundMuted: false },
 		now: suppression.expiresAt - VOICE_RECONNECT_SUPPRESSION_MS,
 		online: true,
-		authenticated: false,
 	});
 	if (capture?.type !== 'CaptureRecoverySnapshot') throw new Error('expected recovery snapshot command');
 	const [auth] = dispatchVoiceSession({
@@ -161,7 +165,6 @@ const setVoiceReconnectSuppression = (suppression: TVoiceReconnectSuppression): 
 		snapshot: { remoteUserStreams: {}, externalStreams: {} },
 	});
 	if (auth?.type !== 'WaitAuth') throw new Error('expected authentication command');
-	dispatchVoiceSession({ type: 'SocketAuthenticated' });
 	const [restore] = dispatchVoiceSession({ ...auth, type: 'AuthReady' });
 	if (restore?.type !== 'RestoreVoiceSession') throw new Error('expected restore command');
 	const [watch] = dispatchVoiceSession({ ...restore, type: 'RestoreSucceeded' });

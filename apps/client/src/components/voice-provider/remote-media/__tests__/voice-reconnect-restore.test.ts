@@ -68,7 +68,6 @@ const startReconnectWithSnapshot = (): [TVoiceSessionState, number] => {
 		pending: pendingReconnect(),
 		now: 100,
 		online: true,
-		authenticated: true,
 	});
 
 	expect(commands).toEqual([expect.objectContaining({ type: 'CaptureRecoverySnapshot' })]);
@@ -85,6 +84,7 @@ const startReconnectWithSnapshot = (): [TVoiceSessionState, number] => {
 		snapshot: watchedSnapshot(),
 	});
 
+	[state, commands] = dispatch(state, { type: 'AuthReady', commandId: activeCommandId(state), generation });
 	expect(commands).toEqual([expect.objectContaining({ type: 'RestoreVoiceSession', generation })]);
 
 	return [state, generation];
@@ -122,7 +122,7 @@ describe('voice WS-reconnect watch restoration', () => {
 
 		expect(state.phase).toEqual({ phase: 'connected', channelId: 5, generation });
 		expect(state.pendingVoiceReconnect).toBeUndefined();
-		expect(state.reconnectingSince).toBeUndefined();
+		expect(state.phase.phase === 'reconnecting' ? state.phase.reconnectingSince : undefined).toBeUndefined();
 		expect(state.suppression).toEqual({
 			channelId: 5,
 			peerUserIds: [10, 20],

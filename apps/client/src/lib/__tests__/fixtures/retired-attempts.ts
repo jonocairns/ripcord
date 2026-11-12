@@ -122,11 +122,9 @@ const modules: Record<string, string[]> = {
 	'@/features/dialogs/actions': ['resetDialogs', 'openDialog'],
 	'@/features/server/sounds/actions': ['playSound'],
 	'@/features/server/voice/reconnect-coordinator': [
-		'captureVoiceReconnectIntentForCurrentSession',
 		'clearVoiceReconnectRecovery',
-		'ensureVoiceReconnectStarted',
-		'markVoiceReconnectSessionAuthenticated',
-		'markVoiceReconnectSessionUnauthenticated',
+		'startVoiceReconnectFromStagedIntent',
+		'reportVoiceSocketDropped',
 		'getValidPendingVoiceReconnect',
 		'resolveVoiceRecoveryAction',
 	],
@@ -356,7 +354,6 @@ const literalTraces: Record<string, string[]> = {
 		'configureTraceBackend',
 		'setPluginCommands',
 		'gate:authenticate',
-		'markVoiceReconnectSessionAuthenticated',
 		'authenticateStreamObservability',
 		'authenticateDiagnosticDelivery',
 		'recordVoiceDiagnostic',
@@ -369,8 +366,7 @@ const literalTraces: Record<string, string[]> = {
 		'pauseStreamObservability',
 		'pauseDiagnosticDelivery',
 		'stopClientTracing',
-		'markVoiceReconnectSessionUnauthenticated',
-		'captureVoiceReconnectIntentForCurrentSession',
+		'reportVoiceSocketDropped',
 		'timer:arm:45000',
 		'recordDesktopDiagnostic:websocket_opened:reconnecting=true',
 		'pauseStreamObservability',
@@ -395,7 +391,6 @@ const literalTraces: Record<string, string[]> = {
 		'nonce',
 		'timer:clear',
 		'gate:authenticate',
-		'markVoiceReconnectSessionAuthenticated',
 		'authenticateStreamObservability',
 		'authenticateDiagnosticDelivery',
 		'recordVoiceDiagnostic',
@@ -408,9 +403,7 @@ const literalTraces: Record<string, string[]> = {
 		'pauseStreamObservability',
 		'pauseDiagnosticDelivery',
 		'stopClientTracing',
-		'markVoiceReconnectSessionUnauthenticated',
-		'captureVoiceReconnectIntentForCurrentSession',
-		'ensureVoiceReconnectStarted',
+		'reportVoiceSocketDropped',
 		'timer:arm:45000',
 		'recordDesktopDiagnostic:websocket_opened:reconnecting=true',
 		'pauseStreamObservability',
@@ -435,13 +428,12 @@ const literalTraces: Record<string, string[]> = {
 		'nonce',
 		'timer:clear',
 		'gate:authenticate',
-		'markVoiceReconnectSessionAuthenticated',
 		'authenticateStreamObservability',
 		'authenticateDiagnosticDelivery',
 		'recordVoiceDiagnostic',
 		'getValidPendingVoiceReconnect',
 		'logDebug',
-		'ensureVoiceReconnectStarted',
+		'startVoiceReconnectFromStagedIntent',
 	],
 	'trace-terminal-kicked': [
 		'recordVoiceDiagnostic',
@@ -901,7 +893,7 @@ if (mode && newModes.includes(mode)) {
 			if (waiting) await waiting;
 			if (mustChangePassword) {
 				assert.ok(!trace.includes('gate:authenticate'));
-				assert.ok(!trace.includes('markVoiceReconnectSessionAuthenticated'));
+				assert.ok(!trace.includes('startVoiceReconnectFromStagedIntent'));
 				assert.equal(trace.filter((item) => item === 'handshake').length, 2);
 			}
 		} else if (mode.startsWith('trace-terminal-')) {

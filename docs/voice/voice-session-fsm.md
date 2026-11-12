@@ -58,7 +58,7 @@ bookkeeping:
 - recovery generation and active command id
 - transport nonce and nonce-restart count for rebuilds
 - retry attempt and consecutive unknown-error count
-- authentication and online-wait progress
+- authentication-wait and online-wait progress (readiness belongs to the connection store)
 - the captured watched-media snapshot
 - whether a reconnect attempt established a server session
 
@@ -77,9 +77,9 @@ execution code must not use it as a second mutable state owner.
 World events trigger transitions, including:
 
 - join requested/succeeded/failed
-- WebSocket dropped, authenticated, or unauthenticated
+- one `WsDropped` event per WebSocket drop
 - transport failed or nonce changed
-- reconnect intent captured, `ReconnectStarted`, or recovery cleared
+- reconnect intent captured or recovery cleared
 
 The machine emits effect commands such as:
 
@@ -195,3 +195,11 @@ Integrated validation should continue to cover WebSocket drops, offline deferral
 rapid reconnects, transport rebuilds, server restarts, producer replacement,
 stop-watch races, provider remount, and desktop app-audio recovery where hardware
 is available.
+
+A drop dispatches `WsDropped` once with the current intent. The machine stores
+no authentication flag. Recovery reaches `restoring` only through `WaitAuth`, from
+the initial reconnect, an online wait or a retry; its executor reads connection
+readiness and dispatches `AuthReady` synchronously, without an intervening await.
+A `Resumed` during `restoring` or `restoreWatch` re-issues the restore in place
+without a new `WaitAuth`, as it did before. Outside recovery the top-level intent is staged for rejoin;
+during recovery the phase holds the only live intent and start time.
