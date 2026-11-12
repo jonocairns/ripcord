@@ -10,14 +10,13 @@ import {
 type TPushMicKeybindInputs = TDesktopPushKeybindsInput & {
 	currentVoiceChannelId: number | undefined;
 	canSpeak: boolean;
-	micMuted: boolean;
-	soundMuted: boolean;
 	pushReleaseDelayMs: number;
 	setMicMuted: (micMuted: boolean, options: { playSound: false }) => Promise<void>;
 };
 
 type TPushMicKeybindControllerPorts = {
 	getInputs: () => TPushMicKeybindInputs;
+	getOwnVoiceState: () => { micMuted: boolean; soundMuted: boolean };
 	getDesktopBridge: () =>
 		| Pick<TDesktopBridge, 'setGlobalPushKeybinds' | 'subscribeGlobalPushKeybindEvents'>
 		| undefined;
@@ -49,7 +48,7 @@ const createPushMicKeybindController = (ports: TPushMicKeybindControllerPorts) =
 
 	const applyOverride = (): void => {
 		const inputs = ports.getInputs();
-		const resolution = resolvePushMicState(state, inputs.soundMuted);
+		const resolution = resolvePushMicState(state, ports.getOwnVoiceState().soundMuted);
 
 		if (resolution.targetMicMuted !== undefined) {
 			void inputs.setMicMuted(resolution.targetMicMuted, { playSound: false });
@@ -104,7 +103,7 @@ const createPushMicKeybindController = (ports: TPushMicKeybindControllerPorts) =
 			});
 
 		const applyEvent = (event: TDesktopPushKeybindEvent): void => {
-			state = updatePushMicStateForKeyEvent(state, event, ports.getInputs().micMuted);
+			state = updatePushMicStateForKeyEvent(state, event, ports.getOwnVoiceState().micMuted);
 			applyOverride();
 		};
 

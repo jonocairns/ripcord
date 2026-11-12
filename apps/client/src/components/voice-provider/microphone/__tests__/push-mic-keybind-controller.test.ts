@@ -69,7 +69,7 @@ const createHarness = (options: { micMuted?: boolean; desktop?: boolean } = {}) 
 	const warnings: string[] = [];
 	const logs: Array<{ message: string; context: object }> = [];
 	const registrationResults: Array<Promise<TGlobalPushKeybindRegistrationResult>> = [];
-	const inputs: TPushMicKeybindInputs = {
+	const inputs: TPushMicKeybindInputs & { micMuted: boolean; soundMuted: boolean } = {
 		pushToTalkKeybind: 'Control+KeyT',
 		pushToMuteKeybind: 'Control+KeyM',
 		currentVoiceChannelId: 1,
@@ -99,6 +99,7 @@ const createHarness = (options: { micMuted?: boolean; desktop?: boolean } = {}) 
 	let bridgeReads = 0;
 	const controller = createPushMicKeybindController({
 		getInputs: () => inputs,
+		getOwnVoiceState: () => inputs,
 		getDesktopBridge: () => {
 			bridgeReads += 1;
 			return options.desktop === false ? undefined : bridge;

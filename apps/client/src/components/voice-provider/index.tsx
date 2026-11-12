@@ -256,8 +256,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		pushReleaseDelayMs: devices.pushReleaseDelayMs,
 		currentVoiceChannelId,
 		canSpeak: channelCan(ChannelPermission.SPEAK),
-		micMuted: ownVoiceState.micMuted,
-		soundMuted: ownVoiceState.soundMuted,
 		confirmedMicMuted: confirmedOwnMicMuted,
 		setMicMuted,
 	});
