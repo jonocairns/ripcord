@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
+import { useServerStore } from '@/features/server/slice';
+import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import { logVoice } from '@/helpers/browser-logger';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
@@ -16,13 +18,15 @@ type TUsePushMicKeybindsParams = TPushMicKeybindInputs & {
 const usePushMicKeybinds = (inputs: TUsePushMicKeybindsParams): void => {
 	const inputsRef = useLatestRef(inputs);
 	// Match the provider's current control callback even during effect cleanup;
-	// voice state and settings retain their committed useLatestRef timing.
+	// channel, permission and settings retain their committed useLatestRef timing.
 	const setMicMutedRef = useRef(inputs.setMicMuted);
 	setMicMutedRef.current = inputs.setMicMuted;
 	const controllerRef = useRef<ReturnType<typeof createPushMicKeybindController> | undefined>(undefined);
 	if (!controllerRef.current) {
 		controllerRef.current = createPushMicKeybindController({
 			getInputs: () => ({ ...inputsRef.current, setMicMuted: setMicMutedRef.current }),
+			// Read live mute/deafen state when events arrive before the next React commit.
+			getOwnVoiceState: () => ownVoiceStateSelector(useServerStore.getState()),
 			getDesktopBridge,
 			setTimeout: (callback, milliseconds) => window.setTimeout(callback, milliseconds),
 			clearTimeout: (handle) => window.clearTimeout(handle),
