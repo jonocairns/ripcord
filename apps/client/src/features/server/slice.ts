@@ -22,6 +22,7 @@ import type { TPinnedCard } from '@/components/channel-view/voice/hooks/use-pin-
 import { applyFileAccessTokens, type TFileAccessToken } from './messages/file-access-tokens';
 import { sortLatestMessagePage } from './messages/latest-message-page';
 import type { TDisconnectInfo, TMessagesMap } from './types';
+import { resolveOwnVoiceState, type TOwnPushHold, type TOwnVoiceIntent } from './voice/own-voice-state';
 
 export interface IServerState {
 	connected: boolean;
@@ -52,7 +53,9 @@ export interface IServerState {
 	loadingInfo: boolean;
 	voiceMap: TVoiceMap;
 	externalStreamsMap: TExternalStreamsMap;
-	ownVoiceDefaults: TVoiceUserState;
+	ownVoiceIntent: TOwnVoiceIntent;
+	ownMicTestActive: boolean;
+	ownPushHold: TOwnPushHold;
 	ownOptimisticStateExpiresAt: number | undefined;
 	pinnedCard: TPinnedCard | undefined;
 	channelPermissions: TChannelUserPermissionsMap;
@@ -129,7 +132,10 @@ type TServerStore = IServerState & {
 		channelId: number;
 		users: Array<{ userId: number; state: TVoiceUserState }>;
 	}) => void;
-	updateOwnVoiceState: (newState: Partial<TVoiceUserState>) => void;
+	setOwnVoiceIntent: (intent: Partial<TOwnVoiceIntent>) => void;
+	setOwnMicTestActive: (active: boolean) => void;
+	setOwnPushHold: (hold: TOwnPushHold) => void;
+	updateOwnVoiceState: (newState: Partial<Pick<TVoiceUserState, 'webcamEnabled' | 'sharingScreen'>>) => void;
 	setPinnedCard: (pinnedCard: TPinnedCard | undefined) => void;
 	addExternalStreamToChannel: (payload: { channelId: number; streamId: number; stream: TExternalStream }) => void;
 	updateExternalStreamInChannel: (payload: { channelId: number; streamId: number; stream: TExternalStream }) => void;
@@ -167,12 +173,9 @@ const initialState: IServerState = {
 	voiceMap: {},
 	externalStreamsMap: {},
 	ownOptimisticStateExpiresAt: undefined,
-	ownVoiceDefaults: {
-		micMuted: false,
-		soundMuted: false,
-		webcamEnabled: false,
-		sharingScreen: false,
-	},
+	ownVoiceIntent: { micMuted: false, soundMuted: false },
+	ownMicTestActive: false,
+	ownPushHold: { talk: false, mute: false },
 	pinnedCard: undefined,
 	channelPermissions: {},
 	readStatesMap: {},
@@ -209,22 +212,29 @@ const removeById = <T extends { id: number }>(items: T[], id: number): T[] => {
 	return items.filter((item) => item.id !== id);
 };
 
-const findVoiceStateForUser = (voiceMap: TVoiceMap, userId: number): TVoiceUserState | undefined => {
-	for (const channelState of Object.values(voiceMap)) {
-		const userState = channelState?.users[userId];
-
-		if (userState) {
-			return userState;
-		}
-	}
-
-	return undefined;
+const isOwnSessionRow = (state: IServerState, channelId: number, userId: number) =>
+	state.currentVoiceChannelId === channelId && state.ownUserId === userId;
+const overlayOwnVoice = (state: IServerState, row: TVoiceUserState): TVoiceUserState => {
+	const resolved = resolveOwnVoiceState({
+		intent: state.ownVoiceIntent,
+		pushHold: state.ownPushHold,
+		micTestActive: state.ownMicTestActive,
+	});
+	return { ...row, micMuted: resolved.micMuted, soundMuted: resolved.soundMuted };
 };
-
-// Optimistic own-voice updates are authoritative for this many milliseconds.
-// If the server confirms (via updateVoiceUserState) or a new session starts
-// (setInitialData), the expiry is cleared early. Any reconcile that fires after
-// the window closes yields to the server's authoritative state instead.
+const rewriteOwnRow = (state: IServerState): TVoiceMap => {
+	const channelId = state.currentVoiceChannelId;
+	const userId = state.ownUserId;
+	if (channelId === undefined || userId === undefined) return state.voiceMap;
+	const channel = state.voiceMap[channelId];
+	const row = channel?.users[userId];
+	if (!channel || !row) return state.voiceMap;
+	return {
+		...state.voiceMap,
+		[channelId]: { ...channel, users: { ...channel.users, [userId]: overlayOwnVoice(state, row) } },
+	};
+};
+// Only webcam and screen-share updates use this optimistic window.
 const OPTIMISTIC_VOICE_STATE_TTL_MS = 5_000;
 
 // Bound the live per-channel message tail so long sessions do not accumulate
@@ -324,23 +334,11 @@ const capChannelMessages = (messages: TJoinedMessage[], protectedPrefixCount: nu
 	];
 };
 
-const mergeOwnVoiceDefaults = (
-	currentOwnVoiceDefaults: TVoiceUserState,
-	voiceState: Partial<TVoiceUserState>,
-): TVoiceUserState => ({
-	micMuted: voiceState.micMuted ?? currentOwnVoiceDefaults.micMuted,
-	soundMuted: voiceState.soundMuted ?? currentOwnVoiceDefaults.soundMuted,
-	webcamEnabled: false,
-	sharingScreen: false,
-});
-
 const voiceStateUpdateMatchesCurrentState = (
 	currentVoiceState: TVoiceUserState,
 	newState: Partial<TVoiceUserState>,
 ) => {
 	return (
-		(newState.micMuted === undefined || newState.micMuted === currentVoiceState.micMuted) &&
-		(newState.soundMuted === undefined || newState.soundMuted === currentVoiceState.soundMuted) &&
 		(newState.webcamEnabled === undefined || newState.webcamEnabled === currentVoiceState.webcamEnabled) &&
 		(newState.sharingScreen === undefined || newState.sharingScreen === currentVoiceState.sharingScreen)
 	);
@@ -352,6 +350,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		set({
 			...initialState,
 			info: get().info,
+			ownVoiceIntent: get().ownVoiceIntent,
 		});
 	},
 	setConnected: (connected) => {
@@ -379,7 +378,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		set({ disconnectInfo });
 	},
 	setInitialData: (data) => {
-		const ownVoiceState = findVoiceStateForUser(data.voiceMap, data.ownUserId);
+		const voiceMap = rewriteOwnRow({ ...get(), ownUserId: data.ownUserId, voiceMap: data.voiceMap });
 		const selectedChannelId = get().selectedChannelId;
 
 		set({
@@ -392,14 +391,11 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			roles: data.roles,
 			ownUserId: data.ownUserId,
 			publicSettings: data.publicSettings,
-			voiceMap: data.voiceMap,
+			voiceMap,
 			externalStreamsMap: data.externalStreamsMap,
 			serverId: data.serverId,
 			channelPermissions: data.channelPermissions,
 			readStatesMap: selectedChannelId === undefined ? data.readStates : { ...data.readStates, [selectedChannelId]: 0 },
-			ownVoiceDefaults: ownVoiceState
-				? mergeOwnVoiceDefaults(get().ownVoiceDefaults, ownVoiceState)
-				: get().ownVoiceDefaults,
 			// A new server session baseline supersedes any pending optimistic state.
 			// Clearing here prevents a stale TTL (e.g. from leave-cleanup) from
 			// shielding the own user from server-authoritative changes on rejoin.
@@ -722,16 +718,12 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 					...channelState,
 					users: {
 						...channelState.users,
-						[userId]: userState,
+						[userId]: isOwnSessionRow(storeState, channelId, userId)
+							? overlayOwnVoice(storeState, userState)
+							: userState,
 					},
 				},
 			},
-			// Mirror durable own-user preferences from server-confirmed state,
-			// but keep live in-call state derived from voiceMap.
-			ownVoiceDefaults:
-				storeState.ownUserId === userId
-					? mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, userState)
-					: storeState.ownVoiceDefaults,
 		});
 	},
 	removeUserFromVoiceChannel: ({ channelId, userId }) => {
@@ -765,19 +757,21 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			return;
 		}
 
-		const isOwnUser = storeState.ownUserId === userId;
+		const isOwnUser = isOwnSessionRow(storeState, channelId, userId);
 		const isOptimisticStatePending =
 			isOwnUser &&
 			storeState.ownOptimisticStateExpiresAt !== undefined &&
 			Date.now() < storeState.ownOptimisticStateExpiresAt;
 		const shouldPreserveOwnOptimisticState =
 			isOptimisticStatePending && !voiceStateUpdateMatchesCurrentState(currentVoiceState, newState);
-		const nextVoiceState = shouldPreserveOwnOptimisticState
-			? currentVoiceState
-			: {
-					...currentVoiceState,
-					...newState,
-				};
+		const merged = {
+			...currentVoiceState,
+			...newState,
+			...(shouldPreserveOwnOptimisticState
+				? { webcamEnabled: currentVoiceState.webcamEnabled, sharingScreen: currentVoiceState.sharingScreen }
+				: {}),
+		};
+		const nextVoiceState = isOwnUser ? overlayOwnVoice(storeState, merged) : merged;
 
 		set({
 			voiceMap: {
@@ -790,36 +784,31 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 					},
 				},
 			},
-			// Server updates remain authoritative for own-user preferences too.
-			ownVoiceDefaults: isOwnUser
-				? mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, nextVoiceState)
-				: storeState.ownVoiceDefaults,
 			// Matching server confirmation clears the optimistic-pending window.
 			...(isOwnUser && !shouldPreserveOwnOptimisticState ? { ownOptimisticStateExpiresAt: undefined } : undefined),
-			...(isOwnUser && !shouldPreserveOwnOptimisticState && newState.sharingScreen === false
+			...(isOwnUser && currentVoiceState.sharingScreen && !nextVoiceState.sharingScreen
 				? { screenShareWatchers: {} }
 				: undefined),
 		});
 	},
 	reconcileVoiceChannelUsers: ({ channelId, users }) => {
 		const storeState = get();
-		const { ownUserId, ownOptimisticStateExpiresAt } = storeState;
+		const { ownOptimisticStateExpiresAt } = storeState;
 		const existingChannelState = storeState.voiceMap[channelId];
 
-		// Replace the channel user list with the server's authoritative snapshot.
-		// For the own user, preserve local state only while an optimistic update is
-		// still within its pending window (i.e. the TRPC call hasn't been confirmed
-		// yet). Once the TTL expires — or the server has already confirmed via
-		// updateVoiceUserState / setInitialData — server state wins. This ensures
-		// admin mutes and permission changes applied during a disconnect are not
-		// silently discarded on rejoin.
+		// Membership and video come from the server; this session owns its audio intent.
 		const isOptimisticStatePending =
 			ownOptimisticStateExpiresAt !== undefined && Date.now() < ownOptimisticStateExpiresAt;
 		const newUsers: Record<number, TVoiceUserState> = {};
 
 		for (const { userId, state } of users) {
 			const existingState = existingChannelState?.users[userId];
-			newUsers[userId] = userId === ownUserId && existingState && isOptimisticStatePending ? existingState : state;
+			const own = isOwnSessionRow(storeState, channelId, userId);
+			const row =
+				own && existingState && isOptimisticStatePending
+					? { ...state, webcamEnabled: existingState.webcamEnabled, sharingScreen: existingState.sharingScreen }
+					: state;
+			newUsers[userId] = own ? overlayOwnVoice(storeState, row) : row;
 		}
 
 		set({
@@ -832,10 +821,32 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			},
 			// If the TTL had already elapsed, clear the stale sentinel so it doesn't
 			// linger in the store until the next setInitialData or confirmation.
-			...(!isOptimisticStatePending && ownOptimisticStateExpiresAt !== undefined
+			...(channelId === storeState.currentVoiceChannelId &&
+			!isOptimisticStatePending &&
+			ownOptimisticStateExpiresAt !== undefined
 				? { ownOptimisticStateExpiresAt: undefined }
 				: undefined),
 		});
+	},
+	setOwnVoiceIntent: (intent) => {
+		const state = get();
+		const ownVoiceIntent = { ...state.ownVoiceIntent, ...intent };
+		if (
+			ownVoiceIntent.micMuted === state.ownVoiceIntent.micMuted &&
+			ownVoiceIntent.soundMuted === state.ownVoiceIntent.soundMuted
+		)
+			return;
+		set({ ownVoiceIntent, voiceMap: rewriteOwnRow({ ...state, ownVoiceIntent }) });
+	},
+	setOwnMicTestActive: (ownMicTestActive) => {
+		const state = get();
+		if (state.ownMicTestActive === ownMicTestActive) return;
+		set({ ownMicTestActive, voiceMap: rewriteOwnRow({ ...state, ownMicTestActive }) });
+	},
+	setOwnPushHold: (ownPushHold) => {
+		const state = get();
+		if (state.ownPushHold.talk === ownPushHold.talk && state.ownPushHold.mute === ownPushHold.mute) return;
+		set({ ownPushHold, voiceMap: rewriteOwnRow({ ...state, ownPushHold }) });
 	},
 	updateOwnVoiceState: (newState) => {
 		const storeState = get();
@@ -863,9 +874,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 						},
 					},
 				},
-				// When already in voice, optimistic local toggles patch the live own-user
-				// entry directly and also persist the off-channel defaults.
-				ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
+				// Patch local video presentation until the server confirms it.
 				ownOptimisticStateExpiresAt: nextExpiresAt,
 				...resetScreenShareWatchers,
 			});
@@ -873,7 +882,6 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		}
 
 		set({
-			ownVoiceDefaults: mergeOwnVoiceDefaults(storeState.ownVoiceDefaults, newState),
 			ownOptimisticStateExpiresAt: nextExpiresAt,
 			...resetScreenShareWatchers,
 		});

@@ -12,13 +12,22 @@ import { logDebug, logVoice, reportError } from '@/helpers/browser-logger';
 import { recordDesktopDiagnostic } from '@/helpers/desktop-diagnostics';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { isNonRetriableTrpcError } from '@/helpers/trpc-error-data';
-import { getTRPCClient, getWsClientInstanceId, waitForTRPCSessionAuthentication } from '@/lib/trpc';
+import {
+	getTRPCClient,
+	getTRPCClientIfInitialized,
+	getWsClientInstanceId,
+	isTRPCSessionAuthenticated,
+	subscribeServerConnectionState,
+	TRPCClientUnavailableError,
+	waitForTRPCSessionAuthentication,
+} from '@/lib/trpc';
 import { setCurrentVoiceChannelId, setSelectedChannelId } from '../channels/actions';
 import { currentVoiceChannelIdSelector, selectedChannelIdSelector } from '../channels/selectors';
 import { useServerStore } from '../slice';
 import { playSound } from '../sounds/actions';
 import { SoundType } from '../types';
 import { ownUserIdSelector } from '../users/selectors';
+import type { TOwnPushHold, TOwnVoiceIntent } from './own-voice-state';
 import { runVoiceProviderCleanup } from './provider-cleanup';
 import type { TClearReason } from './reconnect-coordinator';
 import {
@@ -27,8 +36,9 @@ import {
 	getValidPendingVoiceReconnect,
 	isVoiceReconnectPeerSuppressed,
 	isVoiceReconnectRecoveryActive,
+	updateVoiceReconnectIntentState,
 } from './reconnect-coordinator';
-import { ownVoiceStateSelector, pinnedCardSelector } from './selectors';
+import { ownVoiceSessionPayloadSelector, ownVoiceStateSelector, pinnedCardSelector } from './selectors';
 
 type TVoiceLeaveReason = 'user_action' | 'recovery_exhausted' | 'app_quit' | 'join_failed';
 
@@ -56,31 +66,95 @@ const enqueueVoiceSessionMutation = <Result>(mutation: () => Promise<Result>): P
 	return result;
 };
 
-type TOwnVoiceStateUpdate = Partial<
-	Pick<TVoiceUserState, 'micMuted' | 'soundMuted' | 'webcamEnabled' | 'sharingScreen'>
->;
+type TOwnVoiceStateUpdate = Partial<Pick<TVoiceUserState, 'webcamEnabled' | 'sharingScreen'>>;
 
 let ownVoiceStateUpdateQueue: Promise<void> = Promise.resolve();
 let ownVoiceStateUpdateSeq = 0;
 
-// voice.updateState applies last-write-wins on the server after async
-// permission checks, so two rapid updates can land out of order. Stamping a
-// monotonic seq lets the server drop the stale write, and chaining the sends
-// keeps ordering even against servers that predate the seq field.
+// These subscriptions live for the same module lifetime as the queue. The generation
+// remembers departures, including a return to the identical client/channel (ABA).
+let queueGeneration = 0;
+let queuedRelay: Promise<void> | undefined;
+const invalidateQueue = () => {
+	queueGeneration += 1;
+	queuedRelay = undefined;
+};
+const unsubscribeStore = useServerStore.subscribe((state, previous) => {
+	if (state.currentVoiceChannelId !== previous.currentVoiceChannelId || state.serverId !== previous.serverId)
+		invalidateQueue();
+});
+const unsubscribeConnection = subscribeServerConnectionState(() => {
+	if (!isTRPCSessionAuthenticated()) invalidateQueue();
+});
+if (import.meta.hot)
+	import.meta.hot.dispose(() => {
+		unsubscribeStore();
+		unsubscribeConnection();
+	});
+const captureQueueOwner = () => {
+	const client = getTRPCClientIfInitialized();
+	const channelId = useServerStore.getState().currentVoiceChannelId;
+	const generation = queueGeneration;
+	return {
+		client,
+		valid: () =>
+			!!client &&
+			client === getTRPCClientIfInitialized() &&
+			generation === queueGeneration &&
+			channelId !== undefined &&
+			channelId === useServerStore.getState().currentVoiceChannelId &&
+			isTRPCSessionAuthenticated(),
+	};
+};
+const enqueueOwnUpdate = (send: () => Promise<void>) => {
+	const result = ownVoiceStateUpdateQueue.then(send);
+	ownVoiceStateUpdateQueue = result.catch(() => {});
+	return result;
+};
 export const sendOwnVoiceStateUpdate = (
 	state: TOwnVoiceStateUpdate,
 	options: { signal?: AbortSignal } = {},
 ): Promise<void> => {
-	const seq = (ownVoiceStateUpdateSeq += 1);
-	const result = ownVoiceStateUpdateQueue.then(() =>
-		getTRPCClient().voice.updateState.mutate({ ...state, seq }, { signal: options.signal }),
-	);
-	ownVoiceStateUpdateQueue = result.then(
-		() => undefined,
-		() => undefined,
-	);
-	return result;
+	const owner = captureQueueOwner();
+	return enqueueOwnUpdate(async () => {
+		if (!owner.valid() || !owner.client) throw new TRPCClientUnavailableError();
+		await owner.client.voice.updateState.mutate(
+			{ ...state, seq: (ownVoiceStateUpdateSeq += 1) },
+			{ signal: options.signal },
+		);
+	});
 };
+export const relayOwnVoiceState = (): Promise<void> => {
+	if (queuedRelay) return queuedRelay;
+	const owner = captureQueueOwner();
+	const relay = enqueueOwnUpdate(async () => {
+		if (queuedRelay === relay) queuedRelay = undefined;
+		if (!owner.valid() || !owner.client) return;
+		try {
+			const { micMuted, soundMuted } = ownVoiceStateSelector(useServerStore.getState());
+			await owner.client.voice.updateState.mutate({ micMuted, soundMuted, seq: (ownVoiceStateUpdateSeq += 1) });
+		} catch (error) {
+			logVoice('Failed to relay own mute state', { error });
+		}
+	});
+	queuedRelay = relay;
+	return relay;
+};
+export const setOwnVoiceIntent = (intent: Partial<TOwnVoiceIntent>) => {
+	useServerStore.getState().setOwnVoiceIntent(intent);
+	updateVoiceReconnectIntentState(ownVoiceSessionPayloadSelector(useServerStore.getState()));
+	void relayOwnVoiceState();
+};
+export const setOwnMicTestActive = (active: boolean) => {
+	useServerStore.getState().setOwnMicTestActive(active);
+	updateVoiceReconnectIntentState(ownVoiceSessionPayloadSelector(useServerStore.getState()));
+	void relayOwnVoiceState();
+};
+export const setOwnPushHold = (hold: TOwnPushHold) => {
+	useServerStore.getState().setOwnPushHold(hold);
+	void relayOwnVoiceState();
+};
+export const cancelOwnPushHold = () => setOwnPushHold({ talk: false, mute: false });
 
 const resetVoiceSwitchState = (): void => {
 	pendingVoiceSwitchFromChannelIds.clear();
@@ -98,6 +172,7 @@ export const __resetVoiceSwitchStateForTests = (): void => {
 	voiceSessionMutationSeq = 0;
 	ownVoiceStateUpdateQueue = Promise.resolve();
 	ownVoiceStateUpdateSeq = 0;
+	invalidateQueue();
 };
 
 const clearOwnVoiceChannelState = (): boolean => {
@@ -310,13 +385,18 @@ export const updateVoiceUserState = (userId: number, channelId: number, newState
 		((newState.webcamEnabled === true && !currentUserState.webcamEnabled) ||
 			(newState.sharingScreen === true && !currentUserState.sharingScreen));
 
+	const wasSharing = useServerStore.getState().voiceMap[channelId]?.users[userId]?.sharingScreen;
 	useServerStore.getState().updateVoiceUserState({
 		userId,
 		channelId,
 		newState,
 	});
 
-	if (newState.sharingScreen === false) {
+	if (
+		channelId === useServerStore.getState().currentVoiceChannelId &&
+		wasSharing &&
+		!useServerStore.getState().voiceMap[channelId]?.users[userId]?.sharingScreen
+	) {
 		clearPinnedCardById(`screen-share-${userId}`);
 	}
 
@@ -341,7 +421,7 @@ export const handleStreamWatcherActivity = (activity: {
 	}
 };
 
-export const updateOwnVoiceState = (newState: Partial<TVoiceUserState>): void => {
+export const updateOwnVoiceState = (newState: TOwnVoiceStateUpdate): void => {
 	useServerStore.getState().updateOwnVoiceState(newState);
 };
 
@@ -391,7 +471,7 @@ const joinVoiceInternal = async (
 	}
 
 	const state = useServerStore.getState();
-	const { micMuted, soundMuted } = ownVoiceStateSelector(state);
+	const { micMuted, soundMuted } = ownVoiceSessionPayloadSelector(state);
 	const client = getTRPCClient();
 
 	try {
@@ -431,6 +511,7 @@ const joinVoiceInternal = async (
 		// correct set of participants the moment we enter the channel.
 		useServerStore.getState().reconcileVoiceChannelUsers({ channelId, users: channelUsers });
 
+		void relayOwnVoiceState();
 		return {
 			kind: 'joined',
 			routerRtpCapabilities,

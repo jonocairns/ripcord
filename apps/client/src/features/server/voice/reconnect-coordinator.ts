@@ -1,5 +1,6 @@
 import { logDebug } from '@/helpers/browser-logger';
 import { useServerStore } from '../slice';
+import { ownVoiceSessionPayloadSelector } from './selectors';
 import { selectPendingVoiceReconnect, selectVoiceReconnectSuppression } from './voice-session-machine';
 import { dispatchVoiceSession, selectVoiceSessionState } from './voice-session-store';
 
@@ -53,7 +54,7 @@ const isBrowserOnline = (): boolean => {
 
 const readVoiceReconnectIntent = (expiresAt: number): TPendingVoiceReconnect | undefined => {
 	const serverState = useServerStore.getState();
-	const { currentVoiceChannelId, ownUserId, voiceMap, ownVoiceDefaults } = serverState;
+	const { currentVoiceChannelId, ownUserId, voiceMap } = serverState;
 
 	if (currentVoiceChannelId === undefined || ownUserId === undefined) {
 		return;
@@ -66,8 +67,7 @@ const readVoiceReconnectIntent = (expiresAt: number): TPendingVoiceReconnect | u
 
 	const pendingVoiceReconnect: TPendingVoiceReconnect = {
 		channelId: currentVoiceChannelId,
-		micMuted: ownVoiceDefaults.micMuted,
-		soundMuted: ownVoiceDefaults.soundMuted,
+		...ownVoiceSessionPayloadSelector(serverState),
 		peerUserIds: [...peerUserIds],
 		expiresAt,
 	};

@@ -3,6 +3,7 @@ import { setVoiceProviderCleanupHandler } from '@/features/server/voice/provider
 import { logVoice } from '@/helpers/browser-logger';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import { isDesktopRuntime } from '@/runtime/desktop-bridge';
+import type { TVoiceStateOperations } from '../voice-state-operation';
 import { prewarmVoiceEngines } from './prewarm';
 import { useVoiceSessionExecutor } from './use-voice-session-executor';
 import {
@@ -41,6 +42,7 @@ type TUseVoiceSessionRuntimeParams = Pick<
 	| 'captureWatchedRemoteStreams'
 	| 'rehydrateWatchIntentOnly'
 > & {
+	voiceStateOperations: TVoiceStateOperations;
 	currentVoiceChannelId: number | undefined;
 	isConnected: boolean;
 	voiceSessionReconnectNonce: number;
@@ -58,6 +60,8 @@ const useVoiceSessionRuntime = (inputs: TUseVoiceSessionRuntimeParams) => {
 			getReconnectNonce: () => inputsRef.current.voiceSessionReconnectNonce,
 			canSpeak: () => inputsRef.current.canSpeak,
 			...voiceSessionRuntimeEnvironment,
+			captureMicOperation: () => inputsRef.current.voiceStateOperations.capture(),
+			isMicOperationCurrent: (token) => inputsRef.current.voiceStateOperations.isCurrent(token),
 		}));
 	}
 	const runtime = runtimeRef.current;

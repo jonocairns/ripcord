@@ -1,23 +1,11 @@
 import { useRef } from 'react';
-import { sendOwnVoiceStateUpdate, updateOwnVoiceState } from '@/features/server/voice/actions';
-import { updateVoiceReconnectIntentState } from '@/features/server/voice/reconnect-coordinator';
-import { logVoice } from '@/helpers/browser-logger';
-import { useLatestRef } from '@/hooks/use-latest-ref';
+import { cancelOwnPushHold, setOwnVoiceIntent } from '@/features/server/voice/actions';
 import { createVoiceStateOperations } from './voice-state-operation';
 
-const useVoiceStateOperations = (currentVoiceChannelId: number | undefined) => {
-	const currentVoiceChannelIdRef = useLatestRef(currentVoiceChannelId);
-	const operationsRef = useRef<ReturnType<typeof createVoiceStateOperations> | undefined>(undefined);
-	if (!operationsRef.current) {
-		operationsRef.current = createVoiceStateOperations({
-			getCurrentVoiceChannelId: () => currentVoiceChannelIdRef.current,
-			updateOwnVoiceState,
-			updateReconnectIntent: updateVoiceReconnectIntentState,
-			sendOwnVoiceStateUpdate,
-			log: logVoice,
-		});
-	}
-	return operationsRef.current;
+const useVoiceStateOperations = () => {
+	const ref = useRef<ReturnType<typeof createVoiceStateOperations> | undefined>(undefined);
+	if (!ref.current) ref.current = createVoiceStateOperations({ setOwnVoiceIntent, cancelPushHold: cancelOwnPushHold });
+	return ref.current;
 };
 
 export { useVoiceStateOperations };

@@ -7,12 +7,7 @@ import {
 	VoiceProviderContext,
 } from '@/components/voice-provider/voice-provider-context';
 import { useServerStore } from '../slice';
-import {
-	ownConfirmedVoiceStateSelector,
-	ownVoiceStateSelector,
-	pinnedCardSelector,
-	voiceChannelExternalStreamsSelector,
-} from './selectors';
+import { ownVoiceStateSelector, pinnedCardSelector, voiceChannelExternalStreamsSelector } from './selectors';
 
 export const useVoiceChannelExternalStreams = (channelId: number) =>
 	useServerStore((state) => voiceChannelExternalStreamsSelector(state, channelId));
@@ -63,8 +58,6 @@ export const useVoiceTransportStats = () => {
 
 	return useSyncExternalStore(store.subscribe, store.getSnapshot, () => EMPTY_TRANSPORT_STATS);
 };
-
-export const useConfirmedOwnVoiceState = () => useServerStore(ownConfirmedVoiceStateSelector);
 
 export const useOwnVoiceState = () => useServerStore(ownVoiceStateSelector);
 

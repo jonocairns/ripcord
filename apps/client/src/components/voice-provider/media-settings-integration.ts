@@ -11,6 +11,7 @@ type TMediaSettingsInputs = {
 };
 type TMediaSettingsDependencies = {
 	getInputs: () => TMediaSettingsInputs;
+	isMicWanted: () => boolean;
 	subscribeInputs: (listener: () => void) => () => void;
 	startMicrophone: () => Promise<TMicrophoneStartOutcome>;
 	restartWebcam: () => Promise<void>;
@@ -27,7 +28,7 @@ const mountMediaSettingsIntegration = (deps: TMediaSettingsDependencies): (() =>
 		const previous = previousDevices;
 		previousDevices = devices;
 		if (!previous || currentVoiceChannelId === undefined) return;
-		const shouldRestartMic = didMicCaptureSettingsChange(previous, devices);
+		const shouldRestartMic = deps.isMicWanted() && didMicCaptureSettingsChange(previous, devices);
 		const shouldRestartWebcam = webcamEnabled && didWebcamCaptureSettingsChange(previous, devices);
 		if (!shouldRestartMic && !shouldRestartWebcam) return;
 		void (async () => {
@@ -36,7 +37,6 @@ const mountMediaSettingsIntegration = (deps: TMediaSettingsDependencies): (() =>
 				const outcome = await deps.startMicrophone();
 				if (outcome.status === 'failed') {
 					deps.log('Failed to apply microphone settings live', { error: outcome.error });
-					deps.error('Failed to apply microphone settings');
 				}
 			}
 			if (shouldRestartWebcam) {

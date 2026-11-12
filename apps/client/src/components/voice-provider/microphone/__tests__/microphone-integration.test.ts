@@ -129,6 +129,8 @@ const createHarness = () => {
 		ownUserId: 10,
 	};
 	const state: {
+		operation: number;
+		gateOpen: boolean;
 		volume: number;
 		micMuted: boolean;
 		captureGroupId: string;
@@ -139,6 +141,8 @@ const createHarness = () => {
 		transport: Transport<AppData> | undefined;
 		channelSettings: { voiceBitrate: number; voiceDtx: boolean };
 	} = {
+		operation: 0,
+		gateOpen: true,
 		volume: 100,
 		micMuted: false,
 		captureGroupId: 'physical-a',
@@ -182,6 +186,10 @@ const createHarness = () => {
 	const integration = createMicrophoneIntegration({
 		getInputs: () => inputs,
 		isMicMuted: () => state.micMuted,
+		isTransmitGateOpen: () => state.gateOpen && !state.micMuted,
+		captureOperation: () => state.operation,
+		beginOperation: () => (state.operation += 1),
+		isOperationCurrent: (token) => token === state.operation,
 		getProducerTransport: () => state.transport,
 		getChannelSettings: () => state.channelSettings,
 		getMediaDevices: () => {
@@ -344,7 +352,8 @@ describe('microphone integration', () => {
 		expect(h.captures).toHaveLength(2);
 		capture.reject(new Error('capture unavailable'));
 		await flush();
-		expect(h.errors).toEqual(['Failed to apply microphone volume']);
+		expect(h.errors).toEqual(['Failed to start microphone']);
+		h.state.micMuted = false;
 		expect(await h.integration.start()).toEqual({ status: 'started' });
 		h.volumeChange(100);
 		await flush();
@@ -603,6 +612,7 @@ describe('microphone integration', () => {
 		expect(h.inputs.localAudioStream).toBeUndefined();
 		expect(h.integration.getRawTrack()).toBeUndefined();
 		h.state.micMuted = false;
+		h.integration.resetRawRecoveryBudget();
 		h.integration.setMuted(false);
 		expect(await h.integration.start()).toEqual({ status: 'started' });
 		cleanup();
@@ -645,4 +655,69 @@ describe('microphone integration', () => {
 			cleanup();
 		});
 	}
+});
+
+describe('capture restart policy', () => {
+	for (const demand of ['unmuted', 'talk held'])
+		it(`settings restart failure fails closed for ${demand}`, async () => {
+			const h = createHarness();
+			const cleanup = h.mount();
+			await h.integration.start();
+			h.captureResults.push(Promise.reject(new Error('settings acquisition')));
+			expect((await h.integration.restart()).status).toBe('failed');
+			expect(h.state.terminalMutes).toBe(1);
+			expect(h.errors).toEqual(['Failed to start microphone']);
+			cleanup();
+		});
+	it('skips settings and volume restarts when capture is not wanted', async () => {
+		const h = createHarness();
+		const cleanup = h.mount();
+		await h.integration.start();
+		h.state.micMuted = true;
+		expect((await h.integration.restart()).status).toBe('superseded');
+		h.volumeChange(50);
+		await flush();
+		expect(h.captures).toHaveLength(1);
+		cleanup();
+	});
+	it('a settings acquisition failure cannot mute a newer operation', async () => {
+		const h = createHarness();
+		const cleanup = h.mount();
+		const pending = deferred<MediaStream>();
+		h.captureResults.push(pending.promise);
+		const old = h.integration.restart();
+		await flush();
+		h.state.operation += 1;
+		pending.reject(new Error('old'));
+		await old;
+		expect(h.state.terminalMutes).toBe(0);
+		expect(h.errors).toEqual([]);
+		cleanup();
+	});
+	it('a closed transmit gate leaves wanted capture and activity inactive', async () => {
+		const h = createHarness();
+		const cleanup = h.mount();
+		h.state.gateOpen = false;
+		await h.integration.start();
+		expect(h.inputs.localAudioStream?.getAudioTracks()[0]?.enabled).toBe(false);
+		expect(h.monitors).toHaveLength(0);
+		cleanup();
+	});
+});
+
+it('retires a pending capture restart across same-channel session cleanup and rejoin', async () => {
+	const h = createHarness();
+	const dispose = h.mount();
+	const pending = deferred<MediaStream>();
+	h.captureResults.push(pending.promise);
+	const old = h.integration.restart();
+	await flush();
+	const lease = h.integration.createSessionLease();
+	await h.integration.cleanup();
+	pending.reject(new Error('retired session'));
+	expect((await old).status).toBe('superseded');
+	expect(lease()).toBe(false);
+	expect(h.state.terminalMutes).toBe(0);
+	expect(h.errors).toEqual([]);
+	dispose();
 });

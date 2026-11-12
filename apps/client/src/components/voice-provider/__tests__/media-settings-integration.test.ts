@@ -25,6 +25,7 @@ const fixture = () => {
 	});
 	const error = mock((_message: string) => {});
 	const dispose = mountMediaSettingsIntegration({
+		isMicWanted: () => true,
 		getInputs: () => inputs,
 		subscribeInputs: (cb) => {
 			listener = cb;
@@ -87,10 +88,7 @@ describe('media settings production integration mount', () => {
 		webcam.reject(new Error('webcam failed'));
 		await flush();
 		expect(f.events).toEqual(['mic', 'webcam']);
-		expect(f.error.mock.calls.map(([message]) => message)).toEqual([
-			'Failed to apply microphone settings',
-			'Failed to apply webcam settings',
-		]);
+		expect(f.error.mock.calls.map(([message]) => message)).toEqual(['Failed to apply webcam settings']);
 		f.dispose();
 	});
 	it('advances the comparison baseline while outside voice, without restarting on later join', async () => {
@@ -160,6 +158,7 @@ it('uses the production webcam owner to reject stale overlapping settings restar
 	const events: string[] = [];
 	const error = mock((_message: string) => {});
 	const disposeSettings = mountMediaSettingsIntegration({
+		isMicWanted: () => true,
 		getInputs: () => ({ devices: f.getDevices(), currentVoiceChannelId: 1, webcamEnabled: true }),
 		subscribeInputs: (listener) => {
 			notify = listener;

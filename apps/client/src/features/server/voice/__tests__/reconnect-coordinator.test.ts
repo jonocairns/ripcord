@@ -59,6 +59,7 @@ const setVoiceReconnectSuppression = (suppression: TVoiceReconnectSuppression): 
 describe('voice reconnect coordinator', () => {
 	beforeEach(() => {
 		useServerStore.getState().resetState();
+		useServerStore.getState().setOwnVoiceIntent({ micMuted: false, soundMuted: false });
 		resetVoiceSessionState();
 	});
 
@@ -67,11 +68,9 @@ describe('voice reconnect coordinator', () => {
 			useServerStore.setState({
 				ownUserId: 1,
 				currentVoiceChannelId: 5,
-				ownVoiceDefaults: {
+				ownVoiceIntent: {
 					micMuted: true,
 					soundMuted: false,
-					webcamEnabled: false,
-					sharingScreen: false,
 				},
 				voiceMap: {
 					5: {
@@ -103,11 +102,9 @@ describe('voice reconnect coordinator', () => {
 			useServerStore.setState({
 				ownUserId: 1,
 				currentVoiceChannelId: 5,
-				ownVoiceDefaults: {
+				ownVoiceIntent: {
 					micMuted: false,
 					soundMuted: false,
-					webcamEnabled: false,
-					sharingScreen: false,
 				},
 				voiceMap: {
 					5: {
@@ -164,11 +161,9 @@ describe('voice reconnect coordinator', () => {
 			useServerStore.setState({
 				ownUserId: 1,
 				currentVoiceChannelId: 5,
-				ownVoiceDefaults: {
+				ownVoiceIntent: {
 					micMuted: true,
 					soundMuted: false,
-					webcamEnabled: false,
-					sharingScreen: false,
 				},
 				voiceMap: {
 					5: {

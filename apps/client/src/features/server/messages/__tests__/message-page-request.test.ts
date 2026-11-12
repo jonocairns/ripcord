@@ -8,6 +8,10 @@ beforeAll(async () => {
 	// Keep browser/audio and network initialization outside these store/request tests.
 	mock.module('../../sounds/actions', () => ({ playSound: () => {} }));
 	mock.module('@/lib/trpc', () => ({
+		getTRPCClientIfInitialized: () => undefined,
+		isTRPCSessionAuthenticated: () => false,
+		subscribeServerConnectionState: () => () => {},
+		TRPCClientUnavailableError: class extends Error {},
 		getWsClientInstanceId: () => undefined,
 		waitForTRPCSessionAuthentication: async () => {},
 		getTRPCClient: () => {

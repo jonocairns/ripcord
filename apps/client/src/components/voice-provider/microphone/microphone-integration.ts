@@ -48,6 +48,10 @@ type TMicrophoneIntegrationInputs = {
 type TMicrophoneIntegrationPorts = {
 	getInputs: () => TMicrophoneIntegrationInputs;
 	isMicMuted: () => boolean;
+	isTransmitGateOpen: () => boolean;
+	captureOperation: () => number;
+	beginOperation: () => number;
+	isOperationCurrent: (token: number) => boolean;
 	getProducerTransport: () => Transport<AppData> | undefined;
 	getChannelSettings: () => Pick<TPublicChannel, 'voiceBitrate' | 'voiceDtx'> | undefined;
 	getMediaDevices: () => MediaDevices | undefined;
@@ -70,6 +74,11 @@ type TMicrophoneIntegrationPorts = {
 };
 
 const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
+	let sessionGeneration = 0;
+	const createSessionLease = () => {
+		const generation = sessionGeneration;
+		return () => sessionGeneration === generation;
+	};
 	let pipelineMutex: Promise<void> = Promise.resolve();
 	let volumeRestartPromise: Promise<void> | undefined;
 	let activitySequence = 0;
@@ -123,7 +132,7 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 		closeProducerOnServer: ports.closeProducerOnServer,
 		getActivityMode: () => {
 			const inputs = ports.getInputs();
-			if (!inputs.isConnected || ports.isMicMuted()) return 'inactive';
+			if (!inputs.isConnected || !ports.isTransmitGateOpen()) return 'inactive';
 			return inputs.ownUserId === undefined ? 'unavailable' : 'monitor';
 		},
 		startActivityMonitor: (producer, onUpdate) => ports.startActivityMonitor({ statsProvider: producer, onUpdate }),
@@ -141,6 +150,11 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 		},
 		isInVoiceChannel: () => ports.getInputs().currentVoiceChannelId !== undefined,
 		isMicMuted: ports.isMicMuted,
+		isTransmitGateOpen: ports.isTransmitGateOpen,
+		onTerminalOutputLoss: () => {
+			commitTerminalMute();
+			ports.error('Microphone capture stopped. Unmute to try again.');
+		},
 		reacquire: () => start(),
 		onRecoveryExhausted: (reason) => {
 			ports.log('Raw microphone recovery exhausted', { reason });
@@ -178,8 +192,17 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 		controller.publish({ source, isCurrent });
 
 	const start = async (isCurrent?: () => boolean): Promise<TMicrophoneStartOutcome> => {
+		const token = ports.captureOperation();
+		const isSessionCurrent = createSessionLease();
+		const channelId = ports.getInputs().currentVoiceChannelId;
+		if (channelId === undefined || ports.isMicMuted()) return { status: 'superseded' };
 		const lifecycleLease = controller.createLifecycleLease();
-		const isStartCurrent = (): boolean => lifecycleLease.isCurrent() && (isCurrent?.() ?? true);
+		const isStartCurrent = (): boolean =>
+			lifecycleLease.isCurrent() &&
+			isSessionCurrent() &&
+			ports.isOperationCurrent(token) &&
+			ports.getInputs().currentVoiceChannelId === channelId &&
+			(isCurrent?.() ?? true);
 		const previousMutex = pipelineMutex;
 		let releaseMutex: () => void = () => {};
 		pipelineMutex = new Promise<void>((resolve) => {
@@ -204,6 +227,24 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 		} finally {
 			releaseMutex();
 		}
+	};
+
+	const restart = async (): Promise<TMicrophoneStartOutcome> => {
+		const token = ports.beginOperation();
+		const isSessionCurrent = createSessionLease();
+		const channel = ports.getInputs().currentVoiceChannelId;
+		if (channel === undefined || ports.isMicMuted()) return { status: 'superseded' };
+		const outcome = await start();
+		if (
+			outcome.status === 'failed' &&
+			isSessionCurrent() &&
+			ports.isOperationCurrent(token) &&
+			ports.getInputs().currentVoiceChannelId === channel
+		) {
+			commitTerminalMute();
+			ports.error('Failed to start microphone');
+		}
+		return outcome;
 	};
 
 	const mountDefaultInputListener = (): (() => void) => {
@@ -334,7 +375,12 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 				return;
 			}
 			const inputs = ports.getInputs();
-			if (inputs.currentVoiceChannelId === undefined || inputs.localAudioStream === undefined || volumeRestartPromise)
+			if (
+				inputs.currentVoiceChannelId === undefined ||
+				ports.isMicMuted() ||
+				inputs.localAudioStream === undefined ||
+				volumeRestartPromise
+			)
 				return;
 			ports.log('Rebuilding microphone pipeline after mic volume crossed neutral threshold', {
 				nextVolume,
@@ -342,13 +388,12 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 				nextShouldUseMicGainPipeline: nextShouldUseGainPipeline,
 			});
 			volumeRestartPromise = (async () => {
-				const outcome = await start();
+				const outcome = await restart();
 				if (outcome.status === 'failed') {
 					ports.log('Failed to rebuild microphone pipeline after mic volume change', {
 						error: outcome.error,
 						nextVolume,
 					});
-					ports.error('Failed to apply microphone volume');
 				}
 				volumeRestartPromise = undefined;
 			})();
@@ -369,6 +414,7 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 	const deactivate = (): Promise<void> => {
 		// Fence capture synchronously before removing subscriptions; resource
 		// destruction may continue after this retained instance is reactivated.
+		sessionGeneration += 1;
 		const cleanupPromise = controller.deactivate();
 		cleanupSubscriptions?.();
 		cleanupSubscriptions = undefined;
@@ -382,8 +428,17 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 		prepare,
 		publish,
 		start,
-		cleanup: controller.cleanup,
-		setMuted: controller.setMuted,
+		restart,
+		resetRawRecoveryBudget: controller.resetRawRecoveryBudget,
+		createSessionLease,
+		cleanup: () => {
+			sessionGeneration += 1;
+			return controller.cleanup();
+		},
+		setMuted: (muted: boolean) => {
+			controller.setMuted(muted);
+			controller.syncActivity();
+		},
 		commitTerminalMute,
 		owns: controller.owns,
 		getRawTrack: controller.getRawTrack,

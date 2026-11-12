@@ -169,7 +169,12 @@ const createHarness = () => {
 		getLocalAudioStream: (): MediaStream | undefined => undefined,
 		getProducerTransport: () => undefined,
 		getConsumerTransport: () => undefined,
-		getOwnVoiceState: () => state.own,
+		getOwnVoiceSessionPayload: () => state.own,
+		isMicWanted: () => !state.own.micMuted,
+		captureMicOperation: () => 0,
+		isMicOperationCurrent: (_token: number): boolean => true,
+		relayOwnVoiceState: mock(() => {}),
+		notifyMicrophoneStartFailed: mock((_error: unknown) => {}),
 		getServerState: () => server,
 		createDevice: mock(async () => device.device),
 		requestVoiceRestoreOrJoin: mock(async () => bootstrap),
@@ -928,5 +933,32 @@ describe('voice session runtime composition boundaries', () => {
 		expect(h.ports.microphone.start).toHaveBeenCalledTimes(1);
 		expect(h.ports.microphone.commitTerminalMute).toHaveBeenCalledTimes(1);
 		expect(h.ports.startMonitoring).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe('current microphone failure ownership', () => {
+	for (const phase of ['prepare', 'publish'] as const)
+		for (const current of [false, true])
+			it(`${phase} failure commits only the current local operation (${current})`, async () => {
+				const h = createHarness();
+				h.ports.isMicOperationCurrent = () => current;
+				h.ports.microphone[phase].mockRejectedValueOnce(new Error('mic failed'));
+				await h.runtime.init(capabilities, 5);
+				expect(h.ports.microphone.commitTerminalMute).toHaveBeenCalledTimes(current ? 1 : 0);
+				expect(h.ports.notifyMicrophoneStartFailed).toHaveBeenCalledTimes(current ? 1 : 0);
+			});
+	it('preserves mic choice without SPEAK', async () => {
+		const h = createHarness();
+		h.state.canSpeak = false;
+		h.ports.microphone.prepare.mockRejectedValueOnce(new Error('no SPEAK'));
+		await h.runtime.init(capabilities, 5);
+		expect(h.ports.microphone.commitTerminalMute).not.toHaveBeenCalled();
+	});
+	it('uses capture demand independently of resting mute', async () => {
+		const h = createHarness();
+		h.state.own.micMuted = true;
+		h.ports.isMicWanted = () => true;
+		await h.runtime.init(capabilities, 5);
+		expect(h.ports.microphone.prepare).toHaveBeenCalledTimes(1);
 	});
 });

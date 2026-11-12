@@ -461,6 +461,7 @@ export const logoutFromServer = async () => {
 	clearVoiceReconnectRecovery('logout');
 	await revokeRefreshToken();
 	cleanup({ clearAuth: true });
+	useServerStore.getState().setOwnVoiceIntent({ micMuted: false, soundMuted: false });
 	cleanupServerSubscriptions();
 	setErrorReportingUser(undefined);
 };

@@ -6,11 +6,12 @@ import { SoundType } from '@/features/server/types';
 import {
 	clearOwnVoiceSessionAfterReconnectFailure,
 	leaveVoiceSessionAfterRecoveryFailure,
+	relayOwnVoiceState,
 	sendOwnVoiceStateUpdate,
 	updateOwnVoiceState,
 } from '@/features/server/voice/actions';
 import { isVoiceReconnectOnline } from '@/features/server/voice/reconnect-lab-debug';
-import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
+import { ownMicWantedSelector, ownVoiceSessionPayloadSelector } from '@/features/server/voice/selectors';
 import type { TVoiceSessionExecutorPorts } from '@/features/server/voice/voice-session-command-executor';
 import {
 	dispatchVoiceSession,
@@ -19,6 +20,7 @@ import {
 } from '@/features/server/voice/voice-session-store';
 import { logDebug, logVoice, recordVoiceDiagnostic, reportError } from '@/helpers/browser-logger';
 import { recordDesktopDiagnostic } from '@/helpers/desktop-diagnostics';
+import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { setStreamReconnectAttemptId } from '@/helpers/stream-observability';
 import { traceSpan } from '@/helpers/telemetry/tracing';
 import { getTrpcErrorData } from '@/helpers/trpc-error-data';
@@ -129,7 +131,14 @@ const requestVoiceRestoreOrJoin = async (opts: {
 // timeout and producer-refresh timing. Construction performs no side effects.
 const voiceSessionRuntimeEnvironment = {
 	getServerState: useServerStore.getState,
-	getOwnVoiceState: () => ownVoiceStateSelector(useServerStore.getState()),
+	getOwnVoiceSessionPayload: () => ownVoiceSessionPayloadSelector(useServerStore.getState()),
+	isMicWanted: () => ownMicWantedSelector(useServerStore.getState()),
+	relayOwnVoiceState: () => {
+		void relayOwnVoiceState();
+	},
+	notifyMicrophoneStartFailed: (error: unknown) => {
+		toast.error(getTrpcError(error, 'Failed to start microphone'));
+	},
 	createDevice: () => Device.factory(),
 	requestVoiceRestoreOrJoin,
 	sendOwnVoiceStateUpdate,

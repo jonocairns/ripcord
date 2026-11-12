@@ -61,6 +61,8 @@ type TMicrophonePipelineControllerPorts<
 	onActivityUpdate: (isSpeaking: boolean | undefined, producerId: string | undefined) => void;
 	isInVoiceChannel: () => boolean;
 	isMicMuted: () => boolean;
+	isTransmitGateOpen: () => boolean;
+	onTerminalOutputLoss: () => void;
 	reacquire: (reason: TMicrophoneRecoveryReason) => Promise<TMicrophoneStartOutcome>;
 	onRecoveryExhausted: (reason: TMicrophoneRecoveryReason) => void;
 	onProcessingRuntimeError: (error: Error) => void;
@@ -594,7 +596,7 @@ const createMicrophonePipelineController = <
 			localPublication = ports.publishLocalStream(prepared.outboundStream);
 		}
 
-		const micMuted = ports.isMicMuted();
+		const micMuted = !ports.isTransmitGateOpen();
 		prepared.outboundAudioTrack.enabled = !micMuted;
 		processingPipeline?.setInputMuted(micMuted);
 		log('Obtained audio track', { audioTrack: prepared.outboundAudioTrack });
@@ -617,6 +619,8 @@ const createMicrophonePipelineController = <
 			throw new MicPipelineSupersededError();
 		}
 
+		prepared.outboundAudioTrack.enabled = ports.isTransmitGateOpen();
+		processingPipeline?.setInputMuted(!ports.isTransmitGateOpen());
 		localProducer = producer;
 		syncActivity();
 		log('Microphone audio producer created', { producer });
@@ -638,15 +642,13 @@ const createMicrophonePipelineController = <
 			}
 
 			log('Audio pipeline output track ended, cleaning up microphone');
-			void cleanup();
+			const draining = cleanup();
+			ports.onTerminalOutputLoss();
+			void draining;
 		};
 	};
 
 	const setMuted = (muted: boolean): void => {
-		if (!muted) {
-			resetRawRecoveryBudget();
-		}
-
 		preparedPipeline?.outboundStream.getAudioTracks().forEach((track) => {
 			track.enabled = !muted;
 		});
@@ -680,6 +682,7 @@ const createMicrophonePipelineController = <
 		cleanup,
 		owns,
 		setMuted,
+		resetRawRecoveryBudget,
 		setGainVolume,
 		syncActivity,
 		getRawTrack: (): MediaStreamTrack | undefined => rawMicStream?.getAudioTracks()[0],

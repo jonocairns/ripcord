@@ -21,6 +21,7 @@ import type {
 } from '@/features/server/voice/voice-session-store';
 import type { createMicrophoneIntegration } from '../microphone/microphone-integration';
 import type { TMicrophonePreparedPipeline } from '../microphone/microphone-pipeline-controller';
+import { MicPipelineSupersededError } from '../microphone/microphone-pipeline-controller';
 import type { useTransports } from '../remote-media/use-transports';
 import {
 	claimVoiceSessionExecution,
@@ -87,7 +88,12 @@ type TVoiceSessionRuntimeDependencies = Pick<
 		getLocalAudioStream: () => MediaStream | undefined;
 		getProducerTransport: () => ReturnType<typeof useTransports>['producerTransport']['current'];
 		getConsumerTransport: () => ReturnType<typeof useTransports>['consumerTransport']['current'];
-		getOwnVoiceState: () => TVoiceUserState;
+		getOwnVoiceSessionPayload: () => { micMuted: boolean; soundMuted: boolean };
+		isMicWanted: () => boolean;
+		captureMicOperation: () => number;
+		isMicOperationCurrent: (token: number) => boolean;
+		relayOwnVoiceState: () => void;
+		notifyMicrophoneStartFailed: (error: unknown) => void;
 		getServerState: () => {
 			connected: boolean;
 			setCurrentVoiceChannelId: (id: number | undefined) => void;
@@ -291,7 +297,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 					if (!active || (options.isCurrent && !options.isCurrent())) throw new VoiceSessionExecutionSupersededError();
 				};
 				throwIfSuperseded();
-				const currentOwnVoiceState = getDependencies().getOwnVoiceState();
+				const currentOwnVoiceState = getDependencies().getOwnVoiceSessionPayload();
 				const {
 					routerRtpCapabilities: nextRouterRtpCapabilities,
 					producerTransportParams,
@@ -464,6 +470,18 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 				if (opts?.restoreWatchSnapshot !== undefined) {
 					getDependencies().rehydrateWatchIntentOnly(opts.restoreWatchSnapshot);
 				}
+				let micOperation = getDependencies().captureMicOperation();
+				const commitFailure = (error: unknown) => {
+					if (
+						isCurrent() &&
+						getDependencies().isMicOperationCurrent(micOperation) &&
+						getDependencies().canSpeak() &&
+						!(error instanceof MicPipelineSupersededError)
+					) {
+						getDependencies().microphone.commitTerminalMute();
+						getDependencies().notifyMicrophoneStartFailed(error);
+					}
+				};
 				let micPrepPromise: Promise<TMicrophonePreparedPipeline | undefined> | undefined;
 				const dispatchJoinLifecycle = opts?.preserveLocalMedia !== true && opts?.restoreWatchSnapshot === undefined;
 
@@ -478,7 +496,8 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 					const device = await getDependencies().createDevice();
 					throwIfRecoverySuperseded();
 
-					if (!getDependencies().getOwnVoiceState().micMuted) {
+					if (getDependencies().isMicWanted()) {
+						micOperation = getDependencies().captureMicOperation();
 						// Start mic acquisition + WASM pipeline immediately — these have no
 						// dependency on the mediasoup device or transports and are the slowest
 						// part of startMicStream. Running them concurrently with device.load()
@@ -490,6 +509,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 								// superseded build must not touch the successor's pipeline —
 								// so no shared teardown here.
 								getDependencies().logVoice('Error preparing microphone pipeline', { error });
+								commitFailure(error);
 								return undefined;
 							});
 					}
@@ -517,6 +537,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 					// Mic failures are non-fatal — voice join continues without a mic.
 					if (micPrepResult) {
 						try {
+							micOperation = getDependencies().captureMicOperation();
 							await getDependencies().microphone.publish(micPrepResult, isCurrent);
 						} catch (error) {
 							getDependencies().logVoice('Error attaching microphone to transport', { error });
@@ -524,9 +545,14 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 							// Tear down only while this build's pipeline is still the
 							// installed one — a detached attempt failing late must not
 							// destroy the successor's mic.
-							if (getDependencies().microphone.owns(micPrepResult)) {
+							if (
+								isCurrent() &&
+								getDependencies().isMicOperationCurrent(micOperation) &&
+								getDependencies().microphone.owns(micPrepResult)
+							) {
 								await getDependencies().microphone.cleanup();
 							}
+							commitFailure(error);
 						}
 					}
 					throwIfRecoverySuperseded();
@@ -744,6 +770,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 							channelId: recoveryChannelId,
 							users: recoveryJoinResult.channelUsers,
 						});
+						getDependencies().relayOwnVoiceState();
 
 						await getDependencies().withRecoveryTimeout(
 							Promise.all([
@@ -768,13 +795,14 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 
 					const republishTasks: Promise<void>[] = [];
 
+					const recoveryMicOperation = getDependencies().captureMicOperation();
 					const currentAudioStream = getDependencies().getLocalAudioStream();
 					const currentAudioTrack = currentAudioStream?.getAudioTracks()[0];
 					republishTasks.push(
 						recoverTransportMicrophone(
 							{
 								recoveryJoined: recoveryJoinResult !== undefined,
-								micMuted: getDependencies().getOwnVoiceState().micMuted,
+								micMuted: !getDependencies().isMicWanted(),
 								canSpeak: getDependencies().canSpeak(),
 								hasCurrentStream: currentAudioStream !== undefined,
 								currentTrackLive: currentAudioTrack?.readyState === 'live',
@@ -786,7 +814,14 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 									getDependencies().logVoice('Microphone restart failed during transport recovery; continuing muted', {
 										error,
 									});
-									getDependencies().microphone.commitTerminalMute();
+									if (
+										isCurrentAttempt() &&
+										getDependencies().isMicOperationCurrent(recoveryMicOperation) &&
+										getDependencies().canSpeak()
+									) {
+										getDependencies().microphone.commitTerminalMute();
+										getDependencies().notifyMicrophoneStartFailed(error);
+									}
 								},
 							},
 						).then((result) => {
@@ -926,6 +961,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 				channelId: command.pending.channelId,
 				users: bootstrap.channelUsers,
 			});
+			getDependencies().relayOwnVoiceState();
 			if (!isCurrent()) {
 				throw new VoiceSessionExecutionSupersededError();
 			}

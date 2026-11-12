@@ -1,31 +1,35 @@
-import type { TVoiceUserState } from '@sharkord/shared';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
 import { useServerStore } from '@/features/server/slice';
 import { playSound } from '@/features/server/sounds/actions';
 import { SoundType } from '@/features/server/types';
 import { useOwnUserId } from '@/features/server/users/hooks';
-import { sendOwnVoiceStateUpdate, updateOwnVoiceState } from '@/features/server/voice/actions';
-import { useConfirmedOwnVoiceState, useOwnVoiceState } from '@/features/server/voice/hooks';
-import { updateVoiceReconnectIntentState } from '@/features/server/voice/reconnect-coordinator';
-import { ownVoiceStateSelector } from '@/features/server/voice/selectors';
-import { logVoice } from '@/helpers/browser-logger';
+import {
+	cancelOwnPushHold,
+	sendOwnVoiceStateUpdate,
+	setOwnVoiceIntent,
+	updateOwnVoiceState,
+} from '@/features/server/voice/actions';
+import { useOwnVoiceState } from '@/features/server/voice/hooks';
+import { resolveOwnVoiceState } from '@/features/server/voice/own-voice-state';
+import { ownMicWantedSelector, ownVoiceStateSelector } from '@/features/server/voice/selectors';
 import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import type { TDesktopScreenShareSelection } from '@/runtime/types';
 import type { TMicrophoneStartOutcome } from './microphone/microphone-pipeline-controller';
-import { resolveMicOperationFailurePolicy } from './microphone/push-mic-state';
+import { createOwnMicControls } from './own-mic-controls';
 import { VoiceSessionExecutionSupersededError } from './session-execution-ownership';
 import { settleSupersededScreenShareStart } from './video/screen-share-control-lifecycle';
 import { useScreenShareStage } from './video/use-screen-share-stage';
 import type { TVoiceStateOperations } from './voice-state-operation';
 
 type TUseVoiceControlsParams = {
-	voiceStateOperations: Pick<TVoiceStateOperations, 'begin' | 'isCurrent'>;
+	voiceStateOperations: TVoiceStateOperations;
 	startMicStream: () => Promise<TMicrophoneStartOutcome>;
-	localAudioStream: MediaStream | undefined;
-	setMicProcessingMuted: (micMuted: boolean) => void;
+	hasLiveMicCapture: () => boolean;
+	captureMicSession: () => () => boolean;
+	resetMicRecoveryBudget: () => void;
 
 	startWebcamStream: () => Promise<void>;
 	stopWebcamStream: () => void;
@@ -40,10 +44,6 @@ type TUseVoiceControlsParams = {
 	stopScreenShareStream: () => void;
 	isScreenShareLive: () => boolean;
 	requestScreenShareSelection?: () => Promise<TDesktopScreenShareSelection | null>;
-};
-
-type TSetMicMutedOptions = {
-	playSound?: boolean;
 };
 
 const getScreenShareStartErrorMessage = (
@@ -61,17 +61,12 @@ const getScreenShareStartErrorMessage = (
 	return getTrpcError(error, 'Failed to update screen share state');
 };
 
-const setLocalAudioTrackEnabled = (stream: MediaStream | undefined, micMuted: boolean) => {
-	stream?.getAudioTracks().forEach((track) => {
-		track.enabled = !micMuted;
-	});
-};
-
 const useVoiceControls = ({
 	voiceStateOperations,
 	startMicStream,
-	localAudioStream,
-	setMicProcessingMuted,
+	hasLiveMicCapture,
+	captureMicSession,
+	resetMicRecoveryBudget,
 	startWebcamStream,
 	stopWebcamStream,
 	startScreenShareStream,
@@ -80,14 +75,9 @@ const useVoiceControls = ({
 	requestScreenShareSelection,
 }: TUseVoiceControlsParams) => {
 	const ownVoiceState = useOwnVoiceState();
-	const ownConfirmedVoiceState = useConfirmedOwnVoiceState();
-	const confirmedSoundMuted = ownConfirmedVoiceState?.soundMuted;
-	const confirmedMicMuted = ownConfirmedVoiceState?.micMuted;
 	const ownUserId = useOwnUserId();
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
-	const micMutedBeforeDeafenRef = useRef<boolean | undefined>(undefined);
 	const currentVoiceChannelIdRef = useLatestRef(currentVoiceChannelId);
-	const localAudioStreamRef = useLatestRef(localAudioStream);
 	const pendingShareMutateRef = useRef<Promise<unknown> | undefined>(undefined);
 	const isStartingWebcamRef = useRef(false);
 
@@ -99,189 +89,31 @@ const useVoiceControls = ({
 		restore: restoreScreenShareStage,
 	} = useScreenShareStage({ ownUserId, currentVoiceChannelId });
 
-	useEffect(() => {
-		// Preserve the pre-deafen mic state across reconnects and voice rejoin.
-		// currentVoiceChannelId is cleared during disconnect / auto-rejoin, and
-		// dropping this ref there would make undeafen restore to "still muted".
-		if (!ownVoiceState.soundMuted) {
-			micMutedBeforeDeafenRef.current = undefined;
-		}
-	}, [ownVoiceState.soundMuted]);
-
-	useEffect(() => {
-		if (micMutedBeforeDeafenRef.current === undefined || ownVoiceState.soundMuted !== true) {
-			return;
-		}
-
-		if (confirmedSoundMuted === undefined || confirmedMicMuted === undefined) {
-			return;
-		}
-
-		if (confirmedSoundMuted !== true || confirmedMicMuted !== true) {
-			micMutedBeforeDeafenRef.current = confirmedMicMuted;
-		}
-	}, [confirmedSoundMuted, confirmedMicMuted, ownVoiceState.soundMuted]);
-
-	const applyMicMuted = useCallback(
-		(stream: MediaStream | undefined, micMuted: boolean) => {
-			setLocalAudioTrackEnabled(stream, micMuted);
-			setMicProcessingMuted(micMuted);
-		},
-		[setMicProcessingMuted],
-	);
-
-	const setMicMuted = useCallback(
-		async (newState: boolean, options?: TSetMicMutedOptions) => {
-			// Read mic state directly from the store — updateOwnVoiceState writes
-			// synchronously, but ownVoiceStateRef only updates after React re-renders.
-			// Reading the ref risks a stale guard on rapid press+release cycles.
-			const latestOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
-			const latestCurrentVoiceChannelId = currentVoiceChannelIdRef.current;
-			const latestLocalAudioStream = localAudioStreamRef.current;
-
-			if (newState === latestOwnVoiceState.micMuted) {
-				return;
-			}
-
-			if (latestOwnVoiceState.soundMuted && !newState) {
-				return;
-			}
-
-			const shouldPlaySound = options?.playSound ?? true;
-			const operationToken = voiceStateOperations.begin();
-
-			updateOwnVoiceState({ micMuted: newState });
-			updateVoiceReconnectIntentState({ micMuted: newState });
-
-			if (shouldPlaySound) {
-				playSound(newState ? SoundType.OWN_USER_MUTED_MIC : SoundType.OWN_USER_UNMUTED_MIC);
-			}
-
-			applyMicMuted(latestLocalAudioStream, newState);
-
-			if (!latestCurrentVoiceChannelId) return;
-
-			try {
-				await sendOwnVoiceStateUpdate({
-					micMuted: newState,
-				});
-
-				if (voiceStateOperations.isCurrent(operationToken) && !localAudioStreamRef.current && !newState) {
-					const startOutcome = await startMicStream();
-					if (startOutcome.status === 'failed') {
-						throw startOutcome.error;
-					}
-				}
-			} catch (error) {
-				const failurePolicy = resolveMicOperationFailurePolicy(voiceStateOperations.isCurrent(operationToken));
-				if (!failurePolicy.shouldFailClosed) {
-					return;
-				}
-
-				// Fail closed: whether the server update failed or microphone
-				// acquisition failed after it succeeded, leave the physical mic muted
-				// and resynchronize that safe state to the server. The server flag
-				// drives remote mute indicators and speaking detection, so it must not
-				// read "muted" while the local track is live. This best-effort resync
-				// is superseded by any later user operation, which carries a higher
-				// sequence.
-				updateOwnVoiceState({ micMuted: failurePolicy.micMuted });
-				updateVoiceReconnectIntentState({ micMuted: failurePolicy.micMuted });
-				applyMicMuted(localAudioStreamRef.current, failurePolicy.micMuted);
-				void sendOwnVoiceStateUpdate({ micMuted: failurePolicy.micMuted }).catch((syncError) => {
-					logVoice('Failed to resynchronize safe muted microphone state', {
-						error: syncError,
-					});
-				});
-				toast.error(getTrpcError(error, 'Failed to update microphone state'));
-			}
-		},
-		[applyMicMuted, startMicStream, voiceStateOperations],
-	);
-
-	const toggleSound = useCallback(
-		async (options?: { forceUnmute?: boolean }) => {
-			// Read state directly from the store to avoid stale closure values,
-			// matching the approach used by setMicMuted above.
-			const latestOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
-			const latestCurrentVoiceChannelId = currentVoiceChannelIdRef.current;
-			const latestLocalAudioStream = localAudioStreamRef.current;
-
-			const newState = !latestOwnVoiceState.soundMuted;
-			const previousMicMuted = latestOwnVoiceState.micMuted;
-			const previousSoundMuted = latestOwnVoiceState.soundMuted;
-			const previousMicMutedBeforeDeafen = micMutedBeforeDeafenRef.current;
-			let nextMicMuted = previousMicMuted;
-			const operationToken = voiceStateOperations.begin();
-
-			if (newState) {
-				micMutedBeforeDeafenRef.current = previousMicMuted;
-				nextMicMuted = true;
-			} else if (options?.forceUnmute === true) {
-				nextMicMuted = false;
-				micMutedBeforeDeafenRef.current = undefined;
-			} else if (micMutedBeforeDeafenRef.current !== undefined) {
-				nextMicMuted = micMutedBeforeDeafenRef.current;
-				micMutedBeforeDeafenRef.current = undefined;
-			}
-
-			updateOwnVoiceState({
-				soundMuted: newState,
-				micMuted: nextMicMuted,
-			});
-			updateVoiceReconnectIntentState({ soundMuted: newState, micMuted: nextMicMuted });
-
-			applyMicMuted(latestLocalAudioStream, nextMicMuted);
-
-			playSound(newState ? SoundType.OWN_USER_MUTED_SOUND : SoundType.OWN_USER_UNMUTED_SOUND);
-
-			if (!latestCurrentVoiceChannelId) return;
-
-			try {
-				await sendOwnVoiceStateUpdate({
-					soundMuted: newState,
-					micMuted: nextMicMuted,
-				});
-
-				if (voiceStateOperations.isCurrent(operationToken) && !localAudioStreamRef.current && !nextMicMuted) {
-					const startOutcome = await startMicStream();
-					if (startOutcome.status === 'failed') {
-						throw startOutcome.error;
-					}
-				}
-			} catch (error) {
-				if (!voiceStateOperations.isCurrent(operationToken)) {
-					return;
-				}
-
-				micMutedBeforeDeafenRef.current = previousSoundMuted ? previousMicMutedBeforeDeafen : undefined;
-				updateOwnVoiceState({
-					soundMuted: previousSoundMuted,
-					micMuted: previousMicMuted,
-				} satisfies Partial<TVoiceUserState>);
-				updateVoiceReconnectIntentState({
-					soundMuted: previousSoundMuted,
-					micMuted: previousMicMuted,
-				});
-				applyMicMuted(localAudioStreamRef.current, previousMicMuted);
-				toast.error(getTrpcError(error, 'Failed to update sound state'));
-			}
-		},
-		[applyMicMuted, startMicStream, voiceStateOperations],
-	);
-
-	const toggleMic = useCallback(async () => {
-		const latestOwnVoiceState = ownVoiceStateSelector(useServerStore.getState());
-
-		// Unmuting while deafened lifts the deafen and the mute together instead
-		// of being silently swallowed by setMicMuted's deafen guard.
-		if (latestOwnVoiceState.soundMuted && latestOwnVoiceState.micMuted) {
-			await toggleSound({ forceUnmute: true });
-			return;
-		}
-
-		await setMicMuted(!latestOwnVoiceState.micMuted, { playSound: true });
-	}, [setMicMuted, toggleSound]);
+	const latest = useLatestRef({ startMicStream, hasLiveMicCapture, resetMicRecoveryBudget, captureMicSession });
+	const controlsRef = useRef<ReturnType<typeof createOwnMicControls> | undefined>(undefined);
+	if (!controlsRef.current)
+		controlsRef.current = createOwnMicControls({
+			getIntent: () => useServerStore.getState().ownVoiceIntent,
+			isMicWanted: () => ownMicWantedSelector(useServerStore.getState()),
+			isMicMutedWithoutTest: () => {
+				const state = useServerStore.getState();
+				return resolveOwnVoiceState({ intent: state.ownVoiceIntent, pushHold: state.ownPushHold, micTestActive: false })
+					.micMuted;
+			},
+			setOwnVoiceIntent,
+			cancelPushHold: cancelOwnPushHold,
+			commitMicFailure: voiceStateOperations.commitTerminalMicMuted,
+			getCurrentVoiceChannelId: () => useServerStore.getState().currentVoiceChannelId,
+			hasLiveMicCapture: () => latest.current.hasLiveMicCapture(),
+			captureSession: () => latest.current.captureMicSession(),
+			startMicStream: () => latest.current.startMicStream(),
+			resetMicRecoveryBudget: () => latest.current.resetMicRecoveryBudget(),
+			beginOperation: voiceStateOperations.begin,
+			isOperationCurrent: voiceStateOperations.isCurrent,
+			playSound,
+			showError: (message) => toast.error(message),
+		});
+	const { setMicMuted, toggleMic, toggleSound, ensureMicStarted } = controlsRef.current;
 
 	const toggleWebcam = useCallback(async () => {
 		if (isStartingWebcamRef.current) return;
@@ -466,6 +298,7 @@ const useVoiceControls = ({
 	return {
 		isStartingScreenShare,
 		setMicMuted,
+		ensureMicStarted,
 		toggleMic,
 		toggleSound,
 		toggleWebcam,

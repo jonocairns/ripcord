@@ -446,9 +446,7 @@ test('transport recovery continues listen-only when microphone restart fails', a
 	}
 });
 
-test('a failed user microphone mutation rolls back while reconnect converges on that rollback', async ({
-	browser,
-}, testInfo) => {
+test('a failed mute send keeps the local mute and reconnect restores it', async ({ browser }, testInfo) => {
 	const context = await browser.newContext();
 	await installPcHook(context);
 	await context.addInitScript(() => {
@@ -457,7 +455,8 @@ test('a failed user microphone mutation rolls back while reconnect converges on 
 			if (
 				window.__ripcordE2eFailNextVoiceStateUpdate &&
 				typeof data === 'string' &&
-				data.includes('voice.updateState')
+				data.includes('voice.updateState') &&
+				data.includes('"micMuted":true')
 			) {
 				window.__ripcordE2eFailNextVoiceStateUpdate = false;
 				this.close(4013, 'Injected user microphone state failure');
@@ -481,8 +480,16 @@ test('a failed user microphone mutation rolls back while reconnect converges on 
 		});
 		await page.getByTitle('Mute microphone').click();
 
+		await expect.poll(() => page.evaluate(() => window.__ripcordE2eFailNextVoiceStateUpdate)).toBe(false);
 		await expect(page.getByText('Connected', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
-		await expect(page.getByTitle('Mute microphone')).toBeVisible();
+		await expect(page.getByTitle('Unmute microphone')).toBeVisible({ timeout: 30_000 });
+		const observer = await createPeer(browser, credentialsFor(testInfo, 'observer'));
+		try {
+			await joinVoice(observer.page);
+			await expect.poll(() => getOnlyRemoteMicMuted(observer.page)).toBe(true);
+		} finally {
+			await disposePeer(observer);
+		}
 		expect(await page.evaluate(() => window.__ripcordE2eFailNextVoiceStateUpdate)).toBe(false);
 	} finally {
 		await disposePeer(peer);
