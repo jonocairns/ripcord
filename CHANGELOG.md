@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.2](https://github.com/jonocairns/ripcord/compare/v2.6.1...v2.6.2) (2026-11-12)
+
+
+### Bug Fixes
+
+* keep push-to-mute and push-to-talk from restoring a stale mute state ([#429](https://github.com/jonocairns/ripcord/issues/429)) ([6cfed9c](https://github.com/jonocairns/ripcord/commit/6cfed9c094333817bcf7fd16412e13a3c9f30984))
+
 ## [2.6.1](https://github.com/jonocairns/ripcord/compare/v2.6.0...v2.6.1) (2026-11-11)
 
 
