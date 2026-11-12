@@ -942,3 +942,50 @@ it('a retired processed output callback cannot mute pending successor publicatio
 		dispose();
 	}
 });
+
+it('restarts capture for an unmuted user when SPEAK is revoked and then restored', async () => {
+	const h = createHarness();
+	const dispose = h.mount();
+	expect((await h.integration.start()).status).toBe('started');
+	expect(h.captures).toHaveLength(1);
+	h.integration.syncInputs();
+	h.inputs.canSpeak = false;
+	h.integration.syncInputs();
+	await flush();
+	expect(h.integration.getRawTrack()?.readyState).not.toBe('live');
+	h.inputs.canSpeak = true;
+	h.integration.syncInputs();
+	await flush();
+	expect(h.captures).toHaveLength(2);
+	expect(h.integration.getRawTrack()?.readyState).toBe('live');
+	dispose();
+});
+
+it('starts capture when a listen-only unmuted user is granted SPEAK mid-call', async () => {
+	const h = createHarness();
+	const dispose = h.mount();
+	h.inputs.canSpeak = false;
+	h.integration.syncInputs();
+	await h.integration.start();
+	expect(h.captures).toHaveLength(0);
+	h.inputs.canSpeak = true;
+	h.integration.syncInputs();
+	await flush();
+	expect(h.captures).toHaveLength(1);
+	expect(h.integration.getRawTrack()?.readyState).toBe('live');
+	dispose();
+});
+
+it('does not start capture on a SPEAK grant while muted', async () => {
+	const h = createHarness();
+	const dispose = h.mount();
+	h.state.micMuted = true;
+	h.inputs.canSpeak = false;
+	h.integration.syncInputs();
+	await h.integration.start();
+	h.inputs.canSpeak = true;
+	h.integration.syncInputs();
+	await flush();
+	expect(h.captures).toHaveLength(0);
+	dispose();
+});

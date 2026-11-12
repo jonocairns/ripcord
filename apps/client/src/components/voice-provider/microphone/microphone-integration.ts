@@ -205,6 +205,7 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 		  }
 		| undefined;
 	let running = false;
+	let lastSyncedCanSpeak: boolean | undefined;
 	let dirty = false;
 	type Waiter = { current: () => boolean; publication: boolean; resolve: (outcome: TMicrophoneStartOutcome) => void };
 	const waiters = new Set<Waiter>();
@@ -526,8 +527,12 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 	const syncInputs = (): void => {
 		if (!cleanupSubscriptions) return;
 		controller.syncActivity();
-		if (enabled && (actual || running)) poke();
-		const { currentVoiceChannelId, devices } = ports.getInputs();
+		const { currentVoiceChannelId, devices, canSpeak } = ports.getInputs();
+		// A SPEAK change must re-reconcile even with no capture: a grant (or a
+		// revoke followed by a restore) leaves an unmuted user wanting capture.
+		const speakChanged = lastSyncedCanSpeak !== undefined && canSpeak !== lastSyncedCanSpeak;
+		lastSyncedCanSpeak = canSpeak;
+		if (enabled && (actual || running || speakChanged)) poke();
 		if (defaultInputChannelId === currentVoiceChannelId && selectedMicrophoneId === devices.microphoneId) return;
 		cleanupDefaultInputListener?.();
 		cleanupDefaultInputListener = undefined;
