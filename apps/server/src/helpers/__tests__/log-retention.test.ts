@@ -21,12 +21,15 @@ test('server file retention rotates bounded archives and retains the newest comp
 		const finished = once(logger, 'finish');
 		logger.end();
 		await finished;
-		for (let attempt = 0; attempt < 100; attempt++) {
+		// Rotation writes and prunes asynchronously; on a slow runner the newest record
+		// or the removal of the oldest archive can land after 'finish'. Wait for both.
+		const listLogs = async () => (await fs.readdir(dir)).filter((file) => file.endsWith('.log'));
+		for (let attempt = 0; attempt < 200; attempt++) {
 			const latest = await fs.readFile(path.join(dir, 'app.log'), 'utf8');
-			if (latest.includes('record-29')) break;
+			if (latest.includes('record-29') && (await listLogs()).length === 3) break;
 			await Bun.sleep(10);
 		}
-		const files = (await fs.readdir(dir)).filter((file) => file.endsWith('.log'));
+		const files = await listLogs();
 		expect(files.length).toBe(3);
 		const latest = await fs.readFile(path.join(dir, 'app.log'), 'utf8');
 		expect(latest).toContain('record-29');
