@@ -570,6 +570,19 @@ const createMicrophonePipelineController = <
 				outboundAudioTrack,
 			};
 			preparedPipeline = prepared;
+			// Own terminal output loss before publication can await the transport.
+			// Raw passthrough loss belongs to the separate bounded device recovery path.
+			prepared.outboundAudioTrack.onended = () => {
+				if (!owns(prepared) || prepared.outboundStream === rawMicStream) return;
+				log('Audio pipeline output track ended, cleaning up microphone');
+				const draining = cleanup();
+				ports.onTerminalOutputLoss();
+				void draining;
+			};
+			if (outboundAudioTrack.readyState === 'ended' && outboundStream !== rawMicStream) {
+				prepared.outboundAudioTrack.onended.call(outboundAudioTrack, new Event('ended'));
+				throw new MicPipelineSupersededError();
+			}
 
 			return prepared;
 		} catch (error) {
@@ -641,23 +654,6 @@ const createMicrophonePipelineController = <
 			rawRecoveryStabilityTimer = undefined;
 			rawRecoveryAttempts = 0;
 		}, ports.rawRecoveryStabilityMs ?? DEFAULT_RAW_RECOVERY_STABILITY_MS);
-
-		const publishedProducer = producer;
-		prepared.outboundAudioTrack.onended = () => {
-			if (!owns(prepared) || localProducer !== publishedProducer) {
-				return;
-			}
-
-			// The raw track's device-loss listeners own passthrough capture loss.
-			if (prepared.outboundStream === rawMicStream) {
-				return;
-			}
-
-			log('Audio pipeline output track ended, cleaning up microphone');
-			const draining = cleanup();
-			ports.onTerminalOutputLoss();
-			void draining;
-		};
 	};
 
 	const setMuted = (muted: boolean): void => {

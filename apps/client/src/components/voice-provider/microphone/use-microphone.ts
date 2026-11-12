@@ -91,6 +91,7 @@ const useMicrophone = (inputs: TUseMicrophoneParams) => {
 		void inputs.isConnected;
 		void inputs.ownUserId;
 		void inputs.micMuted;
+		void inputs.canSpeak;
 		integration.syncInputs();
 	}, [
 		integration,
@@ -99,6 +100,7 @@ const useMicrophone = (inputs: TUseMicrophoneParams) => {
 		inputs.isConnected,
 		inputs.ownUserId,
 		inputs.micMuted,
+		inputs.canSpeak,
 	]);
 	return integration;
 };

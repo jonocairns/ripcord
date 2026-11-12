@@ -15,6 +15,7 @@ import {
 	getVoiceSessionState,
 	resetVoiceSessionState,
 } from '@/features/server/voice/voice-session-store';
+import { createHarness as createMicrophoneHarness } from '../../microphone/__tests__/microphone-integration-fixture';
 import type {
 	TMicrophonePreparedPipeline,
 	TMicrophoneStartOutcome,
@@ -979,3 +980,49 @@ it('retries a stale transport-start failure once without committing stale mute o
 	expect(h.ports.microphone.commitTerminalMute).not.toHaveBeenCalled();
 	expect(h.ports.notifyMicrophoneStartFailed).not.toHaveBeenCalled();
 });
+
+for (const restore of [false, true]) {
+	for (const talkHeld of [false, true]) {
+		it(`real capture integration preserves listen-only intent on restore ${restore}, talk held ${talkHeld}`, async () => {
+			const microphone = createMicrophoneHarness();
+			const dispose = microphone.mount();
+			const h = createHarness();
+			h.state.canSpeak = false;
+			microphone.inputs.canSpeak = false;
+			microphone.inputs.currentVoiceChannelId = 5;
+			microphone.state.micMuted = talkHeld;
+			microphone.state.talkHeld = talkHeld;
+			const runtime = createVoiceSessionRuntime(() => ({
+				...h.ports,
+				microphone: microphone.integration,
+				isMicWanted: () => !microphone.state.micMuted || microphone.state.talkHeld,
+				captureMicOperation: () => microphone.state.operation,
+				isMicOperationCurrent: (token) => token === microphone.state.operation,
+			}));
+			const unmount = mountVoiceSessionRuntime(runtime);
+			try {
+				await runtime.init(capabilities, 5, { preserveLocalMedia: restore });
+				expect(microphone.captures).toHaveLength(0);
+				expect(microphone.publications).toHaveLength(0);
+				expect(microphone.state.micMuted).toBe(talkHeld);
+				expect(microphone.state.talkHeld).toBe(talkHeld);
+				expect(microphone.state.terminalMutes).toBe(0);
+				expect(microphone.errors).toEqual([]);
+				expect(h.ports.notifyMicrophoneStartFailed).not.toHaveBeenCalled();
+				h.state.canSpeak = true;
+				microphone.inputs.canSpeak = true;
+				microphone.inputs.currentVoiceChannelId = 6;
+				await runtime.init(capabilities, 6);
+				expect(microphone.integration.getRawTrack()?.readyState).toBe('live');
+				expect(microphone.publications).toHaveLength(1);
+				expect(microphone.state.micMuted).toBe(talkHeld);
+				expect(microphone.state.talkHeld).toBe(talkHeld);
+				expect(microphone.errors).toEqual([]);
+			} finally {
+				unmount();
+				h.unmount();
+				dispose();
+			}
+		});
+	}
+}

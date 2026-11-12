@@ -184,6 +184,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		currentVoiceChannelId,
 		localAudioStream,
 		isConnected,
+		canSpeak: channelCan(ChannelPermission.SPEAK),
 		ownUserId,
 		micMuted: ownVoiceState.micMuted,
 		producerTransport,

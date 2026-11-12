@@ -43,6 +43,7 @@ type TMicrophoneIntegrationInputs = {
 	currentVoiceChannelId: number | undefined;
 	localAudioStream: MediaStream | undefined;
 	isConnected: boolean;
+	canSpeak: boolean;
 	ownUserId: number | undefined;
 };
 
@@ -211,7 +212,8 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 	const preparedOwners = new WeakMap<TMicrophonePreparedPipeline, number>();
 	const getOwnerChannel = () => ownerChannel ?? ports.getInputs().currentVoiceChannelId;
 	const desired = () => ({
-		wanted: enabled && ownerCurrent() && !ports.isMicMuted() && getOwnerChannel() !== undefined,
+		wanted:
+			enabled && ownerCurrent() && ports.getInputs().canSpeak && !ports.isMicMuted() && getOwnerChannel() !== undefined,
 		session: sessionGeneration,
 		channel: getOwnerChannel(),
 		version: settingsVersion,
