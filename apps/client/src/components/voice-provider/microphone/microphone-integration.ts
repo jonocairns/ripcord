@@ -114,6 +114,7 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 					const audioConfig = getAudioOpusConfig(ports.getChannelSettings());
 					return transport.produce({
 						track,
+						stopTracks: false,
 						encodings: [{ maxBitrate: audioConfig.maxBitrate }],
 						codecOptions: audioConfig.codecOptions,
 						appData: { kind: StreamKind.AUDIO },
@@ -267,6 +268,22 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 						if (successor) ownerCurrent = successor.current;
 					}
 					const next = desired();
+					// A restored session may adopt settled capture for the same channel.
+					// Keep generation fences on in-flight work and prepared handles;
+					// only live capture with unchanged settings can cross owners.
+					if (
+						actual &&
+						actual.session !== next.session &&
+						next.retain &&
+						actual.channel === next.channel &&
+						actual.version === next.version &&
+						controller.owns(actual.pipeline) &&
+						controller.getRawTrack()?.readyState === 'live' &&
+						actual.pipeline.outboundAudioTrack.readyState === 'live'
+					) {
+						actual.session = next.session;
+						actual.transport = undefined;
+					}
 					const owner = ownerCurrent;
 					const token = action() === 'idle' ? undefined : ports.beginOperation();
 					const current = () =>

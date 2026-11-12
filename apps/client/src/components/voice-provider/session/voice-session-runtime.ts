@@ -349,13 +349,12 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 			invalidateVoiceSessionExecution(executionOwnership);
 		}
 
-		// When preserving local media (WS-reconnect restore), leave the desktop
-		// app-audio pipeline running so a live screen-share audio track survives
-		// to be republished; tearing it down would end the track.
+		// WS restore keeps microphone and desktop app-audio capture alive for
+		// publication on the replacement transports, including a muted mic.
 		if (opts?.preserveLocalMedia) {
 			getDependencies().shareAudio.detachProducer();
 		}
-		void getDependencies().microphone.cleanup();
+		if (!opts?.preserveLocalMedia) void getDependencies().microphone.cleanup();
 		getDependencies().stopMonitoring();
 		getDependencies().resetStats();
 		getDependencies().clearActivity();
@@ -487,7 +486,10 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 					const device = await getDependencies().createDevice();
 					throwIfRecoverySuperseded();
 
-					if (getDependencies().isMicWanted()) {
+					if (
+						getDependencies().isMicWanted() ||
+						(opts?.preserveLocalMedia && getDependencies().microphone.getRawTrack()?.readyState === 'live')
+					) {
 						// Start mic acquisition + WASM pipeline immediately — these have no
 						// dependency on the mediasoup device or transports and are the slowest
 						// part of startMicStream. Running them concurrently with device.load()
@@ -533,7 +535,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 							// Tear down only while this build's pipeline is still the
 							// installed one — a detached attempt failing late must not
 							// destroy the successor's mic.
-							if (getDependencies().microphone.owns(micPrepResult)) {
+							if (isOwnerCurrent() && getDependencies().microphone.owns(micPrepResult)) {
 								await getDependencies().microphone.cleanup();
 							}
 						}
@@ -601,7 +603,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 					// detaches it) may settle this catch after its successor installed
 					// a new pipeline — destroying it here would kill the live mic.
 					// When the prep itself failed, it already cleaned up after itself.
-					if (preparedMic && getDependencies().microphone.owns(preparedMic)) {
+					if (isOwnerCurrent() && preparedMic && getDependencies().microphone.owns(preparedMic)) {
 						await getDependencies().microphone.cleanup();
 					}
 

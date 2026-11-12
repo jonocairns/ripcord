@@ -162,6 +162,9 @@ const createHarness = () => {
 				const pending = publicationResults.shift();
 				if (pending) return pending;
 				const producer = createProducer(`producer-${producers.length + 1}`);
+				producer.on('@close', () => {
+					if (options.stopTracks !== false) options.track?.stop();
+				});
 				producers.push(producer);
 				return Promise.resolve(producer);
 			},
