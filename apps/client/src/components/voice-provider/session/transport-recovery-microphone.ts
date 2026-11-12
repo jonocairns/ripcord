@@ -22,6 +22,7 @@ type TTransportRecoveryMicrophoneResult =
 type TRecoverTransportMicrophonePorts = {
 	start: (() => Promise<TMicrophoneStartOutcome>) | undefined;
 	publishCurrent: () => Promise<void>;
+	discardCurrent: () => Promise<void>;
 	onStartFailed: (error: unknown) => void;
 };
 
@@ -68,6 +69,7 @@ const recoverTransportMicrophone = async (
 			return 'published-current';
 		} catch (error) {
 			if (error instanceof MicPipelineSupersededError) return 'superseded';
+			await ports.discardCurrent();
 			ports.onStartFailed(error);
 			return 'continued-muted';
 		}

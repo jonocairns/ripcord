@@ -28,7 +28,7 @@ const mountMediaSettingsIntegration = (deps: TMediaSettingsDependencies): (() =>
 		const previous = previousDevices;
 		previousDevices = devices;
 		if (!previous || currentVoiceChannelId === undefined) return;
-		const shouldRestartMic = deps.isMicWanted() && didMicCaptureSettingsChange(previous, devices);
+		const shouldRestartMic = didMicCaptureSettingsChange(previous, devices);
 		const shouldRestartWebcam = webcamEnabled && didWebcamCaptureSettingsChange(previous, devices);
 		if (!shouldRestartMic && !shouldRestartWebcam) return;
 		void (async () => {

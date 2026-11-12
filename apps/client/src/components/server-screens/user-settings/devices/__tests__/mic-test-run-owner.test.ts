@@ -13,12 +13,12 @@ it('does not mask playback for unsupported or rejected acquisition and clears a 
 	const owner = createMicTestRunOwner({ detach: async () => {}, setActive: (active) => flags.push(active) });
 	const unsupported = owner.begin();
 	await unsupported.ready;
-	expect(flags).toEqual([false]);
+	expect(flags).toEqual([]);
 	const rejected = owner.begin();
 	await rejected.ready;
 	rejected.activate();
 	await rejected.fail();
-	expect(flags).toEqual([false, false, true, false]);
+	expect(flags).toEqual([true, false]);
 });
 it('a stop during acquisition prevents stale activation and stale errors or WASM callbacks cannot stop a successor', async () => {
 	let active = false;
@@ -77,6 +77,43 @@ it('detaches before clearing the mask and drains overlapping stops before succes
 	await Promise.all([stopping, otherStop, successor.ready]);
 	successor.activate();
 	expect(active).toBe(true);
-	expect(events.slice(0, 2)).toEqual(['detach', 'active:false']);
+	expect(events.slice(0, 2)).toEqual(['detach', 'active:true']);
 	expect(first.isCurrent()).toBe(false);
+});
+
+it('keeps the mask through replacement and drains pending acquisition', async () => {
+	const flags: boolean[] = [];
+	const owner = createMicTestRunOwner({ detach: async () => {}, setActive: (value) => flags.push(value) });
+	const first = owner.begin();
+	await first.ready;
+	first.activate();
+	const acquisition = deferred();
+	const setup = first.track(acquisition.promise);
+	const second = owner.begin();
+	let ready = false;
+	void second.ready.then(() => {
+		ready = true;
+	});
+	await Promise.resolve();
+	expect(ready).toBe(false);
+	expect(flags).toEqual([true]);
+	acquisition.resolve();
+	await setup;
+	await second.ready;
+	second.activate();
+	expect(flags).toEqual([true, true]);
+	await second.fail();
+	expect(flags).toEqual([true, true, false]);
+});
+it('a rejected teardown does not poison future runs', async () => {
+	let reject = true;
+	const owner = createMicTestRunOwner({
+		detach: async () => {
+			if (reject) throw Error('close');
+		},
+		setActive: () => {},
+	});
+	await expect(owner.begin().ready).rejects.toThrow('close');
+	reject = false;
+	await owner.begin().ready;
 });

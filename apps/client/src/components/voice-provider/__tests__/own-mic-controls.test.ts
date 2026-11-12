@@ -65,7 +65,7 @@ it('starts unmute immediately without any relay dependency, including ended reta
 	const result = h.controls.setMicMuted(false);
 	expect(h.start).toHaveBeenCalledTimes(1);
 	await result;
-	expect(h.reset).toHaveBeenCalledTimes(1);
+	expect(h.reset).toHaveBeenCalledTimes(2);
 });
 it('commits only current failed acquisition and not superseded acquisition', async () => {
 	for (const status of ['failed', 'superseded'] as const) {
@@ -90,6 +90,7 @@ it('shares pending acquisition without adopting its stale failure, then starts c
 	h.starts.push(old.promise);
 	useServerStore.getState().setOwnPushHold({ talk: true, mute: false });
 	const first = h.controls.ensureMicStarted();
+	h.operations.begin();
 	const second = h.controls.ensureMicStarted();
 	expect(h.start).toHaveBeenCalledTimes(1);
 	old.resolve({ status: 'failed', error: new Error('old') });
@@ -129,4 +130,35 @@ it('permits intent changes during testing, blocks them during real deafen, and n
 	useServerStore.getState().setOwnVoiceIntent({ soundMuted: true });
 	await h.controls.setMicMuted(true);
 	expect(useServerStore.getState().ownVoiceIntent.micMuted).toBe(false);
+});
+
+it('explicit mute never opens a held push-mute gate', async () => {
+	for (const talk of [false, true]) {
+		const h = harness();
+		useServerStore.getState().setOwnVoiceIntent({ micMuted: false });
+		useServerStore.getState().setOwnPushHold({ talk, mute: true });
+		const gates: boolean[] = [];
+		const unsubscribe = useServerStore.subscribe((state) => gates.push(ownTransmittingSelector(state)));
+		await h.controls.setMicMuted(true);
+		unsubscribe();
+		expect(gates).not.toContain(true);
+	}
+});
+it('a live ensure leaves operation and recovery budget unchanged', async () => {
+	const h = harness();
+	useServerStore.getState().setOwnVoiceIntent({ micMuted: false });
+	h.setLive(true);
+	const token = h.operations.capture();
+	await h.controls.ensureMicStarted();
+	expect(h.operations.isCurrent(token)).toBe(true);
+	expect(h.reset).not.toHaveBeenCalled();
+});
+
+it('re-evaluates demand once after a superseded start without a waiting caller', async () => {
+	const h = harness();
+	useServerStore.getState().setOwnPushHold({ talk: true, mute: false });
+	h.starts.push(Promise.resolve({ status: 'superseded' }));
+	await h.controls.ensureMicStarted();
+	expect(h.start).toHaveBeenCalledTimes(2);
+	expect(h.error).not.toHaveBeenCalled();
 });

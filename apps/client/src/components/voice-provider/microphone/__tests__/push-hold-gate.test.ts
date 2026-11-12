@@ -117,6 +117,7 @@ it('updates the gate synchronously for overlapping keys without intent writes or
 	h.emit('talk', false);
 	h.release();
 	expect(ownTransmittingSelector(store())).toBe(false);
+	expect(h.apply.mock.calls).toEqual([[false], [true], [false], [true]]);
 	expect(h.writes).not.toHaveBeenCalled();
 	h.cleanup();
 });

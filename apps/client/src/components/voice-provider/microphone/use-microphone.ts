@@ -35,7 +35,6 @@ const useMicrophone = (inputs: TUseMicrophoneParams) => {
 			getInputs: () => inputsRef.current,
 			isMicMuted: () => !ownMicWantedSelector(useServerStore.getState()),
 			isTransmitGateOpen: () => ownTransmittingSelector(useServerStore.getState()),
-			captureOperation: () => inputsRef.current.voiceStateOperations.capture(),
 			beginOperation: () => inputsRef.current.voiceStateOperations.begin(),
 			isOperationCurrent: (token) => inputsRef.current.voiceStateOperations.isCurrent(token),
 			getProducerTransport: () => inputsRef.current.producerTransport.current,

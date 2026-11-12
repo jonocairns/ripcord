@@ -1142,6 +1142,8 @@ describe('own session presentation boundaries', () => {
 		useServerStore.setState({ ownUserId: 42, currentVoiceChannelId: 7 });
 		const before = selectVoiceSessionState((state) => state);
 		setOwnPushHold({ talk: true, mute: false });
+		await relayOwnVoiceState();
+		expect(updateStateMutate.mock.calls.at(-1)?.[0]).toMatchObject({ micMuted: false, soundMuted: false });
 		setOwnPushHold({ talk: false, mute: false });
 		await relayOwnVoiceState();
 		expect(selectVoiceSessionState((state) => state)).toBe(before);

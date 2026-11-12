@@ -249,6 +249,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		startMicStream,
 		captureMicSession: microphone.createSessionLease,
 		hasLiveMicCapture: () => microphone.getRawTrack()?.readyState === 'live',
+		getPendingMicStart: microphone.getPendingStart,
 		resetMicRecoveryBudget: microphone.resetRawRecoveryBudget,
 		startWebcamStream,
 		stopWebcamStream,
@@ -258,14 +259,16 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		isScreenShareLive: screenShare.isLive,
 	});
 
-	usePushMicKeybinds({
-		pushToTalkKeybind: devices.pushToTalkKeybind,
-		pushToMuteKeybind: devices.pushToMuteKeybind,
-		pushReleaseDelayMs: devices.pushReleaseDelayMs,
-		currentVoiceChannelId,
-		canSpeak: channelCan(ChannelPermission.SPEAK),
+	usePushMicKeybinds(
+		{
+			pushToTalkKeybind: devices.pushToTalkKeybind,
+			pushToMuteKeybind: devices.pushToMuteKeybind,
+			pushReleaseDelayMs: devices.pushReleaseDelayMs,
+			currentVoiceChannelId,
+			canSpeak: channelCan(ChannelPermission.SPEAK),
+		},
 		ensureMicStarted,
-	});
+	);
 
 	useEffect(() => {
 		// Reference the dep so the effect re-runs on channel change; the body

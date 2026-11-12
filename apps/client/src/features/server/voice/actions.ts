@@ -79,19 +79,25 @@ const invalidateQueue = () => {
 	queueGeneration += 1;
 	queuedRelay = undefined;
 };
-const unsubscribeStore = useServerStore.subscribe((state, previous) => {
-	if (state.currentVoiceChannelId !== previous.currentVoiceChannelId || state.serverId !== previous.serverId)
-		invalidateQueue();
-});
-const unsubscribeConnection = subscribeServerConnectionState(() => {
-	if (!isTRPCSessionAuthenticated()) invalidateQueue();
-});
+let unsubscribeStore: (() => void) | undefined;
+let unsubscribeConnection: (() => void) | undefined;
+const initializeQueue = () => {
+	if (unsubscribeStore) return;
+	unsubscribeStore = useServerStore.subscribe((state, previous) => {
+		if (state.currentVoiceChannelId !== previous.currentVoiceChannelId || state.serverId !== previous.serverId)
+			invalidateQueue();
+	});
+	unsubscribeConnection = subscribeServerConnectionState(() => {
+		if (!isTRPCSessionAuthenticated()) invalidateQueue();
+	});
+};
 if (import.meta.hot)
 	import.meta.hot.dispose(() => {
-		unsubscribeStore();
-		unsubscribeConnection();
+		unsubscribeStore?.();
+		unsubscribeConnection?.();
 	});
 const captureQueueOwner = () => {
+	initializeQueue();
 	const client = getTRPCClientIfInitialized();
 	const channelId = useServerStore.getState().currentVoiceChannelId;
 	const generation = queueGeneration;

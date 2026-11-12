@@ -5,7 +5,6 @@ type TPushMicKeybindInputs = TDesktopPushKeybindsInput & {
 	currentVoiceChannelId: number | undefined;
 	canSpeak: boolean;
 	pushReleaseDelayMs: number;
-	ensureMicStarted: () => Promise<void>;
 };
 
 type TPushMicKeybindControllerPorts = {
@@ -72,6 +71,7 @@ const createPushMicKeybindController = (ports: TPushMicKeybindControllerPorts) =
 			});
 
 		const applyEvent = (event: TDesktopPushKeybindEvent): void => {
+			if (ports.getHold()[event.kind] === event.active) return;
 			ports.setHold({ ...ports.getHold(), [event.kind]: event.active });
 		};
 

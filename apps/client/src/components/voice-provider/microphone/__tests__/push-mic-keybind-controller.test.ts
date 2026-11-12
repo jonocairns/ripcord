@@ -81,7 +81,6 @@ const createHarness = (options: { micMuted?: boolean; desktop?: boolean } = {}) 
 		micMuted: options.micMuted ?? true,
 		soundMuted: false,
 		pushReleaseDelayMs: 100,
-		ensureMicStarted: async () => {},
 	};
 	const bridge: NonNullable<ReturnType<TPushMicKeybindControllerPorts['getDesktopBridge']>> = {
 		setGlobalPushKeybinds: (keybinds) => {
@@ -177,14 +176,14 @@ describe('push mic keybind controller', () => {
 			expect(h.scheduler.pendingCount()).toBe(0);
 			for (const callback of cancelledCallbacks) callback();
 			h.scheduler.advance(100);
-			expect(h.mutedValues()).toEqual([!baseline, !baseline]);
+			expect(h.mutedValues()).toEqual([!baseline]);
 
 			h.emit(kind, false);
 			// A stale callback must not clear this key's replacement timer.
 			for (const callback of cancelledCallbacks) callback();
 			expect(h.scheduler.pendingCount()).toBe(1);
 			h.scheduler.advance(100);
-			expect(h.mutedValues()).toEqual([!baseline, !baseline, baseline]);
+			expect(h.mutedValues()).toEqual([!baseline, baseline]);
 			cleanup();
 		});
 

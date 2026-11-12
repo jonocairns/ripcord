@@ -28,6 +28,7 @@ type TUseVoiceControlsParams = {
 	voiceStateOperations: TVoiceStateOperations;
 	startMicStream: () => Promise<TMicrophoneStartOutcome>;
 	hasLiveMicCapture: () => boolean;
+	getPendingMicStart: () => Promise<TMicrophoneStartOutcome> | undefined;
 	captureMicSession: () => () => boolean;
 	resetMicRecoveryBudget: () => void;
 
@@ -65,6 +66,7 @@ const useVoiceControls = ({
 	voiceStateOperations,
 	startMicStream,
 	hasLiveMicCapture,
+	getPendingMicStart,
 	captureMicSession,
 	resetMicRecoveryBudget,
 	startWebcamStream,
@@ -89,7 +91,13 @@ const useVoiceControls = ({
 		restore: restoreScreenShareStage,
 	} = useScreenShareStage({ ownUserId, currentVoiceChannelId });
 
-	const latest = useLatestRef({ startMicStream, hasLiveMicCapture, resetMicRecoveryBudget, captureMicSession });
+	const latest = useLatestRef({
+		startMicStream,
+		getPendingMicStart,
+		hasLiveMicCapture,
+		resetMicRecoveryBudget,
+		captureMicSession,
+	});
 	const controlsRef = useRef<ReturnType<typeof createOwnMicControls> | undefined>(undefined);
 	if (!controlsRef.current)
 		controlsRef.current = createOwnMicControls({
@@ -105,6 +113,7 @@ const useVoiceControls = ({
 			commitMicFailure: voiceStateOperations.commitTerminalMicMuted,
 			getCurrentVoiceChannelId: () => useServerStore.getState().currentVoiceChannelId,
 			hasLiveMicCapture: () => latest.current.hasLiveMicCapture(),
+			getPendingMicStart: () => latest.current.getPendingMicStart(),
 			captureSession: () => latest.current.captureMicSession(),
 			startMicStream: () => latest.current.startMicStream(),
 			resetMicRecoveryBudget: () => latest.current.resetMicRecoveryBudget(),

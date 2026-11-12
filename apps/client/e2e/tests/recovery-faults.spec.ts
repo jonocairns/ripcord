@@ -446,7 +446,7 @@ test('transport recovery continues listen-only when microphone restart fails', a
 	}
 });
 
-test('a failed mute send keeps the local mute and reconnect restores it', async ({ browser }, testInfo) => {
+test('a failed mute send fails closed locally and resyncs after reconnect', async ({ browser }, testInfo) => {
 	const context = await browser.newContext();
 	await installPcHook(context);
 	await context.addInitScript(() => {

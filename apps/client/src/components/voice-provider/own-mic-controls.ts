@@ -12,6 +12,7 @@ type TOwnMicControlPorts = {
 	commitMicFailure: () => void;
 	getCurrentVoiceChannelId: () => number | undefined;
 	hasLiveMicCapture: () => boolean;
+	getPendingMicStart?: () => Promise<TMicrophoneStartOutcome> | undefined;
 	captureSession: () => () => boolean;
 	startMicStream: () => Promise<TMicrophoneStartOutcome>;
 	resetMicRecoveryBudget: () => void;
@@ -22,29 +23,32 @@ type TOwnMicControlPorts = {
 };
 const createOwnMicControls = (ports: TOwnMicControlPorts) => {
 	let pending: { promise: Promise<TMicrophoneStartOutcome>; token: number; channel: number } | undefined;
-	const ensureMicStarted = async (): Promise<void> => {
-		const token = ports.beginOperation();
+	const ensureMicStarted = async (retry = true): Promise<void> => {
 		const isSessionCurrent = ports.captureSession();
 		const channel = ports.getCurrentVoiceChannelId();
 		if (channel === undefined || !ports.isMicWanted()) return;
-		if (pending) {
-			const older = pending;
-			await older.promise;
+		const inFlight = pending?.promise ?? ports.getPendingMicStart?.();
+		if (inFlight) {
+			const token = ports.beginOperation();
+			await inFlight;
 			if (
 				ports.isOperationCurrent(token) &&
 				isSessionCurrent() &&
 				ports.getCurrentVoiceChannelId() === channel &&
 				ports.isMicWanted() &&
-				!ports.hasLiveMicCapture()
+				(ports.getPendingMicStart?.() !== undefined || !ports.hasLiveMicCapture())
 			)
-				await ensureMicStarted();
+				await ensureMicStarted(false);
 			return;
 		}
 		if (ports.hasLiveMicCapture()) return;
+		const token = ports.beginOperation();
+		ports.resetMicRecoveryBudget();
 		const attempt = { token, channel, promise: ports.startMicStream() };
 		pending = attempt;
+		let outcome: TMicrophoneStartOutcome;
 		try {
-			const outcome = await attempt.promise;
+			outcome = await attempt.promise;
 			if (
 				outcome.status === 'failed' &&
 				ports.isOperationCurrent(token) &&
@@ -57,12 +61,22 @@ const createOwnMicControls = (ports: TOwnMicControlPorts) => {
 		} finally {
 			if (pending === attempt) pending = undefined;
 		}
+		if (
+			retry &&
+			(outcome.status === 'superseded' || (outcome.status === 'failed' && !ports.isOperationCurrent(token))) &&
+			isSessionCurrent() &&
+			ports.getCurrentVoiceChannelId() === channel &&
+			ports.isMicWanted() &&
+			!ports.hasLiveMicCapture()
+		)
+			await ensureMicStarted(false);
 	};
 	const setMicMuted = async (next: boolean, options?: { playSound?: boolean }) => {
 		const intent = ports.getIntent();
 		if (intent.soundMuted) return;
 		if (next) {
 			ports.beginOperation();
+			ports.setOwnVoiceIntent({ micMuted: true });
 			ports.cancelPushHold();
 		}
 		if (next === intent.micMuted) return;

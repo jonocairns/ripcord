@@ -983,6 +983,7 @@ describe('local transmit gate ownership', () => {
 		h.controller.setMuted(false);
 		await h.controller.recover('ended');
 		expect(h.rawRecoveryExhaustions).toEqual(['ended']);
+		h.setGate(true);
 		h.controller.setMuted(false);
 		await h.controller.recover('ended');
 		expect(h.rawRecoveryExhaustions).toEqual(['ended', 'ended']);
