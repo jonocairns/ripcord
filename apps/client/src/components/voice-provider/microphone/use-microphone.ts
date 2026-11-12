@@ -1,7 +1,8 @@
-import { StreamKind } from '@sharkord/shared';
+import { ChannelPermission, StreamKind } from '@sharkord/shared';
 import type { AppData, Transport } from 'mediasoup-client/types';
 import { type Dispatch, type MutableRefObject, type SetStateAction, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
+import { canUseChannel } from '@/features/server/channels/can-use-channel';
 import { channelByIdSelector } from '@/features/server/channels/selectors';
 import { useServerStore } from '@/features/server/slice';
 import { ownMicWantedSelector, ownTransmittingSelector } from '@/features/server/voice/selectors';
@@ -32,6 +33,7 @@ const useMicrophone = (inputs: TUseMicrophoneParams) => {
 	const integrationRef = useRef<ReturnType<typeof createMicrophoneIntegration> | undefined>(undefined);
 	if (!integrationRef.current) {
 		integrationRef.current = createMicrophoneIntegration({
+			canSpeak: (channel) => canUseChannel(useServerStore.getState(), channel, ChannelPermission.SPEAK),
 			getInputs: () => inputsRef.current,
 			isMicMuted: () => !ownMicWantedSelector(useServerStore.getState()),
 			isTransmitGateOpen: () => ownTransmittingSelector(useServerStore.getState()),

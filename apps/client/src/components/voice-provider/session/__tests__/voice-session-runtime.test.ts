@@ -173,10 +173,7 @@ const createHarness = () => {
 		getConsumerTransport: () => undefined,
 		getOwnVoiceSessionPayload: () => state.own,
 		isMicWanted: () => !state.own.micMuted,
-		captureMicOperation: () => 0,
-		isMicOperationCurrent: (_token: number): boolean => true,
 		relayOwnVoiceState: mock(() => {}),
-		notifyMicrophoneStartFailed: mock((_error: unknown) => {}),
 		getServerState: () => server,
 		createDevice: mock(async () => device.device),
 		requestVoiceRestoreOrJoin: mock(async () => bootstrap),
@@ -923,7 +920,7 @@ describe('voice session runtime composition boundaries', () => {
 		expect(isScreenVideoLive?.()).toBe(false);
 	});
 
-	it('continues rebuild listen-only through the microphone terminal mute when restart fails', async () => {
+	it('continues rebuild listen-only when the reconciler reports restart failure', async () => {
 		const h = createHarness();
 		await h.runtime.init(capabilities, 5);
 		h.ports.createProducerTransport.mockRejectedValueOnce(missingSession);
@@ -933,24 +930,12 @@ describe('voice session runtime composition boundaries', () => {
 		}));
 		await h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext);
 		expect(h.ports.microphone.start).toHaveBeenCalledTimes(1);
-		expect(h.ports.microphone.commitTerminalMute).toHaveBeenCalledTimes(1);
+		expect(h.ports.microphone.commitTerminalMute).not.toHaveBeenCalled();
 		expect(h.ports.startMonitoring).toHaveBeenCalledTimes(2);
 	});
 });
 
 describe('current microphone failure ownership', () => {
-	for (const phase of ['prepare', 'publish'] as const)
-		for (const current of [false, true])
-			it(`${phase} failure commits only the current local operation (${current})`, async () => {
-				const h = createHarness();
-				h.ports.isMicOperationCurrent = () => current;
-				h.ports.microphone[phase].mockRejectedValueOnce(new Error('mic failed'));
-				await h.runtime.init(capabilities, 5);
-				expect(h.ports.microphone.commitTerminalMute).toHaveBeenCalledTimes(current ? 1 : 0);
-				expect(h.ports.notifyMicrophoneStartFailed).toHaveBeenCalledTimes(current ? 1 : 0);
-				expect(h.ports.microphone.start).toHaveBeenCalledTimes(current ? 0 : 1);
-				if (phase === 'publish') expect(h.ports.microphone.cleanup).toHaveBeenCalled();
-			});
 	it('preserves mic choice without SPEAK', async () => {
 		const h = createHarness();
 		h.state.canSpeak = false;
@@ -966,21 +951,6 @@ describe('current microphone failure ownership', () => {
 		expect(h.ports.microphone.prepare).toHaveBeenCalledTimes(1);
 	});
 });
-
-it('retries a stale transport-start failure once without committing stale mute or toast', async () => {
-	const h = createHarness();
-	await h.runtime.init(capabilities, 5);
-	h.ports.createProducerTransport.mockRejectedValueOnce(missingSession);
-	h.ports.microphone.start.mockImplementationOnce(async () => {
-		h.ports.isMicOperationCurrent = () => false;
-		return { status: 'failed', error: Error('stale transport start') };
-	});
-	await h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext);
-	expect(h.ports.microphone.start).toHaveBeenCalledTimes(2);
-	expect(h.ports.microphone.commitTerminalMute).not.toHaveBeenCalled();
-	expect(h.ports.notifyMicrophoneStartFailed).not.toHaveBeenCalled();
-});
-
 for (const restore of [false, true]) {
 	for (const talkHeld of [false, true]) {
 		it(`real capture integration preserves listen-only intent on restore ${restore}, talk held ${talkHeld}`, async () => {
@@ -996,8 +966,6 @@ for (const restore of [false, true]) {
 				...h.ports,
 				microphone: microphone.integration,
 				isMicWanted: () => !microphone.state.micMuted || microphone.state.talkHeld,
-				captureMicOperation: () => microphone.state.operation,
-				isMicOperationCurrent: (token) => token === microphone.state.operation,
 			}));
 			const unmount = mountVoiceSessionRuntime(runtime);
 			try {
@@ -1008,7 +976,6 @@ for (const restore of [false, true]) {
 				expect(microphone.state.talkHeld).toBe(talkHeld);
 				expect(microphone.state.terminalMutes).toBe(0);
 				expect(microphone.errors).toEqual([]);
-				expect(h.ports.notifyMicrophoneStartFailed).not.toHaveBeenCalled();
 				h.state.canSpeak = true;
 				microphone.inputs.canSpeak = true;
 				microphone.inputs.currentVoiceChannelId = 6;

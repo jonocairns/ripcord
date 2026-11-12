@@ -1,5 +1,6 @@
 import { StreamKind, type TPublicChannel } from '@sharkord/shared';
 import type { AppData, Producer, Transport } from 'mediasoup-client/types';
+import { getTrpcError } from '@/helpers/parse-trpc-errors';
 import type { TDeviceSettings } from '@/types';
 import { getAudioOpusConfig } from '../audio-producer-config';
 import {
@@ -50,6 +51,7 @@ type TMicrophoneIntegrationInputs = {
 type TMicrophoneIntegrationPorts = {
 	getInputs: () => TMicrophoneIntegrationInputs;
 	isMicMuted: () => boolean;
+	canSpeak: (channel: number | undefined) => boolean;
 	isTransmitGateOpen: () => boolean;
 	beginOperation: () => number;
 	isOperationCurrent: (token: number) => boolean;
@@ -76,10 +78,6 @@ type TMicrophoneIntegrationPorts = {
 
 const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 	let sessionGeneration = 0;
-	const createSessionLease = () => {
-		const generation = sessionGeneration;
-		return () => sessionGeneration === generation;
-	};
 
 	let activitySequence = 0;
 	let activityBroadcastState: ActivityBroadcastState = { producerId: undefined, hasAnnouncedSpeaking: false };
@@ -211,17 +209,22 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 	const waiters = new Set<Waiter>();
 	const preparedOwners = new WeakMap<TMicrophonePreparedPipeline, number>();
 	const getOwnerChannel = () => ownerChannel ?? ports.getInputs().currentVoiceChannelId;
-	const desired = () => ({
-		wanted:
-			enabled && ownerCurrent() && ports.getInputs().canSpeak && !ports.isMicMuted() && getOwnerChannel() !== undefined,
-		session: sessionGeneration,
-		channel: getOwnerChannel(),
-		version: settingsVersion,
-	});
+	const desired = () => {
+		const channel = getOwnerChannel();
+		const retain = enabled && ownerCurrent() && channel !== undefined && ports.canSpeak(channel);
+		return {
+			retain,
+			wanted: retain && !ports.isMicMuted(),
+			session: sessionGeneration,
+			channel,
+			version: settingsVersion,
+		};
+	};
 	const action = () => {
 		const next = desired();
 		return resolveCaptureAction({
 			wanted: next.wanted,
+			retain: next.retain,
 			present: actual !== undefined,
 			matches:
 				actual !== undefined &&
@@ -241,10 +244,10 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 		for (const waiter of waiters) {
 			let outcome: TMicrophoneStartOutcome | undefined;
 			if (!waiter.current()) outcome = { status: 'superseded' };
-			else if (!desired().wanted) outcome = failure ?? { status: 'superseded' };
 			else if (failure) outcome = failure;
 			else if (actual && action() === 'idle' && (!waiter.publication || actual.transport !== undefined))
 				outcome = { status: 'started' };
+			else if (!desired().wanted && !actual) outcome = { status: 'superseded' };
 			if (outcome) {
 				waiters.delete(waiter);
 				waiter.resolve(outcome);
@@ -271,7 +274,7 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 						next.session === sessionGeneration &&
 						next.channel === desired().channel &&
 						next.version === settingsVersion &&
-						desired().wanted;
+						desired().retain;
 					try {
 						switch (action()) {
 							case 'discard':
@@ -341,8 +344,10 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 							actual = undefined;
 							await controller.cleanup();
 							if (current() && token !== undefined && ports.isOperationCurrent(token)) {
-								if (!recovering) commitTerminalMute();
-								if (!recovering) ports.error('Failed to start microphone');
+								if (!recovering && ports.canSpeak(getOwnerChannel())) {
+									commitTerminalMute();
+									ports.error(getTrpcError(error, 'Failed to start microphone'));
+								}
 								settleWaiters({ status: 'failed', error });
 							} else dirty = true;
 						}
@@ -587,7 +592,6 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 		start,
 		restart,
 		resetRawRecoveryBudget: controller.resetRawRecoveryBudget,
-		createSessionLease,
 		cleanup,
 		setMuted: (muted: boolean) => {
 			controller.setMuted(muted);
@@ -609,14 +613,14 @@ export type { TMicrophoneIntegrationInputs, TMicrophoneIntegrationPorts };
 
 const resolveCaptureAction = (state: {
 	wanted: boolean;
+	retain: boolean;
 	present: boolean;
 	matches: boolean;
 	publicationRequired: boolean;
 	published: boolean;
 }): 'discard' | 'build' | 'publish' | 'idle' => {
-	if (state.present && (!state.wanted || !state.matches)) return 'discard';
-	if (!state.wanted) return 'idle';
-	if (!state.present) return 'build';
+	if (state.present && (!state.retain || !state.matches)) return 'discard';
+	if (!state.present) return state.wanted ? 'build' : 'idle';
 	if (state.publicationRequired && !state.published) return 'publish';
 	return 'idle';
 };

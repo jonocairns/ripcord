@@ -83,7 +83,7 @@ type TPrepareMicrophonePipelineInput = {
 };
 
 type TPublishMicrophonePipelineInput = {
-	source: TMicrophonePreparedPipeline | 'current';
+	source: TMicrophonePreparedPipeline;
 	isCurrent?: () => boolean;
 };
 
@@ -600,13 +600,9 @@ const createMicrophonePipelineController = <
 		}
 	};
 
-	const resolvePublishSource = (source: TMicrophonePreparedPipeline | 'current'): TMicrophonePreparedPipeline => {
-		const prepared = source === 'current' ? preparedPipeline : source;
-		if (!prepared || !owns(prepared)) {
-			throw new MicPipelineSupersededError();
-		}
-
-		return prepared;
+	const resolvePublishSource = (source: TMicrophonePreparedPipeline): TMicrophonePreparedPipeline => {
+		if (!owns(source)) throw new MicPipelineSupersededError();
+		return source;
 	};
 
 	const publish = async ({ source, isCurrent = () => true }: TPublishMicrophonePipelineInput): Promise<void> => {

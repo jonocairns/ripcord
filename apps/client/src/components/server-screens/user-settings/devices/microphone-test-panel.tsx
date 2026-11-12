@@ -4,10 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import {
-	createMicAudioProcessingPipeline,
-	type TMicAudioProcessingPipeline,
-} from '@/components/voice-provider/microphone/mic-audio-processing';
+import { createMicAudioProcessingPipeline } from '@/components/voice-provider/microphone/mic-audio-processing';
 import { setOwnMicTestActive } from '@/features/server/voice/actions';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import { createMicTestResources, runMicTestSetup } from './mic-test-resources';
@@ -98,13 +95,9 @@ const MicrophoneTestPanel = memo(
 		const [wasmDiagnostics, setWasmDiagnostics] = useState<TWasmDenoiseDiagSnapshot | undefined>(undefined);
 		const [recordingError, setRecordingError] = useState<string | undefined>(undefined);
 		const [recordedClipUrl, setRecordedClipUrl] = useState<string | undefined>(undefined);
-		const rawStreamRef = useRef<MediaStream | undefined>(undefined);
 		const outputStreamRef = useRef<MediaStream | undefined>(undefined);
-		const audioContextRef = useRef<AudioContext | undefined>(undefined);
-		const analyserRef = useRef<AnalyserNode | undefined>(undefined);
 		const monitorGainNodeRef = useRef<GainNode | undefined>(undefined);
 		const animationFrameRef = useRef<number | undefined>(undefined);
-		const micAudioPipelineRef = useRef<TMicAudioProcessingPipeline | undefined>(undefined);
 		const mediaRecorderRef = useRef<MediaRecorder | undefined>(undefined);
 		const recordingTimeoutRef = useRef<number | undefined>(undefined);
 		const recordingChunksRef = useRef<BlobPart[]>([]);
@@ -237,11 +230,7 @@ const MicrophoneTestPanel = memo(
 			const recording = stopRecordingClip();
 			if (animationFrameRef.current !== undefined) cancelAnimationFrame(animationFrameRef.current);
 			animationFrameRef.current = undefined;
-			rawStreamRef.current = undefined;
-			micAudioPipelineRef.current = undefined;
-			audioContextRef.current = undefined;
 			outputStreamRef.current = undefined;
-			analyserRef.current = undefined;
 			monitorGainNodeRef.current = undefined;
 			setIsTestingMic(false);
 			setTestPreviewState(undefined);
@@ -297,7 +286,6 @@ const MicrophoneTestPanel = memo(
 								stream.getTracks().forEach((track) => track.stop());
 							},
 							pipeline: (raw) => {
-								rawStreamRef.current = raw;
 								const rawTrack = raw.getAudioTracks()[0];
 								if (!rawTrack) throw new Error('Unable to access microphone track for testing.');
 								return createMicAudioProcessingPipeline({
@@ -313,10 +301,8 @@ const MicrophoneTestPanel = memo(
 							},
 							destroyPipeline: (pipeline) => pipeline?.destroy(),
 							monitor: (raw, pipeline) => {
-								micAudioPipelineRef.current = pipeline;
 								const outputStream = pipeline?.backend === 'browser-wasm' ? pipeline.stream : raw;
 								const audioContext = resources.own(new AudioContextClass(), (context) => context.close());
-								audioContextRef.current = audioContext;
 								const source = audioContext.createMediaStreamSource(outputStream);
 								const analyser = audioContext.createAnalyser();
 								const monitorGainNode = resources.own(audioContext.createGain(), (node) => node.disconnect());
@@ -328,7 +314,6 @@ const MicrophoneTestPanel = memo(
 								monitorGainNode.connect(audioContext.destination);
 								monitorGainNodeRef.current = monitorGainNode;
 								outputStreamRef.current = outputStream;
-								analyserRef.current = analyser;
 								return {
 									audioContext,
 									analyser,

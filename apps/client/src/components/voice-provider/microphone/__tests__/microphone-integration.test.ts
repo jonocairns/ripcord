@@ -70,7 +70,7 @@ describe('microphone integration', () => {
 		expect(h.captures).toHaveLength(2);
 		capture.reject(new Error('capture unavailable'));
 		await flush();
-		expect(h.errors).toEqual(['Failed to start microphone']);
+		expect(h.errors).toEqual(['capture unavailable']);
 		h.state.micMuted = false;
 		expect(await h.integration.start()).toEqual({ status: 'started' });
 		h.volumeChange(100);
@@ -148,9 +148,11 @@ describe('microphone integration', () => {
 		h.newTransport();
 		h.state.channelSettings = { voiceBitrate: 48_000, voiceDtx: true };
 		h.state.micMuted = true;
-		await expect(h.integration.publish(prepared)).rejects.toBeInstanceOf(MicPipelineSupersededError);
-		expect(prepared.outboundAudioTrack.readyState).toBe('ended');
-		expect(h.publications).toHaveLength(0);
+		await h.integration.publish(prepared);
+		expect(prepared.outboundAudioTrack.readyState).toBe('live');
+		expect(prepared.outboundAudioTrack.enabled).toBe(false);
+		expect(h.publications).toHaveLength(1);
+		expect(h.publications[0]?.options.encodings).toEqual([{ maxBitrate: 48_000 }]);
 		cleanup();
 	});
 	for (const boundary of ['cleanup', 'replacement'] as const) {
@@ -344,7 +346,7 @@ describe('microphone integration', () => {
 		h.integration.commitTerminalMute();
 		expect(h.terminalCommitTrackStates).toEqual([false]);
 		expect(h.state.terminalMutes).toBe(1);
-		expect(track?.readyState).toBe('ended');
+		expect(track?.readyState).toBe('live');
 		cleanup();
 	});
 	for (const boundary of ['cleanup', 'replacement', 'selection', 'channel'] as const) {
@@ -386,7 +388,7 @@ describe('capture restart policy', () => {
 			h.captureResults.push(Promise.reject(new Error('settings acquisition')));
 			expect((await h.integration.restart()).status).toBe('failed');
 			expect(h.state.terminalMutes).toBe(1);
-			expect(h.errors).toEqual(['Failed to start microphone']);
+			expect(h.errors).toEqual(['settings acquisition']);
 			cleanup();
 		});
 	it('skips settings and volume restarts when capture is not wanted', async () => {
@@ -432,11 +434,9 @@ it('retires a pending capture restart across same-channel session cleanup and re
 	h.captureResults.push(pending.promise);
 	const old = h.integration.restart();
 	await flush();
-	const lease = h.integration.createSessionLease();
 	await h.integration.cleanup();
 	pending.reject(new Error('retired session'));
 	expect((await old).status).toBe('superseded');
-	expect(lease()).toBe(false);
 	expect(h.state.terminalMutes).toBe(0);
 	expect(h.errors).toEqual([]);
 	dispose();
@@ -469,18 +469,12 @@ describe('shared capture boundary', () => {
 				isMicMutedWithoutTest: () => h.state.micMuted,
 				setOwnVoiceIntent: () => {},
 				cancelPushHold: () => {},
-				commitMicFailure: () => {
-					h.state.terminalMutes += 1;
-				},
 				getCurrentVoiceChannelId: () => h.inputs.currentVoiceChannelId,
 				hasLiveMicCapture: () => h.integration.getRawTrack()?.readyState === 'live',
-				captureSession: h.integration.createSessionLease,
 				startMicStream: h.integration.start,
 				resetMicRecoveryBudget: h.integration.resetRawRecoveryBudget,
 				beginOperation: () => ++h.state.operation,
-				isOperationCurrent: (token) => token === h.state.operation,
 				playSound: () => {},
-				showError: (message) => h.errors.push(message),
 			});
 			h.state.operation += 1;
 			const ensure = controls.ensureMicStarted().then(() => {
@@ -637,6 +631,7 @@ it('exhaustively resolves desired and actual capture states', () => {
 		expect(
 			resolveCaptureAction({
 				wanted: Boolean(bits & 16),
+				retain: Boolean(bits & 16),
 				present: Boolean(bits & 8),
 				matches: Boolean(bits & 4),
 				publicationRequired: Boolean(bits & 2),
@@ -782,16 +777,12 @@ for (const retirement of ['same-channel cleanup', 'deactivate/reactivate'] as co
 					if (intent.micMuted !== undefined) h.state.micMuted = intent.micMuted;
 				},
 				cancelPushHold: () => {},
-				commitMicFailure: h.integration.commitTerminalMute,
 				getCurrentVoiceChannelId: () => h.inputs.currentVoiceChannelId,
 				hasLiveMicCapture: () => h.integration.getRawTrack()?.readyState === 'live',
-				captureSession: h.integration.createSessionLease,
 				startMicStream: h.integration.start,
 				resetMicRecoveryBudget: h.integration.resetRawRecoveryBudget,
 				beginOperation: () => ++h.state.operation,
-				isOperationCurrent: (token) => token === h.state.operation,
 				playSound: () => {},
-				showError: (error) => h.errors.push(error),
 			});
 			let ensured = false;
 			const ensure = controls.ensureMicStarted().then(() => {

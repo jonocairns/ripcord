@@ -971,7 +971,7 @@ describe('local transmit gate ownership', () => {
 		await publishing;
 		expect(prepared.outboundAudioTrack.enabled).toBe(false);
 		expect(processing.mutedValues.at(-1)).toBe(true);
-		await h.controller.publish({ source: 'current' });
+		await h.controller.publish({ source: prepared });
 		expect(prepared.outboundAudioTrack.enabled).toBe(false);
 	});
 	it('recovers raw loss with closed gate and never resets retries on gate opening', async () => {

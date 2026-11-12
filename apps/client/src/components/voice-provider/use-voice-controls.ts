@@ -28,7 +28,6 @@ type TUseVoiceControlsParams = {
 	voiceStateOperations: TVoiceStateOperations;
 	startMicStream: () => Promise<TMicrophoneStartOutcome>;
 	hasLiveMicCapture: () => boolean;
-	captureMicSession: () => () => boolean;
 	resetMicRecoveryBudget: () => void;
 
 	startWebcamStream: () => Promise<void>;
@@ -65,7 +64,6 @@ const useVoiceControls = ({
 	voiceStateOperations,
 	startMicStream,
 	hasLiveMicCapture,
-	captureMicSession,
 	resetMicRecoveryBudget,
 	startWebcamStream,
 	stopWebcamStream,
@@ -93,7 +91,6 @@ const useVoiceControls = ({
 		startMicStream,
 		hasLiveMicCapture,
 		resetMicRecoveryBudget,
-		captureMicSession,
 	});
 	const controlsRef = useRef<ReturnType<typeof createOwnMicControls> | undefined>(undefined);
 	if (!controlsRef.current)
@@ -107,16 +104,12 @@ const useVoiceControls = ({
 			},
 			setOwnVoiceIntent,
 			cancelPushHold: cancelOwnPushHold,
-			commitMicFailure: voiceStateOperations.commitTerminalMicMuted,
 			getCurrentVoiceChannelId: () => useServerStore.getState().currentVoiceChannelId,
 			hasLiveMicCapture: () => latest.current.hasLiveMicCapture(),
-			captureSession: () => latest.current.captureMicSession(),
 			startMicStream: () => latest.current.startMicStream(),
 			resetMicRecoveryBudget: () => latest.current.resetMicRecoveryBudget(),
 			beginOperation: voiceStateOperations.begin,
-			isOperationCurrent: voiceStateOperations.isCurrent,
 			playSound,
-			showError: (message) => toast.error(message),
 		});
 	const { setMicMuted, toggleMic, toggleSound, ensureMicStarted } = controlsRef.current;
 

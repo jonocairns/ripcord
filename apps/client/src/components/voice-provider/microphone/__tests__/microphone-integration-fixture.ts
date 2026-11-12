@@ -186,6 +186,7 @@ const createHarness = () => {
 	}) as unknown as MediaDevices;
 	const integration = createMicrophoneIntegration({
 		getInputs: () => inputs,
+		canSpeak: () => inputs.canSpeak,
 		isMicMuted: () => state.micMuted && !state.talkHeld,
 		isTransmitGateOpen: () => state.gateOpen && (!state.micMuted || state.talkHeld),
 		beginOperation: () => (state.operation += 1),

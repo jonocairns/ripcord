@@ -21,7 +21,6 @@ const harness = () => {
 	const operations = createVoiceStateOperations({ setOwnVoiceIntent: setIntent, cancelPushHold: cancel });
 	const starts: Promise<TMicrophoneStartOutcome>[] = [];
 	const start = mock(() => starts.shift() ?? Promise.resolve<TMicrophoneStartOutcome>({ status: 'started' }));
-	const error = mock((_message: string) => {});
 	const reset = mock(() => {});
 	const controls = createOwnMicControls({
 		getIntent: () => store().ownVoiceIntent,
@@ -31,22 +30,17 @@ const harness = () => {
 				.micMuted,
 		setOwnVoiceIntent: setIntent,
 		cancelPushHold: cancel,
-		commitMicFailure: operations.commitTerminalMicMuted,
 		getCurrentVoiceChannelId: () => store().currentVoiceChannelId,
-		captureSession: () => () => true,
 		hasLiveMicCapture: () => live,
 		startMicStream: start,
 		resetMicRecoveryBudget: reset,
 		beginOperation: operations.begin,
-		isOperationCurrent: operations.isCurrent,
 		playSound: () => {},
-		showError: error,
 	});
 	return {
 		controls,
 		starts,
 		start,
-		error,
 		reset,
 		cancel,
 		setIntent,
@@ -67,23 +61,6 @@ it('starts unmute immediately without any relay dependency, including ended reta
 	await result;
 	expect(h.reset).toHaveBeenCalledTimes(1);
 });
-it('commits only current failed acquisition and not superseded acquisition', async () => {
-	for (const status of ['failed', 'superseded'] as const) {
-		const h = harness();
-		h.starts.push(Promise.resolve(status === 'failed' ? { status, error: new Error('capture') } : { status }));
-		await h.controls.ensureMicStarted();
-		expect(h.error).not.toHaveBeenCalled();
-		useServerStore.getState().setOwnPushHold({ talk: true, mute: false });
-		await h.controls.ensureMicStarted();
-	}
-	const h = harness();
-	h.starts.push(Promise.resolve({ status: 'failed', error: new Error('capture') }));
-	useServerStore.getState().setOwnPushHold({ talk: true, mute: false });
-	await h.controls.ensureMicStarted();
-	expect(h.error).toHaveBeenCalledTimes(1);
-	expect(ownTransmittingSelector(useServerStore.getState())).toBe(false);
-	expect(useServerStore.getState().ownPushHold.talk).toBe(false);
-});
 it('lets each caller await reconciliation without adopting a stale failure', async () => {
 	const h = harness();
 	const old = deferred<TMicrophoneStartOutcome>();
@@ -95,7 +72,6 @@ it('lets each caller await reconciliation without adopting a stale failure', asy
 	expect(h.start).toHaveBeenCalledTimes(2);
 	old.resolve({ status: 'failed', error: new Error('old') });
 	await Promise.all([first, second]);
-	expect(h.error).not.toHaveBeenCalled();
 	expect(h.start).toHaveBeenCalledTimes(2);
 	expect(useServerStore.getState().ownPushHold.talk).toBe(true);
 });
@@ -160,5 +136,4 @@ it('leaves superseded capture demand to the reconciler', async () => {
 	h.starts.push(Promise.resolve({ status: 'superseded' }));
 	await h.controls.ensureMicStarted();
 	expect(h.start).toHaveBeenCalledTimes(1);
-	expect(h.error).not.toHaveBeenCalled();
 });

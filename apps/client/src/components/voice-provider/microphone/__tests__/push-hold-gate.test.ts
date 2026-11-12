@@ -22,7 +22,6 @@ const harness = () => {
 	});
 	const results: Promise<TMicrophoneStartOutcome>[] = [];
 	const start = mock(() => results.shift() ?? Promise.resolve<TMicrophoneStartOutcome>({ status: 'started' }));
-	const error = mock((_message: string) => {});
 	const reset = mock(() => {});
 	let live = false;
 	const apply = mock((_muted: boolean) => {});
@@ -34,16 +33,12 @@ const harness = () => {
 				.micMuted,
 		setOwnVoiceIntent: writes,
 		cancelPushHold: () => store().setOwnPushHold({ talk: false, mute: false }),
-		commitMicFailure: operations.commitTerminalMicMuted,
 		getCurrentVoiceChannelId: () => store().currentVoiceChannelId,
-		captureSession: () => () => true,
 		hasLiveMicCapture: () => live,
 		startMicStream: start,
 		resetMicRecoveryBudget: reset,
 		beginOperation: operations.begin,
-		isOperationCurrent: operations.isCurrent,
 		playSound: () => {},
-		showError: error,
 	});
 	let emit: (event: TDesktopPushKeybindEvent) => void = () => {};
 	const timers = new Map<number, () => void>();
@@ -97,7 +92,6 @@ const harness = () => {
 		writes,
 		results,
 		start,
-		error,
 		apply,
 		emit: (kind: 'talk' | 'mute', active: boolean) => emit({ kind, active }),
 		release: () => {
@@ -128,23 +122,6 @@ it('updates the gate synchronously for overlapping keys without intent writes or
 	expect(ownTransmittingSelector(store())).toBe(false);
 	expect(h.apply.mock.calls).toEqual([[false], [true], [false], [true]]);
 	expect(h.writes).not.toHaveBeenCalled();
-	h.cleanup();
-});
-it('failed first talk cancels the hold; repeats cannot rearm, but release and re-press inside the delay can', async () => {
-	const h = harness();
-	h.results.push(Promise.resolve({ status: 'failed', error: new Error('capture') }));
-	h.emit('talk', true);
-	await flush();
-	expect(h.error).toHaveBeenCalledTimes(1);
-	expect(ownTransmittingSelector(store())).toBe(false);
-	h.emit('talk', true);
-	await flush();
-	expect(h.start).toHaveBeenCalledTimes(1);
-	h.emit('talk', false);
-	h.emit('talk', true);
-	await flush();
-	expect(h.start).toHaveBeenCalledTimes(2);
-	expect(ownTransmittingSelector(store())).toBe(true);
 	h.cleanup();
 });
 for (const failure of ['terminal output loss', 'recovery exhaustion'])
@@ -197,7 +174,6 @@ it('an old start failure cannot cancel a fresh press and current capture is atte
 	h.emit('talk', true);
 	resolve({ status: 'failed', error: new Error('old') });
 	await flush();
-	expect(h.error).not.toHaveBeenCalled();
 	expect(store().ownPushHold.talk).toBe(true);
 	expect(h.start).toHaveBeenCalledTimes(2);
 	h.cleanup();
@@ -221,5 +197,22 @@ it('fresh talk from absent resets recovery once, repeats and live key events pre
 	h.release();
 	h.emit('talk', true);
 	expect(h.reset).toHaveBeenCalledTimes(1);
+	h.cleanup();
+});
+
+it('terminal mute prevents repeats from rearming but a release and fresh press inside the delay rearms', async () => {
+	const h = harness();
+	h.emit('talk', true);
+	h.operations.commitTerminalMicMuted();
+	await flush();
+	expect(ownTransmittingSelector(store())).toBe(false);
+	h.emit('talk', true);
+	await flush();
+	expect(h.start).toHaveBeenCalledTimes(1);
+	h.emit('talk', false);
+	h.emit('talk', true);
+	await flush();
+	expect(h.start).toHaveBeenCalledTimes(2);
+	expect(ownTransmittingSelector(store())).toBe(true);
 	h.cleanup();
 });

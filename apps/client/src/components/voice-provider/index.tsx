@@ -206,7 +206,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	});
 
 	const runtime = useVoiceSessionRuntime({
-		voiceStateOperations,
 		currentVoiceChannelId,
 		isConnected,
 		voiceSessionReconnectNonce,
@@ -248,7 +247,6 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	} = useVoiceControls({
 		voiceStateOperations,
 		startMicStream,
-		captureMicSession: microphone.createSessionLease,
 		hasLiveMicCapture: () => microphone.getRawTrack()?.readyState === 'live',
 		resetMicRecoveryBudget: microphone.resetRawRecoveryBudget,
 		startWebcamStream,
