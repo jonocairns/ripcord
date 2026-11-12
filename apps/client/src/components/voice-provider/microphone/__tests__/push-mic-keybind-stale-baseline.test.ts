@@ -83,10 +83,10 @@ describe('push mic keybinds read live voice state, not the committed copy', () =
 			h.press('mute');
 			expect(h.store.micMuted).toBe(true);
 			h.release('mute');
-			// ★ On main the second press captured the stale "muted" as its baseline, so this is true.
+			// ★ Before this fix the second press captured the stale "muted" as its baseline, so this was true.
 			expect(h.store.micMuted).toBe(false);
 
-			// Without another voice-state change, later taps on main keep the wrong baseline.
+			// Without another voice-state change, later taps before this fix kept the wrong baseline.
 			h.commit();
 			h.press('mute');
 			h.commit();
@@ -105,7 +105,7 @@ describe('push mic keybinds read live voice state, not the committed copy', () =
 			h.press('talk');
 			expect(h.store.micMuted).toBe(false);
 			h.release('talk');
-			// ★ On main the stale "unmuted" baseline leaves the mic open after the key is released.
+			// ★ Before this fix the stale "unmuted" baseline left the mic open after the key is released.
 			expect(h.store.micMuted).toBe(true);
 		});
 	}
@@ -117,7 +117,7 @@ describe('push mic keybinds read live voice state, not the committed copy', () =
 		h.press('mute');
 		expect(h.store.micMuted).toBe(true);
 		h.release('mute');
-		// ★ On main the baseline is the stale "muted" from before the click.
+		// ★ Before this fix the baseline was the stale "muted" from before the click.
 		expect(h.store.micMuted).toBe(false);
 	});
 
@@ -126,7 +126,7 @@ describe('push mic keybinds read live voice state, not the committed copy', () =
 		// The deafen button writes the store directly; this user was muted before deafening.
 		h.store.soundMuted = false;
 		h.press('talk');
-		// ★ On main the stale "deafened" forces the target to muted, so the held key does nothing.
+		// ★ Before this fix the stale "deafened" forced the target to muted, so the held key did nothing.
 		expect(h.store.micMuted).toBe(false);
 		h.release('talk');
 		expect(h.store.micMuted).toBe(true);
@@ -138,7 +138,7 @@ describe('push mic keybinds read live voice state, not the committed copy', () =
 		h.store.micMuted = true;
 		h.press('talk');
 		h.release('talk');
-		// On main this is [false, false]; only the deafen guard inside setMicMuted stops it.
+		// Before this fix this was [false, false]; only the deafen guard inside setMicMuted stops it.
 		expect(h.requested).toEqual([true, true]);
 		expect(h.store.micMuted).toBe(true);
 	});
