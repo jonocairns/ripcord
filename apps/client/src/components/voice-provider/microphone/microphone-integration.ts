@@ -528,11 +528,11 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 		if (!cleanupSubscriptions) return;
 		controller.syncActivity();
 		const { currentVoiceChannelId, devices, canSpeak } = ports.getInputs();
-		// A SPEAK change must re-reconcile even with no capture: a grant (or a
-		// revoke followed by a restore) leaves an unmuted user wanting capture.
+		// A SPEAK revoke discards capture; when SPEAK returns to a session that was
+		// publishing, re-reconcile even with no capture so the unmuted user is heard.
 		const speakChanged = lastSyncedCanSpeak !== undefined && canSpeak !== lastSyncedCanSpeak;
 		lastSyncedCanSpeak = canSpeak;
-		if (enabled && (actual || running || speakChanged)) poke();
+		if (enabled && (actual || running || (speakChanged && publicationRequired))) poke();
 		if (defaultInputChannelId === currentVoiceChannelId && selectedMicrophoneId === devices.microphoneId) return;
 		cleanupDefaultInputListener?.();
 		cleanupDefaultInputListener = undefined;

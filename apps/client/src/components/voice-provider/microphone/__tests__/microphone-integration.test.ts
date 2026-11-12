@@ -943,11 +943,13 @@ it('a retired processed output callback cannot mute pending successor publicatio
 	}
 });
 
-it('restarts capture for an unmuted user when SPEAK is revoked and then restored', async () => {
+it('restarts and republishes capture for an unmuted user when SPEAK is revoked and then restored', async () => {
 	const h = createHarness();
 	const dispose = h.mount();
 	expect((await h.integration.start()).status).toBe('started');
 	expect(h.captures).toHaveLength(1);
+	const publishedBefore = h.publications.length;
+	expect(publishedBefore).toBeGreaterThan(0);
 	h.integration.syncInputs();
 	h.inputs.canSpeak = false;
 	h.integration.syncInputs();
@@ -958,31 +960,33 @@ it('restarts capture for an unmuted user when SPEAK is revoked and then restored
 	await flush();
 	expect(h.captures).toHaveLength(2);
 	expect(h.integration.getRawTrack()?.readyState).toBe('live');
+	expect(h.publications.length).toBe(publishedBefore + 1);
 	dispose();
 });
 
-it('starts capture when a listen-only unmuted user is granted SPEAK mid-call', async () => {
+it('does not open an unpublished capture when a listen-only join is granted SPEAK', async () => {
 	const h = createHarness();
-	const dispose = h.mount();
 	h.inputs.canSpeak = false;
+	const dispose = h.mount();
 	h.integration.syncInputs();
-	await h.integration.start();
-	expect(h.captures).toHaveLength(0);
+	await expect(h.integration.prepare(() => true, 1)).rejects.toBeInstanceOf(MicPipelineSupersededError);
 	h.inputs.canSpeak = true;
 	h.integration.syncInputs();
 	await flush();
-	expect(h.captures).toHaveLength(1);
-	expect(h.integration.getRawTrack()?.readyState).toBe('live');
+	expect(h.captures).toHaveLength(0);
+	expect(h.publications).toHaveLength(0);
 	dispose();
 });
 
-it('does not start capture on a SPEAK grant while muted', async () => {
+it('does not start capture on a SPEAK change while muted', async () => {
 	const h = createHarness();
 	const dispose = h.mount();
 	h.state.micMuted = true;
+	await h.integration.start();
+	h.integration.syncInputs();
 	h.inputs.canSpeak = false;
 	h.integration.syncInputs();
-	await h.integration.start();
+	await flush();
 	h.inputs.canSpeak = true;
 	h.integration.syncInputs();
 	await flush();
