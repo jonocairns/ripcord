@@ -7,19 +7,34 @@ type TScalableSendParameters = RTCRtpSendParameters & {
 
 // Mirrors Chromium: getParameters echoes the scalabilityMode requested at
 // publish time, while setParameters validates it against the negotiated codec.
+// Each getParameters issues a fresh transactionId, and setParameters rejects
+// with InvalidStateError unless it is passed the latest unused one.
 const createSender = (supportedModes: readonly string[], scalabilityMode = 'L1T3') => {
 	let current: TScalableSendParameters = {
-		transactionId: 'tx',
+		transactionId: 'tx-0',
 		encodings: [{ scalabilityMode }],
 		codecs: [],
 		headerExtensions: [],
 		rtcp: {},
 	};
+	let reads = 0;
+	let pendingTransactionId: string | undefined;
 	const writes: RTCRtpSendParameters[] = [];
 	const sender = {
-		getParameters: () => structuredClone(current),
+		getParameters: () => {
+			reads += 1;
+			pendingTransactionId = `tx-${reads}`;
+			return structuredClone({ ...current, transactionId: pendingTransactionId });
+		},
 		setParameters: async (params: TScalableSendParameters) => {
 			writes.push(structuredClone(params));
+			const expectedTransactionId = pendingTransactionId;
+			pendingTransactionId = undefined;
+
+			if (params.transactionId !== expectedTransactionId) {
+				throw new DOMException('Failed to set parameters since the transaction_id', 'InvalidStateError');
+			}
+
 			for (const encoding of params.encodings) {
 				if (encoding.scalabilityMode && !supportedModes.includes(encoding.scalabilityMode)) {
 					throw new DOMException(
@@ -73,6 +88,24 @@ describe('updateVideoSenderParameters', () => {
 		expect(result.scalabilityModeFallback).toBe(false);
 		expect(writes).toHaveLength(3);
 		expect(getCurrent().degradationPreference).toBe('maintain-resolution');
+	});
+
+	it('re-reads the parameters for the retry instead of reusing the rejected ones', async () => {
+		const { sender, writes } = createSender(['L1T1']);
+
+		await updateVideoSenderParameters(sender, setBalanced);
+
+		expect(writes.map((write) => write.transactionId)).toEqual(['tx-1', 'tx-2']);
+	});
+
+	it('rethrows when the L1T1 retry is also rejected', async () => {
+		const { sender, writes, getCurrent } = createSender([]);
+
+		await expect(updateVideoSenderParameters(sender, setBalanced)).rejects.toMatchObject({
+			name: 'InvalidModificationError',
+		});
+		expect(writes).toHaveLength(2);
+		expect(getCurrent().encodings[0]?.scalabilityMode).toBe('L1T3');
 	});
 
 	it('skips the write when the update reports nothing to change', async () => {

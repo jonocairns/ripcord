@@ -2,7 +2,7 @@ import type { RtpCapabilities, RtpCodecCapability } from 'mediasoup-client/types
 import { logVoice } from '@/helpers/browser-logger';
 import { VideoCodecPreference } from '@/types';
 import { getVideoBitratePolicy, type TVideoBitrateCodec, type TVideoBitratePolicy } from './video-bitrate-policy';
-import { updateVideoSenderParameters } from './video-sender-parameters';
+import { SCALABILITY_MODE_FALLBACK_LOG, updateVideoSenderParameters } from './video-sender-parameters';
 
 const VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE: Record<string, string> = {
 	[VideoCodecPreference.VP8]: 'video/VP8',
@@ -140,7 +140,7 @@ const applyVideoDegradationPreference = async (sender: RTCRtpSender | undefined,
 		});
 
 		if (scalabilityModeFallback) {
-			logVoice('Video sender scalability mode fell back to L1T1', { label });
+			logVoice(SCALABILITY_MODE_FALLBACK_LOG, { label });
 		}
 	} catch (error) {
 		logVoice('Failed to set degradationPreference', { label, error });

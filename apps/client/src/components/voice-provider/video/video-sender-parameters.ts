@@ -1,3 +1,5 @@
+import type { TVoiceDiagnosticMessage } from '@/helpers/voice-diagnostic-events';
+
 // Chromium validates every setParameters() call against the codec that was
 // actually negotiated, while getParameters() keeps echoing the scalabilityMode
 // requested at publish time even when that codec cannot encode it. Windows
@@ -8,6 +10,10 @@
 // Retry once with single-layer L1T1, the one mode every codec must support.
 // Later writes read back L1T1 and succeed directly.
 const FALLBACK_SCALABILITY_MODE = 'L1T1';
+
+// Diagnostics match messages by exact text, so callers log this constant.
+const SCALABILITY_MODE_FALLBACK_LOG =
+	'Video sender scalability mode fell back to L1T1' satisfies TVoiceDiagnosticMessage;
 
 // TypeScript's DOM lib does not declare the WebRTC-SVC encoding field yet.
 type TScalableEncoding = RTCRtpEncodingParameters & { scalabilityMode?: string };
@@ -44,7 +50,7 @@ const updateVideoSenderParameters = async (
 		await sender.setParameters(params);
 		return { updated: true, scalabilityModeFallback: false };
 	} catch (error) {
-		if (!isInvalidModificationError(error) || !params.encodings.some(usesLayeredScalabilityMode)) {
+		if (!isInvalidModificationError(error) || !params.encodings?.some(usesLayeredScalabilityMode)) {
 			throw error;
 		}
 	}
@@ -68,4 +74,4 @@ const updateVideoSenderParameters = async (
 	return { updated: true, scalabilityModeFallback: true };
 };
 
-export { updateVideoSenderParameters };
+export { SCALABILITY_MODE_FALLBACK_LOG, updateVideoSenderParameters };

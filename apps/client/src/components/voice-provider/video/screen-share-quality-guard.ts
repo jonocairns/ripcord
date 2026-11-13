@@ -1,6 +1,6 @@
 import type { AppData, Producer } from 'mediasoup-client/types';
 import { VIDEO_DEGRADATION_PREFERENCE } from './video-producer-config';
-import { updateVideoSenderParameters } from './video-sender-parameters';
+import { SCALABILITY_MODE_FALLBACK_LOG, updateVideoSenderParameters } from './video-sender-parameters';
 
 // Runtime quality guard for the local screen-share producer, driven by the
 // sender's outbound-rtp stats.
@@ -69,7 +69,7 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 			if (!updated || disposed || deps.getProducer() !== producer || producer.closed) return;
 
 			if (scalabilityModeFallback) {
-				deps.log('Video sender scalability mode fell back to L1T1');
+				deps.log(SCALABILITY_MODE_FALLBACK_LOG);
 			}
 
 			floorApplied = true;
@@ -101,7 +101,7 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 			if (disposed || deps.getProducer() !== producer || producer.closed) return;
 
 			if (scalabilityModeFallback) {
-				deps.log('Video sender scalability mode fell back to L1T1');
+				deps.log(SCALABILITY_MODE_FALLBACK_LOG);
 			}
 
 			floorApplied = false;
