@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterEach, describe, expect, jest, spyOn, test } from 'bun:test';
 import { ServerEvents, StreamKind } from '@sharkord/shared';
 import type { AppData, Producer } from 'mediasoup/types';
 import { logger } from '../../logger';
@@ -422,5 +422,103 @@ describe('VoiceRuntime stream state reset on producer close', () => {
 		expect(publishSpy).not.toHaveBeenCalledWith([1], ServerEvents.USER_VOICE_STATE_UPDATE, expect.anything());
 
 		publishSpy.mockRestore();
+	});
+
+	describe('during a recoverable close', () => {
+		afterEach(() => {
+			jest.useRealTimers();
+		});
+
+		const stateUpdates = (publishSpy: ReturnType<typeof spyOn<typeof pubsub, 'publishFor'>>) =>
+			publishSpy.mock.calls.filter((call) => call[1] === ServerEvents.USER_VOICE_STATE_UPDATE);
+
+		test('a republished share stays live with no state broadcast', async () => {
+			const runtime = await makeRuntime();
+			runtime.addUser(1, { micMuted: false, soundMuted: false });
+			runtime.updateUserState(1, { sharingScreen: true });
+			runtime.addProducer(1, StreamKind.SCREEN, makeSyncCloseProducer('screen-1').producer);
+
+			jest.useFakeTimers();
+			const publishSpy = spyOn(pubsub, 'publishFor');
+
+			runtime.removeProducer(1, StreamKind.SCREEN, { recoverable: true });
+			expect(runtime.getUserState(1).sharingScreen).toBe(true);
+
+			runtime.addProducer(1, StreamKind.SCREEN, makeSyncCloseProducer('screen-2').producer);
+			jest.advanceTimersByTime(60_000);
+
+			expect(runtime.getUserState(1).sharingScreen).toBe(true);
+			expect(stateUpdates(publishSpy)).toEqual([]);
+
+			publishSpy.mockRestore();
+		});
+
+		test('a share that is never republished ends after the grace period', async () => {
+			const runtime = await makeRuntime();
+			runtime.addUser(1, { micMuted: false, soundMuted: false });
+			runtime.updateUserState(1, { sharingScreen: true, webcamEnabled: true });
+			runtime.addProducer(1, StreamKind.SCREEN, makeSyncCloseProducer('screen').producer);
+			runtime.addProducer(1, StreamKind.VIDEO, makeSyncCloseProducer('video').producer);
+
+			jest.useFakeTimers();
+			const publishSpy = spyOn(pubsub, 'publishFor');
+
+			runtime.removeProducerTransport(1, { recoverable: true });
+			runtime.removeProducer(1, StreamKind.SCREEN, { recoverable: true });
+			runtime.removeProducer(1, StreamKind.VIDEO, { recoverable: true });
+			jest.advanceTimersByTime(29_999);
+
+			expect(runtime.getUserState(1)).toMatchObject({ sharingScreen: true, webcamEnabled: true });
+
+			jest.advanceTimersByTime(1);
+
+			expect(runtime.getUserState(1)).toMatchObject({ sharingScreen: false, webcamEnabled: false });
+			expect(stateUpdates(publishSpy)).toHaveLength(2);
+
+			publishSpy.mockRestore();
+		});
+
+		test('a terminal close during the grace period ends the stream at once', async () => {
+			const runtime = await makeRuntime();
+			runtime.addUser(1, { micMuted: false, soundMuted: false });
+			runtime.updateUserState(1, { sharingScreen: true });
+			runtime.addProducer(1, StreamKind.SCREEN, makeSyncCloseProducer('screen-1').producer);
+
+			jest.useFakeTimers();
+			const publishSpy = spyOn(pubsub, 'publishFor');
+
+			runtime.removeProducer(1, StreamKind.SCREEN, { recoverable: true });
+			runtime.addProducer(1, StreamKind.SCREEN, makeSyncCloseProducer('screen-2').producer);
+			runtime.removeProducer(1, StreamKind.SCREEN);
+
+			expect(runtime.getUserState(1).sharingScreen).toBe(false);
+			expect(stateUpdates(publishSpy)).toHaveLength(1);
+
+			jest.advanceTimersByTime(60_000);
+			expect(stateUpdates(publishSpy)).toHaveLength(1);
+
+			publishSpy.mockRestore();
+		});
+
+		test('a user who leaves during the grace period gets no late state broadcast', async () => {
+			const runtime = await makeRuntime();
+			runtime.addUser(1, { micMuted: false, soundMuted: false });
+			runtime.updateUserState(1, { sharingScreen: true });
+			runtime.addProducer(1, StreamKind.SCREEN, makeSyncCloseProducer('screen').producer);
+
+			jest.useFakeTimers();
+			const publishSpy = spyOn(pubsub, 'publishFor');
+
+			runtime.removeProducer(1, StreamKind.SCREEN, { recoverable: true });
+			runtime.removeUser(1);
+			runtime.addUser(1, { micMuted: false, soundMuted: false });
+			runtime.updateUserState(1, { sharingScreen: true });
+			jest.advanceTimersByTime(60_000);
+
+			expect(runtime.getUserState(1).sharingScreen).toBe(true);
+			expect(stateUpdates(publishSpy)).toEqual([]);
+
+			publishSpy.mockRestore();
+		});
 	});
 });

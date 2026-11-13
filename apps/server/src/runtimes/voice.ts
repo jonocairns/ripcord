@@ -74,6 +74,13 @@ const VOICE_ACTIVITY_OBSERVER_THRESHOLD_DBOV = -60;
 // mediasoup clamps AudioLevelObserver intervals to 250–5000 ms in the worker.
 const VOICE_ACTIVITY_OBSERVER_INTERVAL_MS = 250;
 const VOICE_ACTIVITY_RELEASE_DELAY_MS = 350;
+// How long a share or webcam stays live after a recoverable producer close
+// (socket drop, transport rebuild) while the client republishes it. Without
+// this, everyone in the channel sees the stream end and start again and hears
+// the "stream started" cue for what was only a reconnect.
+const STREAM_RESTORE_GRACE_MS = 30_000;
+
+type TStreamStateFlag = 'sharingScreen' | 'webcamEnabled';
 
 const defaultRouterOptions: RouterOptions<AppData> = {
 	mediaCodecs: [
@@ -255,6 +262,7 @@ class VoiceRuntime {
 	private speakingUserIds = new Set<number>();
 	private observerSpeakingUserIds = new Set<number>();
 	private voiceActivityReleaseTimers = new Map<number, ReturnType<typeof setTimeout>>();
+	private streamRestoreTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	// Per-user lease granted by the latest accepted client activity report. While
 	// a lease is active the server observer defers to the client; when reports
 	// stop the lease expires and the observer resumes as the canonical source, so
@@ -374,6 +382,11 @@ class VoiceRuntime {
 		this.stopMediaLivenessMonitor();
 		this.clearAllVoiceActivity();
 
+		for (const timeout of this.streamRestoreTimers.values()) {
+			clearTimeout(timeout);
+		}
+		this.streamRestoreTimers.clear();
+
 		// Closing the router automatically closes all transports, producers, and
 		// consumers attached to it — no need to close them individually.
 		// Assumes all users have already been removed (via removeUser) before this
@@ -492,6 +505,8 @@ class VoiceRuntime {
 		this.clientVoiceStateSeqs.delete(userId);
 		this.voiceSessionIncarnations.delete(userId);
 		this.voiceSessionMutationTokens.delete(userId);
+		this.clearStreamRestoreTimer(userId, 'sharingScreen');
+		this.clearStreamRestoreTimer(userId, 'webcamEnabled');
 		this.setUserSpeaking(userId, false);
 	};
 
@@ -622,7 +637,40 @@ class VoiceRuntime {
 		}
 	};
 
-	private resetStreamUserStateOnProducerClose = (userId: number, flag: 'sharingScreen' | 'webcamEnabled') => {
+	private endStreamOnProducerClose = (userId: number, flag: TStreamStateFlag, recoverable: boolean) => {
+		this.clearStreamRestoreTimer(userId, flag);
+
+		if (!recoverable) {
+			this.resetStreamUserStateOnProducerClose(userId, flag);
+			return;
+		}
+
+		const key = `${userId}:${flag}`;
+		const timeout = setTimeout(() => {
+			this.streamRestoreTimers.delete(key);
+
+			const restored = flag === 'sharingScreen' ? this.screenProducers[userId] : this.videoProducers[userId];
+
+			if (!restored) {
+				this.resetStreamUserStateOnProducerClose(userId, flag);
+			}
+		}, STREAM_RESTORE_GRACE_MS);
+
+		timeout.unref?.();
+		this.streamRestoreTimers.set(key, timeout);
+	};
+
+	private clearStreamRestoreTimer = (userId: number, flag: TStreamStateFlag) => {
+		const key = `${userId}:${flag}`;
+		const timeout = this.streamRestoreTimers.get(key);
+
+		if (timeout !== undefined) {
+			clearTimeout(timeout);
+			this.streamRestoreTimers.delete(key);
+		}
+	};
+
+	private resetStreamUserStateOnProducerClose = (userId: number, flag: TStreamStateFlag) => {
 		const user = this.getUser(userId);
 
 		if (!user || user.state[flag] === false) {
@@ -1426,10 +1474,12 @@ class VoiceRuntime {
 
 		if (type === StreamKind.VIDEO) {
 			this.videoProducers[userId] = producer;
+			this.clearStreamRestoreTimer(userId, 'webcamEnabled');
 		} else if (type === StreamKind.AUDIO) {
 			this.audioProducers[userId] = producer;
 		} else if (type === StreamKind.SCREEN) {
 			this.screenProducers[userId] = producer;
+			this.clearStreamRestoreTimer(userId, 'sharingScreen');
 		} else if (type === StreamKind.SCREEN_AUDIO) {
 			this.screenAudioProducers[userId] = producer;
 		}
@@ -1444,6 +1494,7 @@ class VoiceRuntime {
 		}
 
 		producer.observer.on('close', () => {
+			const recoverableClose = this.recoverableProducerClosures.has(producer);
 			recordServerStreamEvent(userId, {
 				event: 'producer_closed',
 				channelId: this.id,
@@ -1464,7 +1515,7 @@ class VoiceRuntime {
 			if (type === StreamKind.VIDEO) {
 				if (this.videoProducers[userId] !== producer) return;
 				delete this.videoProducers[userId];
-				this.resetStreamUserStateOnProducerClose(userId, 'webcamEnabled');
+				this.endStreamOnProducerClose(userId, 'webcamEnabled', recoverableClose);
 			} else if (type === StreamKind.AUDIO) {
 				if (this.audioProducers[userId] !== producer) return;
 				delete this.audioProducers[userId];
@@ -1472,7 +1523,7 @@ class VoiceRuntime {
 			} else if (type === StreamKind.SCREEN) {
 				if (this.screenProducers[userId] !== producer) return;
 				delete this.screenProducers[userId];
-				this.resetStreamUserStateOnProducerClose(userId, 'sharingScreen');
+				this.endStreamOnProducerClose(userId, 'sharingScreen', recoverableClose);
 			} else if (type === StreamKind.SCREEN_AUDIO) {
 				if (this.screenAudioProducers[userId] !== producer) return;
 				delete this.screenAudioProducers[userId];
