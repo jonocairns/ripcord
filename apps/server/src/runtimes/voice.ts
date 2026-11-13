@@ -77,8 +77,11 @@ const VOICE_ACTIVITY_RELEASE_DELAY_MS = 350;
 // How long a share or webcam stays live after a recoverable producer close
 // (socket drop, transport rebuild) while the client republishes it. Without
 // this, everyone in the channel sees the stream end and start again and hears
-// the "stream started" cue for what was only a reconnect.
-const STREAM_RESTORE_GRACE_MS = 30_000;
+// the "stream started" cue for what was only a reconnect. The close happens
+// once the server accepts the restore, so this only has to cover transport
+// connect and produce; a share that ended while the socket was down stays
+// "live" this long, because the client's stop never reached the server.
+const STREAM_RESTORE_GRACE_MS = 15_000;
 
 type TStreamStateFlag = 'sharingScreen' | 'webcamEnabled';
 
@@ -645,15 +648,11 @@ class VoiceRuntime {
 			return;
 		}
 
+		// A republished producer of this kind clears the timer in addProducer.
 		const key = `${userId}:${flag}`;
 		const timeout = setTimeout(() => {
 			this.streamRestoreTimers.delete(key);
-
-			const restored = flag === 'sharingScreen' ? this.screenProducers[userId] : this.videoProducers[userId];
-
-			if (!restored) {
-				this.resetStreamUserStateOnProducerClose(userId, flag);
-			}
+			this.resetStreamUserStateOnProducerClose(userId, flag);
 		}, STREAM_RESTORE_GRACE_MS);
 
 		timeout.unref?.();

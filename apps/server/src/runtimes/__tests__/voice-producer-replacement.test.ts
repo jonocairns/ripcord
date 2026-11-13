@@ -463,10 +463,9 @@ describe('VoiceRuntime stream state reset on producer close', () => {
 			jest.useFakeTimers();
 			const publishSpy = spyOn(pubsub, 'publishFor');
 
-			runtime.removeProducerTransport(1, { recoverable: true });
 			runtime.removeProducer(1, StreamKind.SCREEN, { recoverable: true });
 			runtime.removeProducer(1, StreamKind.VIDEO, { recoverable: true });
-			jest.advanceTimersByTime(29_999);
+			jest.advanceTimersByTime(14_999);
 
 			expect(runtime.getUserState(1)).toMatchObject({ sharingScreen: true, webcamEnabled: true });
 
@@ -478,7 +477,7 @@ describe('VoiceRuntime stream state reset on producer close', () => {
 			publishSpy.mockRestore();
 		});
 
-		test('a terminal close during the grace period ends the stream at once', async () => {
+		test('a terminal close after a restore ends the stream at once', async () => {
 			const runtime = await makeRuntime();
 			runtime.addUser(1, { micMuted: false, soundMuted: false });
 			runtime.updateUserState(1, { sharingScreen: true });
