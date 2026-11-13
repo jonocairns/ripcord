@@ -7,7 +7,6 @@ const getProducersRoute = protectedProcedure.query(async ({ ctx }) => {
 
 	const runtime = VoiceRuntime.requireJoinedRuntime(ctx.currentVoiceChannelId, ctx.user.id);
 
-	runtime.forgetWatchesMissingFromSnapshot(ctx.user.id);
 	return runtime.getRemoteIds(ctx.user.id);
 });
 

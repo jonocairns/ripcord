@@ -237,36 +237,6 @@ describe('VoiceRuntime stream watcher activity', () => {
 		expect(watcherActions()).toEqual(['joined', 'joined-sync', 'joined']);
 	});
 
-	test('a viewer whose snapshot misses a paused share stops counting until they rewatch', async () => {
-		const { runtime, watcherActivity, watcherActions, watch } = await setup();
-
-		runtime.addProducer(STREAMER, StreamKind.SCREEN, makeProducer('screen-producer-1'));
-		await watch('screen-1');
-
-		// The share is mid-restore when the viewer reconnects and reconciles; the
-		// viewer's client drops screen-watch intent for a screen it cannot see.
-		runtime.removeProducer(STREAMER, StreamKind.SCREEN, { recoverable: true });
-		runtime.forgetWatchesMissingFromSnapshot(VIEWER);
-		expect(watcherActions()).toEqual(['joined', 'left-sync']);
-
-		runtime.addProducer(STREAMER, StreamKind.SCREEN, makeProducer('screen-producer-2'));
-		expect(watcherActivity()).toHaveLength(2);
-
-		await watch('screen-2');
-		expect(watcherActions()).toEqual(['joined', 'left-sync', 'joined']);
-	});
-
-	test('a snapshot keeps live screens and absent webcams watched', async () => {
-		const { runtime, watcherActions, watch } = await setup();
-
-		runtime.addProducer(STREAMER, StreamKind.SCREEN, makeProducer('screen-producer-1'));
-		await watch('screen-1');
-		await watch('video-1', StreamKind.VIDEO);
-		runtime.forgetWatchesMissingFromSnapshot(VIEWER);
-
-		expect(watcherActions()).toEqual(['joined', 'joined']);
-	});
-
 	test('webcam viewers keep watching across a webcam toggle', async () => {
 		const { runtime, watcherActions, watch } = await setup();
 

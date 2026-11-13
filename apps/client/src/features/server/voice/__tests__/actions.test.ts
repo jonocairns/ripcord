@@ -28,6 +28,7 @@ let resetVoiceSwitchStateForTests: typeof import('../actions').__resetVoiceSwitc
 let relayOwnVoiceState: typeof import('../actions').relayOwnVoiceState;
 let setOwnVoiceIntent: typeof import('../actions').setOwnVoiceIntent;
 let setOwnPushHold: typeof import('../actions').setOwnPushHold;
+let markOwnScreenShareStarted: typeof import('../actions').markOwnScreenShareStarted;
 let authenticated = true;
 let connectionListener = () => {};
 const playSound = mock(() => {});
@@ -222,6 +223,7 @@ describe('voice actions', () => {
 			relayOwnVoiceState,
 			setOwnVoiceIntent,
 			setOwnPushHold,
+			markOwnScreenShareStarted,
 			addUserToVoiceChannel,
 			clearOwnVoiceSessionAfterReconnectFailure,
 			leaveVoiceSessionAfterRecoveryFailure,
@@ -682,6 +684,26 @@ describe('voice actions', () => {
 
 		useServerStore.getState().updateOwnVoiceState({ sharingScreen: false });
 		expect(useServerStore.getState().screenShareWatchers).toEqual({});
+	});
+
+	it('starts a user share with an empty audience', () => {
+		useServerStore.setState({
+			ownUserId: 42,
+			currentVoiceChannelId: 7,
+			voiceMap: {
+				7: {
+					users: {
+						42: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: false },
+					},
+				},
+			},
+			screenShareWatchers: { 10: true },
+		});
+
+		markOwnScreenShareStarted();
+
+		expect(useServerStore.getState().screenShareWatchers).toEqual({});
+		expect(ownVoiceStateSelector(useServerStore.getState()).sharingScreen).toBe(true);
 	});
 
 	it('ignores non-screen watcher activity for the screen share badge state', () => {

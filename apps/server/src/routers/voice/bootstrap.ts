@@ -60,17 +60,13 @@ const prepareVoiceJoinBootstrap = async (opts: {
 		assertCommittable: pair.assertCommittable,
 		commit: pair.commit,
 		dispose: pair.dispose,
-		buildCommittedResponse: () => {
-			runtime.forgetWatchesMissingFromSnapshot(userId);
-
-			return {
-				routerRtpCapabilities: router.rtpCapabilities,
-				producerTransportParams: pair.producerParams,
-				consumerTransportParams: pair.consumerParams,
-				existingProducers: runtime.getRemoteIds(userId),
-				channelUsers: runtime.getState().users,
-			};
-		},
+		buildCommittedResponse: () => ({
+			routerRtpCapabilities: router.rtpCapabilities,
+			producerTransportParams: pair.producerParams,
+			consumerTransportParams: pair.consumerParams,
+			existingProducers: runtime.getRemoteIds(userId),
+			channelUsers: runtime.getState().users,
+		}),
 	};
 };
 

@@ -1694,22 +1694,6 @@ class VoiceRuntime {
 		}
 	};
 
-	// Called when the viewer is about to receive a producer snapshot. Their
-	// client drops screen-watch intent for a screen missing from it (webcam
-	// intent survives), so membership for such a screen ends here too; otherwise
-	// a share restored later would count a viewer who never rewatches.
-	public forgetWatchesMissingFromSnapshot = (userId: number) => {
-		for (const { remoteId, kind } of this.streamWatchers.getWatchedStreams(userId)) {
-			if (kind !== StreamKind.SCREEN || this.screenProducers[remoteId]) {
-				continue;
-			}
-
-			if (this.streamWatchers.remove(userId, remoteId, kind)) {
-				this.publishWatcherActivity(userId, remoteId, kind, 'left', { sync: true });
-			}
-		}
-	};
-
 	private publishWatcherActivity = (
 		watcherId: number,
 		remoteId: number,

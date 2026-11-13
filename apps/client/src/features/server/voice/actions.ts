@@ -436,6 +436,13 @@ export const updateOwnVoiceState = (newState: TOwnVoiceStateUpdate): void => {
 	useServerStore.getState().updateOwnVoiceState(newState);
 };
 
+// A share the user starts begins with no audience. Recovery restates sharing
+// through updateOwnVoiceState instead, keeping the viewers the server restated.
+export const markOwnScreenShareStarted = (): void => {
+	useServerStore.getState().resetScreenShareWatchers();
+	updateOwnVoiceState({ sharingScreen: true });
+};
+
 export type TJoinVoiceResult =
 	| {
 			kind: 'joined';
