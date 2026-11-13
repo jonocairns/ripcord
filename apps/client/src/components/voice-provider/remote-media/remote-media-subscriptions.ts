@@ -1,4 +1,9 @@
-import { StreamKind, type TRemoteProducerIds, type TStreamEventDetails } from '@sharkord/shared';
+import {
+	StreamKind,
+	type TCloseConsumerIntent,
+	type TRemoteProducerIds,
+	type TStreamEventDetails,
+} from '@sharkord/shared';
 import type { TWatchedRemoteStreamsSnapshot } from '@/features/server/voice/voice-session-machine';
 import {
 	getPendingStreamKey,
@@ -64,6 +69,8 @@ export type TCloseConsumerCommand = {
 	consumerId?: string;
 	generation?: number;
 	reason?: TStreamEventDetails['reason'];
+	// Omitted means 'maintenance'; only a viewer's own stop is 'stop-watching'.
+	intent?: TCloseConsumerIntent;
 };
 
 export type TRemoteMediaRepairIdentity = {
@@ -337,6 +344,26 @@ const closeConsumerCommandFor = (
 	};
 };
 
+// The streamer's watcher list follows viewer decisions, so a stop of a stream
+// that has one is sent even with no consumer to close: a repair may have
+// dropped the consumer while the viewer still counted as watching.
+const stopWatchingCommandFor = (subscription: TRemoteMediaSubscription): TCloseConsumerCommand | undefined => {
+	const closeCommand = closeConsumerCommandFor(subscription);
+
+	if (subscription.kind !== StreamKind.VIDEO && subscription.kind !== StreamKind.SCREEN) {
+		return closeCommand;
+	}
+
+	return {
+		type: 'closeConsumer',
+		key: subscription.key,
+		remoteId: subscription.remoteId,
+		kind: subscription.kind,
+		...closeCommand,
+		intent: 'stop-watching',
+	};
+};
+
 // Reducers only publish a new map when a slot materially changed; otherwise
 // they return the input map untouched, so snapshot reconciliation cannot dirty
 // the ledger (and re-render every voice context consumer) with timestamp-only
@@ -504,7 +531,7 @@ export const markRemoteWatchStopped = (
 ): TRemoteMediaReducerResult => {
 	const existing = subscriptions.get(getPendingStreamKey(remoteId, kind));
 	const base = existing ?? makeSubscription(remoteId, kind, now);
-	const closeCommand = closeConsumerCommandFor(base);
+	const closeCommand = stopWatchingCommandFor(base);
 
 	let next = applySlotUpdate(
 		subscriptions,

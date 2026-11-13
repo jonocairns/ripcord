@@ -794,8 +794,37 @@ describe('remote media subscriptions', () => {
 					kind: StreamKind.VIDEO,
 					consumerId: 'consumer-2',
 					generation: undefined,
+					intent: 'stop-watching',
 				},
 			]);
+		});
+
+		it('tells the server about a watch stop even when no consumer is left to close', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(markRemoteProducerPresent(state, 2, StreamKind.SCREEN, 100, 'screen-producer'));
+			state = remoteMediaState(markRemoteWatchRequested(state, 2, StreamKind.SCREEN, 105));
+
+			expect(markRemoteWatchStopped(state, 2, StreamKind.SCREEN, 110).commands).toEqual([
+				{
+					type: 'closeConsumer',
+					key: getPendingStreamKey(2, StreamKind.SCREEN),
+					remoteId: 2,
+					kind: StreamKind.SCREEN,
+					intent: 'stop-watching',
+				},
+			]);
+		});
+
+		it('sends no close for a stopped external stream with no consumer', () => {
+			let state: TRemoteMediaSubscriptions = new Map();
+
+			state = remoteMediaState(
+				markRemoteProducerPresent(state, 9, StreamKind.EXTERNAL_VIDEO, 100, 'external-producer'),
+			);
+			state = remoteMediaState(markRemoteWatchRequested(state, 9, StreamKind.EXTERNAL_VIDEO, 105));
+
+			expect(markRemoteWatchStopped(state, 9, StreamKind.EXTERNAL_VIDEO, 110).commands).toEqual([]);
 		});
 
 		it('emits screen-audio commands from screen watch cascades', () => {

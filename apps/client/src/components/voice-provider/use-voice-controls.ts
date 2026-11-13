@@ -7,6 +7,7 @@ import { SoundType } from '@/features/server/types';
 import { useOwnUserId } from '@/features/server/users/hooks';
 import {
 	cancelOwnPushHold,
+	markOwnScreenShareStarted,
 	sendOwnVoiceStateUpdate,
 	setOwnVoiceIntent,
 	updateOwnVoiceState,
@@ -190,7 +191,7 @@ const useVoiceControls = ({
 					onVideoTrackStarted: () => {
 						if (!transition.isCurrent()) return;
 						finishScreenShareStart();
-						updateOwnVoiceState({ sharingScreen: true });
+						markOwnScreenShareStarted();
 						playSound(SoundType.OWN_USER_STARTED_SCREENSHARE);
 					},
 					onVideoTrackEnded: async () => {

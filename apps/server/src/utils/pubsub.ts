@@ -114,6 +114,9 @@ export type Events = {
 		watcherId: number;
 		kind: StreamKind.VIDEO | StreamKind.SCREEN;
 		action: 'joined' | 'left';
+		// Badge-only update (a rewatch after recovery, or a viewer leaving voice);
+		// not a watch decision, so no cue. Older clients ignore the flag and cue.
+		sync?: true;
 	};
 
 	[ServerEvents.PLUGIN_LOG]: TLogEntry;

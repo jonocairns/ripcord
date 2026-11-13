@@ -143,6 +143,7 @@ type TServerStore = IServerState & {
 	addPluginCommand: (command: TCommandInfo) => void;
 	removePluginCommand: (payload: { commandName: string }) => void;
 	addScreenShareWatcher: (watcherId: number) => void;
+	resetScreenShareWatchers: () => void;
 	removeScreenShareWatcher: (watcherId: number) => void;
 };
 
@@ -850,7 +851,11 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			currentChannelState && ownUserId !== undefined ? currentChannelState.users[ownUserId] : undefined;
 
 		const nextExpiresAt = Date.now() + OPTIMISTIC_VOICE_STATE_TTL_MS;
-		const resetScreenShareWatchers = newState.sharingScreen !== undefined ? { screenShareWatchers: {} } : undefined;
+		// Stopping a share ends its audience. Starting one is left to the user's
+		// own start (resetScreenShareWatchers): a recovery restatement can follow
+		// a server-side reset of the own row to false, and viewers restated by the
+		// server around it must survive.
+		const clearedScreenShareWatchers = newState.sharingScreen === false ? { screenShareWatchers: {} } : undefined;
 
 		if (ownChannelId !== undefined && currentChannelState && ownUserId !== undefined && currentOwnVoiceState) {
 			set({
@@ -869,14 +874,14 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 				},
 				// Patch local video presentation until the server confirms it.
 				ownOptimisticStateExpiresAt: nextExpiresAt,
-				...resetScreenShareWatchers,
+				...clearedScreenShareWatchers,
 			});
 			return;
 		}
 
 		set({
 			ownOptimisticStateExpiresAt: nextExpiresAt,
-			...resetScreenShareWatchers,
+			...clearedScreenShareWatchers,
 		});
 	},
 	setPinnedCard: (pinnedCard) => {
@@ -963,6 +968,13 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		set({
 			pluginCommands: nextPluginCommands,
 		});
+	},
+	resetScreenShareWatchers: () => {
+		if (Object.keys(get().screenShareWatchers).length === 0) {
+			return;
+		}
+
+		set({ screenShareWatchers: {} });
 	},
 	addScreenShareWatcher: (watcherId) => {
 		const screenShareWatchers = get().screenShareWatchers;

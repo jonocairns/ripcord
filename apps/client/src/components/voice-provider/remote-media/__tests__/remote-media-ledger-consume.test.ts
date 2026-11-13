@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { StreamKind } from '@sharkord/shared';
+import { StreamKind, type TCloseConsumerIntent } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
 import { createRemoteMediaCommandRunner } from '../remote-media-command-runner';
 import { createRemoteMediaConsumeController, type TServerConsumerAllocation } from '../remote-media-consume-controller';
@@ -46,6 +46,7 @@ const fixture = () => {
 	}[] = [];
 	const resumes: { id: string; result: ReturnType<typeof deferred<void>> }[] = [];
 	const closes: (string | undefined)[] = [];
+	const closeIntents: TCloseConsumerIntent[] = [];
 	const locals: TLocal[] = [];
 	const attached: string[] = [];
 	const detached: string[] = [];
@@ -98,6 +99,7 @@ const fixture = () => {
 		},
 		closeServerConsumer: async (target) => {
 			closes.push(target.consumerId);
+			closeIntents.push(target.intent);
 		},
 		createLocalConsumer: async (_transport, allocation) => {
 			const local = { id: allocation.consumerId, producerId: allocation.producerId, closed: false, closeCount: 0 };
@@ -224,6 +226,7 @@ const fixture = () => {
 		allocations,
 		resumes,
 		closes,
+		closeIntents,
 		locals,
 		attached,
 		detached,
@@ -281,7 +284,11 @@ for (const boundary of ['allocation', 'resume'])
 		else f.resolveResume();
 		await flush();
 		expect(f.allocations).toHaveLength(1);
-		expect(f.closes).toEqual(['c-p1']);
+		// The stop always reaches the server, targeting whatever consumer is
+		// known (none before allocation), so the streamer's watcher list hears
+		// it; the allocation is then closed as maintenance.
+		expect(f.closes).toEqual([boundary === 'resume' ? 'c-p1' : undefined, 'c-p1']);
+		expect(f.closeIntents).toEqual(['stop-watching', 'maintenance']);
 		expect(f.successes).toEqual([]);
 		expect(f.slot()?.status).not.toBe('consumed');
 		expect(f.locals).toHaveLength(boundary === 'resume' ? 1 : 0);

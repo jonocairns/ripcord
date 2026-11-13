@@ -415,8 +415,13 @@ export const handleStreamWatcherActivity = (activity: {
 	watcherId: number;
 	action: 'joined' | 'left';
 	kind: StreamKind.VIDEO | StreamKind.SCREEN;
+	sync?: true;
 }): void => {
-	playSound(activity.action === 'joined' ? SoundType.STREAM_WATCHER_JOINED : SoundType.STREAM_WATCHER_LEFT);
+	// Sync events restate a rewatch or a departure the channel already cued;
+	// only a viewer's own start or stop is worth a stream cue.
+	if (!activity.sync) {
+		playSound(activity.action === 'joined' ? SoundType.STREAM_WATCHER_JOINED : SoundType.STREAM_WATCHER_LEFT);
+	}
 
 	if (activity.kind === StreamKind.SCREEN) {
 		if (activity.action === 'joined') {
@@ -429,6 +434,13 @@ export const handleStreamWatcherActivity = (activity: {
 
 export const updateOwnVoiceState = (newState: TOwnVoiceStateUpdate): void => {
 	useServerStore.getState().updateOwnVoiceState(newState);
+};
+
+// A share the user starts begins with no audience. Recovery restates sharing
+// through updateOwnVoiceState instead, keeping the viewers the server restated.
+export const markOwnScreenShareStarted = (): void => {
+	useServerStore.getState().resetScreenShareWatchers();
+	updateOwnVoiceState({ sharingScreen: true });
 };
 
 export type TJoinVoiceResult =
