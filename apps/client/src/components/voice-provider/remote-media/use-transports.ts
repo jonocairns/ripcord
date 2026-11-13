@@ -27,6 +27,11 @@ import {
 	createRemoteMediaConsumeController,
 	type TRemoteMediaConsumeController,
 } from './remote-media-consume-controller';
+import {
+	clearRemoteMediaForTransport,
+	clearRemoteMediaForTransportFailure,
+	stopRemoteMediaWatch,
+} from './remote-media-lifecycle';
 import { runRemoteMediaProducerRepair } from './remote-media-producer-repair';
 import type { TRemoteMediaRepairIdentity } from './remote-media-subscriptions';
 import { monitorScreenPlayback } from './stream-playback-monitor';
@@ -468,8 +473,10 @@ const useTransports = ({
 					}
 
 					consumerTransport.current = undefined;
-					consumeController.invalidateTransport();
-					clearAllPendingStreams();
+					clearRemoteMediaForTransportFailure({
+						clear: clearAllPendingStreams,
+						invalidateTransport: consumeController.invalidateTransport,
+					});
 
 					if (!transport.closed) {
 						transport.close();
@@ -747,16 +754,7 @@ const useTransports = ({
 				return;
 			}
 
-			// Invalidate any in-flight consume for this slot before the ledger write.
-			// The ledger only rejects the stale success (it has no consumer to close
-			// yet), so without this the running controller operation could still attach and
-			// resume a live consumer that nothing owns. Controller cancellation
-			// closes local state immediately and retains ownership of any late server
-			// allocation. Screen audio rides along with the screen, mirroring the
-			// markRemoteWatchStopped cascade.
-			consumeController.cancel(remoteId, kind);
-
-			markWatchStopped(remoteId, kind);
+			stopRemoteMediaWatch(remoteId, kind, { markWatchStopped, cancel: consumeController.cancel });
 		},
 		[consumeController, markWatchStopped],
 	);
@@ -777,12 +775,15 @@ const useTransports = ({
 
 			const consumerTransportToClose = consumerTransport.current;
 			consumerTransport.current = undefined;
-			consumeController.invalidateTransport();
+			// Clear intent/producer state before close notifications can request consumes.
+			clearRemoteMediaForTransport(
+				{ clear: clearAllPendingStreams, invalidateTransport: consumeController.invalidateTransport },
+				{ preserveIntent: opts?.preserveRemoteMediaIntent === true },
+			);
 			// Drop any in-flight/queued existing-producer sweep so a stalled sweep
 			// (e.g. a hung getProducers during reconnect) cannot poison the
 			// single-flight state for the rebuilt transport generation.
 			existingProducersSweeperRef.current?.reset();
-			clearAllPendingStreams({ preserveIntent: opts?.preserveRemoteMediaIntent === true });
 
 			if (producerTransport.current && !producerTransport.current.closed) {
 				producerTransport.current.close();

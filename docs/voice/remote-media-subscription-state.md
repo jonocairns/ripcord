@@ -55,16 +55,17 @@ It does not own:
 
 `useRemoteMedia` composes ledger transitions, transport/stream owners, event
 subscriptions and the existing consume/repair runners. The framework-free
-`createRemoteMediaIntegration` connects producer identity, committed consume
-publication, watch snapshots and external-track reconciliation. It is an
-integration seam, not another ledger or retry owner. Its layout mount owns only
-consume-start acknowledgement lifetime: cleanup settles waiters, inactive
-mutations are fenced and replay creates a fresh publication. Ledger, stream and
-transport cleanup remain with their existing owners. See
+`createRemoteMediaIntegration` connects producer identity, synchronous consume-start
+checks, watch snapshots and external-track reconciliation. Its layout mount fences
+inactive mutations and asynchronous work through a lifecycle generation. Ledger,
+stream and transport cleanup remain with their existing owners. See
 [provider-composition.md](./provider-composition.md).
 
-The implementation lives in
-`apps/client/src/components/voice-provider/remote-media/remote-media-subscriptions.ts`.
+The pure reducer lives in `remote-media-subscriptions.ts`. A
+`createRemoteMediaLedgerStore` instance in `remote-media-ledger-store.ts` owns the
+ledger and command queue for each provider mount. React subscribes through
+`useSyncExternalStore`; derived pending and visible media snapshots are cached
+until the ledger changes.
 
 ## State model
 
@@ -127,10 +128,31 @@ Commands are limited to concrete effects:
 - `closeConsumer`
 - `scheduleRetry`
 
-`useRemoteMediaConsumeRunner` and `useRemoteMediaRepairRunner` execute transport,
-RPC, and timer work and report results back through ledger transitions. The
-subscription map and command queue are updated atomically so React Strict Mode
-cannot duplicate commands by replaying a functional updater.
+Dispatch commits the ledger synchronously, records transition diagnostics, notifies
+subscribers, then drains commands in order. Re-entrant dispatch commits immediately
+and appends work to the same drain. Commands wait while no runner is registered;
+clearing the ledger also drops queued commands.
+
+Commands run inside the dispatch that emits them, so a caller cannot rely on a
+later write in the same turn to cancel them. A path that both closes consumers
+and writes the ledger must write the ledger first: `stopRemoteMediaWatch` marks
+the watch stopped before it cancels, and `clearRemoteMediaForTransport` clears
+before it invalidates the transport. Reads are live too. A failed consumer
+transport clears with `preserveIntent` (`clearRemoteMediaForTransportFailure`),
+because the recovery snapshot is captured afterwards and reads the ledger as it
+is then; terminal cleanup discards intent.
+
+`useRemoteMediaConsumeRunner` registers the pure command runner when a channel and
+RTP capabilities exist, and unregisters it on cleanup. Consume-start publication
+checks the authoritative snapshot immediately and returns `Promise<boolean>`;
+there is no React commit waiter. Non-ledger inputs still come from committed refs
+updated by passive effects. Rendered streams and DOM attachment remain owned by
+React, and the repair runner's effect-driven timer scheduling is unchanged.
+
+Watch-intent diagnostics now record every ledger transition, including intermediate
+states previously coalesced into a single React commit. This changes diagnostic
+observations without changing reducer behavior. Consume RPCs can begin earlier
+because commands no longer wait for a render.
 
 Consume generations prevent stale results from overwriting newer intent:
 
