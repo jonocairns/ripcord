@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.6.4](https://github.com/jonocairns/ripcord/compare/v2.6.3...v2.6.4) (2026-11-13)
+
+
+### Bug Fixes
+
+* fall back to L1T1 when the sender codec rejects the scalability mode ([#374](https://github.com/jonocairns/ripcord/issues/374)) ([38002ad](https://github.com/jonocairns/ripcord/commit/38002ad66664eb25e95e37fdc64afac0d52edb32))
+* keep a stream live while its streamer reconnects ([#436](https://github.com/jonocairns/ripcord/issues/436)) ([567d0b9](https://github.com/jonocairns/ripcord/commit/567d0b95cc5a344a84788ee0d3438e63f70fb2b6))
+* only play stream watcher sounds for real watch starts and stops ([#435](https://github.com/jonocairns/ripcord/issues/435)) ([81e73f1](https://github.com/jonocairns/ripcord/commit/81e73f1dcaa7f20652bcb47b14ef02ef6fd2a8c7))
+
 ## [2.6.3](https://github.com/jonocairns/ripcord/compare/v2.6.2...v2.6.3) (2026-11-12)
 
 
