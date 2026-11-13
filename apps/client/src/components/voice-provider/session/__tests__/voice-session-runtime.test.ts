@@ -165,7 +165,7 @@ const createHarness = () => {
 		screenShare,
 		shareAudio,
 		getChannelId: () => state.channelId,
-		isConnected: () => state.hasServerSession,
+		hasServerSession: () => state.hasServerSession,
 		getReconnectNonce: () => state.nonce,
 		canSpeak: () => state.canSpeak,
 		getLocalAudioStream: (): MediaStream | undefined => undefined,
@@ -485,7 +485,7 @@ describe('voice session runtime effects', () => {
 		expect(h.ports.screenShare.stop).toHaveBeenCalledTimes(stopCount);
 	});
 
-	it('offline terminal cleanup skips server leave and relies on disconnect grace', async () => {
+	it('terminal cleanup without a server session skips server leave and relies on disconnect grace', async () => {
 		const h = createHarness();
 		h.state.hasServerSession = false;
 		await h.runtime.clearFailedSession(clearCommand);

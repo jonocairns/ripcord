@@ -42,7 +42,7 @@ type TUseVoiceSessionRuntimeParams = Pick<
 	| 'rehydrateWatchIntentOnly'
 > & {
 	currentVoiceChannelId: number | undefined;
-	isConnected: boolean;
+	hasServerSession: boolean;
 	voiceSessionReconnectNonce: number;
 	canSpeak: boolean;
 };
@@ -54,7 +54,7 @@ const useVoiceSessionRuntime = (inputs: TUseVoiceSessionRuntimeParams) => {
 		runtimeRef.current = createVoiceSessionRuntime(() => ({
 			...inputsRef.current,
 			getChannelId: () => inputsRef.current.currentVoiceChannelId,
-			isConnected: () => inputsRef.current.isConnected,
+			hasServerSession: () => inputsRef.current.hasServerSession,
 			getReconnectNonce: () => inputsRef.current.voiceSessionReconnectNonce,
 			canSpeak: () => inputsRef.current.canSpeak,
 			...voiceSessionRuntimeEnvironment,

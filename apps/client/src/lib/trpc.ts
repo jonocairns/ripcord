@@ -307,8 +307,7 @@ const waitForTRPCSessionAuthentication = (signal: AbortSignal): Promise<void> =>
 const isTRPCSocketOpen = () =>
 	typeof WebSocket !== 'undefined' && wsClient?.connection?.ws?.readyState === WebSocket.OPEN;
 
-const isTRPCSessionAuthenticated = (): boolean =>
-	connection.getState().phase.name === 'ready' && isTRPCSocketOpen();
+const isTRPCSessionAuthenticated = (): boolean => connection.getState().phase.name === 'ready' && isTRPCSocketOpen();
 
 const debugCloseCurrentWs = (opts: { code?: number; reason?: string } = {}) => {
 	const ws = wsClient?.connection?.ws;

@@ -183,7 +183,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		devices,
 		currentVoiceChannelId,
 		localAudioStream,
-		isConnected: hasServerSession,
+		hasServerSession,
 		canSpeak: channelCan(ChannelPermission.SPEAK),
 		ownUserId,
 		micMuted: ownVoiceState.micMuted,
@@ -207,7 +207,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const runtime = useVoiceSessionRuntime({
 		currentVoiceChannelId,
-		isConnected: hasServerSession,
+		hasServerSession,
 		voiceSessionReconnectNonce,
 		canSpeak: channelCan(ChannelPermission.SPEAK),
 		getLocalAudioStream: () => localAudioStreamRef.current,

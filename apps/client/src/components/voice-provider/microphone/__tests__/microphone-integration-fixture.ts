@@ -122,7 +122,7 @@ const createHarness = () => {
 		devices: { ...DEFAULT_DEVICE_SETTINGS },
 		currentVoiceChannelId: 1,
 		localAudioStream: undefined,
-		isConnected: true,
+		hasServerSession: true,
 		canSpeak: true,
 		ownUserId: 10,
 	};

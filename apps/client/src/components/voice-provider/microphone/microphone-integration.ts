@@ -43,7 +43,7 @@ type TMicrophoneIntegrationInputs = {
 	devices: TDeviceSettings;
 	currentVoiceChannelId: number | undefined;
 	localAudioStream: MediaStream | undefined;
-	isConnected: boolean;
+	hasServerSession: boolean;
 	canSpeak: boolean;
 	ownUserId: number | undefined;
 };
@@ -131,7 +131,7 @@ const createMicrophoneIntegration = (ports: TMicrophoneIntegrationPorts) => {
 		closeProducerOnServer: ports.closeProducerOnServer,
 		getActivityMode: () => {
 			const inputs = ports.getInputs();
-			if (!inputs.isConnected || !ports.isTransmitGateOpen()) return 'inactive';
+			if (!inputs.hasServerSession || !ports.isTransmitGateOpen()) return 'inactive';
 			return inputs.ownUserId === undefined ? 'unavailable' : 'monitor';
 		},
 		startActivityMonitor: (producer, onUpdate) => ports.startActivityMonitor({ statsProvider: producer, onUpdate }),
