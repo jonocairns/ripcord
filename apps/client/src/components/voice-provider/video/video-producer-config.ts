@@ -2,6 +2,7 @@ import type { RtpCapabilities, RtpCodecCapability } from 'mediasoup-client/types
 import { logVoice } from '@/helpers/browser-logger';
 import { VideoCodecPreference } from '@/types';
 import { getVideoBitratePolicy, type TVideoBitrateCodec, type TVideoBitratePolicy } from './video-bitrate-policy';
+import { SCALABILITY_MODE_FALLBACK_LOG, updateVideoSenderParameters } from './video-sender-parameters';
 
 const VIDEO_CODEC_MIME_TYPE_BY_PREFERENCE: Record<string, string> = {
 	[VideoCodecPreference.VP8]: 'video/VP8',
@@ -28,8 +29,9 @@ const VIDEO_DEGRADATION_PREFERENCE: RTCDegradationPreference = 'balanced';
 // shed a temporal layer per slow viewer (graceful frame-rate drop instead of a
 // frozen/stuttering stream + PLI storms), and reinforces the degradation
 // preference under bitrate pressure. The bitrate configuration below adds a
-// per-codec ceiling. Best on VP9; hardware H264 may fall back to a single layer
-// (L1T1), which is harmless.
+// per-codec ceiling. Best on VP9. Windows hardware H264 cannot encode L1T3, and
+// Chromium keeps reporting it from getParameters, so later sender updates drop
+// to L1T1 via updateVideoSenderParameters.
 const VIDEO_SCALABILITY_MODE = 'L1T3';
 
 type TVideoProducerEncoding = {
@@ -125,20 +127,21 @@ const applyVideoDegradationPreference = async (sender: RTCRtpSender | undefined,
 	}
 
 	try {
-		// setParameters must be passed the object from the immediately preceding
-		// getParameters — they're coupled by its transactionId. Keep this read /
-		// modify / write atomic: any other setParameters landing on this sender
-		// in between would invalidate the transactionId and reject with
-		// InvalidStateError. A future concurrent path (e.g. simulcast layer
-		// toggling) must serialise against this, not interleave.
-		const params = sender.getParameters();
+		// A future concurrent setParameters path (e.g. simulcast layer toggling)
+		// must serialise against this, not interleave — see
+		// updateVideoSenderParameters for the transactionId coupling.
+		const { scalabilityModeFallback } = await updateVideoSenderParameters(sender, (params) => {
+			if (params.degradationPreference === VIDEO_DEGRADATION_PREFERENCE) {
+				return false;
+			}
 
-		if (params.degradationPreference === VIDEO_DEGRADATION_PREFERENCE) {
-			return;
+			params.degradationPreference = VIDEO_DEGRADATION_PREFERENCE;
+			return true;
+		});
+
+		if (scalabilityModeFallback) {
+			logVoice(SCALABILITY_MODE_FALLBACK_LOG, { label });
 		}
-
-		params.degradationPreference = VIDEO_DEGRADATION_PREFERENCE;
-		await sender.setParameters(params);
 	} catch (error) {
 		logVoice('Failed to set degradationPreference', { label, error });
 	}

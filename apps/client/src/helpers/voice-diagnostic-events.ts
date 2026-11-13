@@ -196,6 +196,7 @@ const messages = [
 	'Screen share capture obtained',
 	'Screen share resolution floor applied',
 	'Screen share resolution floor released',
+	'Video sender scalability mode fell back to L1T1',
 	'Sidecar capture started',
 	'Sidecar produced no audio frames after startup',
 	'Skipping desktop app audio recovery because desktop bridge is unavailable',

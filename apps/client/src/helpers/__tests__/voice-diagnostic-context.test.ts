@@ -76,3 +76,11 @@ test('WebSocket diagnostics retain close codes without arbitrary close reasons a
 	).toHaveLength(1);
 	expect(getVoiceDiagnosticContext([null, ['private'], 'private', { attempt: 2 }])).toEqual({ attempt: 2 });
 });
+
+test('voice diagnostics keep the DOMException type for rejected sender parameter updates', () => {
+	expect(
+		getVoiceDiagnosticContext([
+			{ error: new DOMException('Attempted to set RtpParameters scalabilityMode', 'InvalidModificationError') },
+		]),
+	).toEqual({ errorType: 'InvalidModificationError' });
+});

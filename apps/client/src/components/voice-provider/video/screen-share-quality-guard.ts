@@ -1,5 +1,6 @@
 import type { AppData, Producer } from 'mediasoup-client/types';
 import { VIDEO_DEGRADATION_PREFERENCE } from './video-producer-config';
+import { SCALABILITY_MODE_FALLBACK_LOG, updateVideoSenderParameters } from './video-sender-parameters';
 
 // Runtime quality guard for the local screen-share producer, driven by the
 // sender's outbound-rtp stats.
@@ -54,20 +55,22 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 		floorHeight: number,
 	) => {
 		try {
-			// getParameters/setParameters are coupled by transactionId — keep this
-			// read-modify-write free of awaits in between (see the note on
-			// applyVideoDegradationPreference in video-producer-config).
-			const params = sender.getParameters();
-			const encoding = params.encodings?.[0];
+			const { updated, scalabilityModeFallback } = await updateVideoSenderParameters(sender, (params) => {
+				const encoding = params.encodings?.[0];
 
-			if (!encoding) {
-				return;
+				if (!encoding) {
+					return false;
+				}
+
+				encoding.scaleResolutionDownBy = Math.max(1, captureHeight / floorHeight);
+				params.degradationPreference = 'maintain-resolution';
+				return true;
+			});
+			if (!updated || disposed || deps.getProducer() !== producer || producer.closed) return;
+
+			if (scalabilityModeFallback) {
+				deps.log(SCALABILITY_MODE_FALLBACK_LOG);
 			}
-
-			encoding.scaleResolutionDownBy = Math.max(1, captureHeight / floorHeight);
-			params.degradationPreference = 'maintain-resolution';
-			await sender.setParameters(params);
-			if (disposed || deps.getProducer() !== producer || producer.closed) return;
 
 			floorApplied = true;
 			belowFloorSamples = 0;
@@ -85,16 +88,21 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 
 	const releaseResolutionFloor = async (producer: Producer<AppData>, sender: RTCRtpSender) => {
 		try {
-			const params = sender.getParameters();
-			const encoding = params.encodings?.[0];
+			const { scalabilityModeFallback } = await updateVideoSenderParameters(sender, (params) => {
+				const encoding = params.encodings?.[0];
 
-			if (encoding) {
-				encoding.scaleResolutionDownBy = 1;
-			}
+				if (encoding) {
+					encoding.scaleResolutionDownBy = 1;
+				}
 
-			params.degradationPreference = VIDEO_DEGRADATION_PREFERENCE;
-			await sender.setParameters(params);
+				params.degradationPreference = VIDEO_DEGRADATION_PREFERENCE;
+				return true;
+			});
 			if (disposed || deps.getProducer() !== producer || producer.closed) return;
+
+			if (scalabilityModeFallback) {
+				deps.log(SCALABILITY_MODE_FALLBACK_LOG);
+			}
 
 			floorApplied = false;
 			belowFloorSamples = 0;

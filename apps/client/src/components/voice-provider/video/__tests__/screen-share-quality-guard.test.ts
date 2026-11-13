@@ -112,3 +112,55 @@ it.each([
 	expect(log).not.toHaveBeenCalled();
 	dispose();
 });
+
+it('applies the resolution floor when the negotiated codec rejects the published scalability mode', async () => {
+	let tick = () => {};
+	const log = mock((_message: string, _data?: Record<string, unknown>) => {});
+	// Windows hardware H264: getParameters echoes the requested L1T3 while
+	// setParameters rejects it for the negotiated codec.
+	type TSenderParameters = {
+		degradationPreference?: RTCDegradationPreference;
+		encodings: Array<{ scalabilityMode?: string; scaleResolutionDownBy?: number }>;
+	};
+	let current: TSenderParameters = { encodings: [{ scalabilityMode: 'L1T3' }] };
+	const setParameters = mock(async (params: TSenderParameters) => {
+		if (params.encodings.some((encoding) => encoding.scalabilityMode === 'L1T3')) {
+			throw new DOMException('unsupported scalabilityMode', 'InvalidModificationError');
+		}
+		current = structuredClone(params);
+	});
+	const sender = {
+		getParameters: () => structuredClone(current),
+		setParameters,
+		getStats: async () =>
+			new Map([
+				['out', { type: 'outbound-rtp', kind: 'video', frameHeight: 180, qualityLimitationReason: 'bandwidth' }],
+			]),
+	} as unknown as RTCRtpSender;
+	const producer = createProducer('screen', createCapture().videoTrack, sender);
+	const dispose = mountScreenShareQualityGuard({
+		getProducer: () => producer,
+		log,
+		now: () => 0,
+		setInterval: (handler) => {
+			tick = handler;
+			const timer = setInterval(() => {}, 2_000_000_000);
+			timer.unref();
+			return timer;
+		},
+		clearInterval,
+	});
+	for (let i = 0; i < 3; i += 1) {
+		tick();
+		await flush();
+	}
+	expect(setParameters).toHaveBeenCalledTimes(2);
+	expect(current.degradationPreference).toBe('maintain-resolution');
+	expect(current.encodings[0]?.scalabilityMode).toBe('L1T1');
+	expect(current.encodings[0]?.scaleResolutionDownBy).toBe(2);
+	expect(log.mock.calls.map(([message]) => message)).toEqual([
+		'Video sender scalability mode fell back to L1T1',
+		'Screen share resolution floor applied',
+	]);
+	dispose();
+});
