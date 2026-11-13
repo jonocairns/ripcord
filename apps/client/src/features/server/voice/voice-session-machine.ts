@@ -855,7 +855,7 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 			// may still be bound to this connection (see reduceRestoreFailed). The
 			// runner skips the leave only after a teardown, when the server's
 			// disconnect grace reaps the seat; while the app still holds a server
-			// session the leave is deferred until the session is back.
+			// session the leave is deferred until the socket is authenticated again.
 			return failSession(state, 'reconnect-expired', reconnectPhase?.pending.channelId, 'leave-and-clear');
 		}
 		case 'AuthReady':
