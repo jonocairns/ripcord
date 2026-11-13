@@ -850,7 +850,12 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			currentChannelState && ownUserId !== undefined ? currentChannelState.users[ownUserId] : undefined;
 
 		const nextExpiresAt = Date.now() + OPTIMISTIC_VOICE_STATE_TTL_MS;
-		const resetScreenShareWatchers = newState.sharingScreen !== undefined ? { screenShareWatchers: {} } : undefined;
+		// Only a real start or stop resets the audience. Restating an active share
+		// during recovery must keep viewers the server already restated.
+		const resetScreenShareWatchers =
+			newState.sharingScreen !== undefined && newState.sharingScreen !== currentOwnVoiceState?.sharingScreen
+				? { screenShareWatchers: {} }
+				: undefined;
 
 		if (ownChannelId !== undefined && currentChannelState && ownUserId !== undefined && currentOwnVoiceState) {
 			set({

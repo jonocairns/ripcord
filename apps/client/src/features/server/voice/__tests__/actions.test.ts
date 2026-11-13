@@ -652,6 +652,48 @@ describe('voice actions', () => {
 		});
 	});
 
+	it('drops a viewer from the screen share badge when they leave the voice channel', () => {
+		useServerStore.setState({
+			ownUserId: 42,
+			currentVoiceChannelId: 7,
+		});
+		handleStreamWatcherActivity({ watcherId: 10, action: 'joined', kind: StreamKind.SCREEN });
+		handleStreamWatcherActivity({ watcherId: 11, action: 'joined', kind: StreamKind.SCREEN });
+
+		removeUserFromVoiceChannel(10, 7);
+		removeUserFromVoiceChannel(11, 8);
+
+		expect(useServerStore.getState().screenShareWatchers).toEqual({ 11: true });
+	});
+
+	it('restates synced screen share viewers without a cue', () => {
+		handleStreamWatcherActivity({ watcherId: 10, action: 'joined', kind: StreamKind.SCREEN, sync: true });
+
+		expect(useServerStore.getState().screenShareWatchers).toEqual({ 10: true });
+		expect(playSound).not.toHaveBeenCalled();
+	});
+
+	it('keeps screen share viewers when an active share is restated', () => {
+		useServerStore.setState({
+			ownUserId: 42,
+			currentVoiceChannelId: 7,
+			voiceMap: {
+				7: {
+					users: {
+						42: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: true },
+					},
+				},
+			},
+		});
+		handleStreamWatcherActivity({ watcherId: 10, action: 'joined', kind: StreamKind.SCREEN });
+
+		useServerStore.getState().updateOwnVoiceState({ sharingScreen: true });
+		expect(useServerStore.getState().screenShareWatchers).toEqual({ 10: true });
+
+		useServerStore.getState().updateOwnVoiceState({ sharingScreen: false });
+		expect(useServerStore.getState().screenShareWatchers).toEqual({});
+	});
+
 	it('ignores non-screen watcher activity for the screen share badge state', () => {
 		handleStreamWatcherActivity({
 			watcherId: 10,

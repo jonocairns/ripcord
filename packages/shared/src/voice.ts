@@ -25,6 +25,14 @@ export type TVoiceTransportFailureEvent = {
 	transportId?: string;
 };
 
+// Why a client closed a consumer. Only 'stop-watching' is a viewer action that
+// should reach the streamer; 'maintenance' covers repairs, retries, cancelled
+// attempts and stale allocations. Older clients omit it, and servers treat a
+// missing intent as 'stop-watching' to keep their previous behavior.
+export const CLOSE_CONSUMER_INTENTS = ['stop-watching', 'maintenance'] as const;
+
+export type TCloseConsumerIntent = (typeof CLOSE_CONSUMER_INTENTS)[number];
+
 export type TVoiceUserState = {
 	micMuted: boolean;
 	soundMuted: boolean;

@@ -1,4 +1,4 @@
-import { StreamKind, type TStreamEventDetails } from '@sharkord/shared';
+import { StreamKind, type TCloseConsumerIntent, type TStreamEventDetails } from '@sharkord/shared';
 import { CONSUME_ATTEMPT_RPC_TIMEOUT_MS } from './consume-attempt-timeout';
 import { getConsumeRetryDelayMs } from './consume-retry-policy';
 
@@ -24,6 +24,10 @@ type TServerConsumerTarget = {
 	consumerId?: string;
 };
 
+type TServerConsumerCloseTarget = TServerConsumerTarget & {
+	intent: TCloseConsumerIntent;
+};
+
 type TRemoteMediaConsumeControllerPorts<
 	TTransport extends object,
 	TLocalConsumer extends object,
@@ -38,7 +42,7 @@ type TRemoteMediaConsumeControllerPorts<
 		transportId: string,
 	) => Promise<TServerConsumerAllocation<TConsumerRtpParameters>>;
 	resumeServerConsumer: (target: Required<TServerConsumerTarget>) => Promise<void>;
-	closeServerConsumer: (target: TServerConsumerTarget) => Promise<void>;
+	closeServerConsumer: (target: TServerConsumerCloseTarget) => Promise<void>;
 	createLocalConsumer: (
 		transport: TTransport,
 		allocation: TServerConsumerAllocation<TConsumerRtpParameters>,
@@ -226,7 +230,7 @@ const createRemoteMediaConsumeController = <
 			);
 		});
 
-	const closeServerConsumer = async (target: TServerConsumerTarget, reason: string): Promise<void> => {
+	const closeServerConsumer = async (target: TServerConsumerCloseTarget, reason: string): Promise<void> => {
 		const boundaryController = new AbortController();
 		try {
 			await waitForBoundary(ports.closeServerConsumer(target), boundaryController.signal);
@@ -342,7 +346,7 @@ const createRemoteMediaConsumeController = <
 			if (!allocationOwned || serverCleanupStarted || allocation === undefined) return;
 			serverCleanupStarted = true;
 			await closeServerConsumer(
-				{ remoteId: request.remoteId, kind: request.kind, consumerId: allocation.consumerId },
+				{ remoteId: request.remoteId, kind: request.kind, consumerId: allocation.consumerId, intent: 'maintenance' },
 				reason,
 			);
 		};
@@ -353,7 +357,12 @@ const createRemoteMediaConsumeController = <
 			const consumePromise = ports.consumeOnServer(request, ports.getTransportId(operation.transport));
 			allocation = await waitForBoundary(consumePromise, operation.abortController.signal, async (lateAllocation) => {
 				await closeServerConsumer(
-					{ remoteId: request.remoteId, kind: request.kind, consumerId: lateAllocation.consumerId },
+					{
+						remoteId: request.remoteId,
+						kind: request.kind,
+						consumerId: lateAllocation.consumerId,
+						intent: 'maintenance',
+					},
 					'late consume allocation',
 				);
 			});
@@ -621,7 +630,10 @@ const createRemoteMediaConsumeController = <
 		if (activeConsumer) {
 			cleanupActiveConsumer(activeConsumer, { closeLocal: true, notifyLedger: true, reason: 'cancelled' });
 			trackCleanupTask(
-				closeServerConsumer({ remoteId, kind, consumerId: activeConsumer.consumerId }, 'cancel active consumer'),
+				closeServerConsumer(
+					{ remoteId, kind, consumerId: activeConsumer.consumerId, intent: 'maintenance' },
+					'cancel active consumer',
+				),
 			);
 		}
 	};
@@ -638,6 +650,7 @@ const createRemoteMediaConsumeController = <
 		kind: StreamKind,
 		consumerId?: string,
 		reason?: TStreamEventDetails['reason'],
+		intent: TCloseConsumerIntent = 'maintenance',
 	): Promise<void> => {
 		const key = getConsumeOperationKey(remoteId, kind);
 		const activeConsumer = activeConsumers.get(key);
@@ -647,7 +660,7 @@ const createRemoteMediaConsumeController = <
 			cleanupActiveConsumer(activeConsumer, { closeLocal: true, notifyLedger: true, reason });
 		}
 
-		await closeServerConsumer({ remoteId, kind, consumerId: targetConsumerId }, 'explicit close');
+		await closeServerConsumer({ remoteId, kind, consumerId: targetConsumerId, intent }, 'explicit close');
 	};
 
 	// True only for a committed consumer that is still playing this exact

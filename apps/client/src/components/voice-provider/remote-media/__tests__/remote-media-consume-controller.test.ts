@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { StreamKind, type TStreamEventDetails } from '@sharkord/shared';
+import { StreamKind, type TCloseConsumerIntent, type TStreamEventDetails } from '@sharkord/shared';
 import {
 	createRemoteMediaConsumeController,
 	type TRemoteMediaConsumeRequest,
@@ -130,7 +130,7 @@ const createHarness = (observer?: (event: TStreamEventDetails) => void) => {
 	const scheduler = createScheduler();
 	const consumeDeferreds: TDeferred<TServerConsumerAllocation<TTestConsumerRtpParameters>>[] = [];
 	const resumeDeferreds: TDeferred<void>[] = [];
-	const closeCalls: { remoteId: number; kind: StreamKind; consumerId?: string }[] = [];
+	const closeCalls: { remoteId: number; kind: StreamKind; consumerId?: string; intent: TCloseConsumerIntent }[] = [];
 	const createdConsumers: TTestLocalConsumer[] = [];
 	const attachedConsumerIds: string[] = [];
 	const detachedConsumerIds: string[] = [];
@@ -309,7 +309,9 @@ describe('remote media consume controller', () => {
 		harness.consumeDeferreds[0].resolve(allocation('producer-old', 'consumer-old'));
 		await flush();
 
-		expect(harness.closeCalls).toEqual([{ remoteId: 7, kind: StreamKind.VIDEO, consumerId: 'consumer-old' }]);
+		expect(harness.closeCalls).toEqual([
+			{ remoteId: 7, kind: StreamKind.VIDEO, consumerId: 'consumer-old', intent: 'maintenance' },
+		]);
 		expect(harness.attachedConsumerIds).toEqual([]);
 		expect(harness.succeeded).toEqual([]);
 	});
@@ -330,6 +332,7 @@ describe('remote media consume controller', () => {
 			remoteId: 7,
 			kind: StreamKind.VIDEO,
 			consumerId: 'consumer-after-timeout',
+			intent: 'maintenance',
 		});
 		expect(harness.attachedConsumerIds).toEqual([]);
 		expect(harness.failedTokens).toEqual([1]);
@@ -355,6 +358,7 @@ describe('remote media consume controller', () => {
 			remoteId: 8,
 			kind: StreamKind.VIDEO,
 			consumerId: 'consumer-8',
+			intent: 'maintenance',
 		});
 		expect(harness.succeeded).toEqual([]);
 	});
@@ -377,6 +381,7 @@ describe('remote media consume controller', () => {
 			remoteId: 9,
 			kind: StreamKind.SCREEN_AUDIO,
 			consumerId: 'screen-audio-consumer',
+			intent: 'maintenance',
 		});
 		expect(harness.attachedConsumerIds).toEqual([]);
 	});
@@ -404,6 +409,7 @@ describe('remote media consume controller', () => {
 			remoteId: 10,
 			kind: StreamKind.VIDEO,
 			consumerId: 'consumer-stale',
+			intent: 'maintenance',
 		});
 		expect(harness.controller.getActiveConsumerProducerId(10, StreamKind.VIDEO)).toBe('producer-10');
 	});
@@ -434,11 +440,13 @@ describe('remote media consume controller', () => {
 			remoteId: 11,
 			kind: StreamKind.VIDEO,
 			consumerId: 'consumer-old-transport',
+			intent: 'maintenance',
 		});
 		expect(harness.closeCalls).toContainEqual({
 			remoteId: 11,
 			kind: StreamKind.SCREEN_AUDIO,
 			consumerId: 'screen-audio-consumer-old-transport',
+			intent: 'maintenance',
 		});
 	});
 
@@ -467,6 +475,7 @@ describe('remote media consume controller', () => {
 			remoteId: 12,
 			kind: StreamKind.VIDEO,
 			consumerId: 'consumer-old',
+			intent: 'maintenance',
 		});
 	});
 
@@ -484,6 +493,7 @@ describe('remote media consume controller', () => {
 			remoteId: 13,
 			kind: StreamKind.VIDEO,
 			consumerId: 'consumer-13',
+			intent: 'maintenance',
 		});
 		expect(harness.failedTokens).toEqual([1]);
 	});
@@ -505,6 +515,7 @@ describe('remote media consume controller', () => {
 			remoteId: 14,
 			kind: StreamKind.VIDEO,
 			consumerId: 'consumer-14',
+			intent: 'maintenance',
 		});
 		expect(harness.failedTokens).toEqual([1]);
 	});
@@ -526,6 +537,7 @@ describe('remote media consume controller', () => {
 			remoteId: 14,
 			kind: StreamKind.VIDEO,
 			consumerId: 'consumer-closed-locally',
+			intent: 'maintenance',
 		});
 		expect(harness.failedTokens).toEqual([1]);
 	});
@@ -549,6 +561,7 @@ describe('remote media consume controller', () => {
 			remoteId: 14,
 			kind: StreamKind.VIDEO,
 			consumerId: 'consumer-predecessor',
+			intent: 'maintenance',
 		});
 	});
 
@@ -572,6 +585,7 @@ describe('remote media consume controller', () => {
 			remoteId: 14,
 			kind: StreamKind.VIDEO,
 			consumerId: 'consumer-stop',
+			intent: 'maintenance',
 		});
 	});
 
@@ -612,6 +626,7 @@ describe('remote media consume controller', () => {
 			remoteId: 16,
 			kind: StreamKind.VIDEO,
 			consumerId: 'consumer-16',
+			intent: 'maintenance',
 		});
 		expect(harness.failedTokens).toEqual([1]);
 	});

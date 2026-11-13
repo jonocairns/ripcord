@@ -48,6 +48,7 @@ import {
 	type TMediaLivenessState,
 } from './media-liveness';
 import { recordMediaLivenessFailure } from './media-liveness-telemetry';
+import { StreamWatchers } from './stream-watchers';
 import {
 	type ClientVoiceActivityLease,
 	type ClientVoiceActivityOrdering,
@@ -259,6 +260,7 @@ class VoiceRuntime {
 	private appAudioIngests: TAppAudioIngestMap = {};
 	private appAudioIngestCreations = new Map<number, Promise<void>>();
 	private consumers: TConsumerMap = {};
+	private streamWatchers = new StreamWatchers();
 	private audioLevelObserver?: AudioLevelObserver<AppData>;
 	private voiceActivityProducerIdsByUser = new Map<number, string>();
 	private voiceActivityUserIdsByProducer = new Map<string, number>();
@@ -503,6 +505,9 @@ class VoiceRuntime {
 	public removeUser = (userId: number) => {
 		this.state.users = this.state.users.filter((u) => u.userId !== userId);
 
+		// Leaving drops viewing and being viewed without watcher activity: the
+		// channel's USER_LEAVE_VOICE already tells the streamer.
+		this.streamWatchers.removeUser(userId);
 		this.cleanupUserResources(userId);
 		this.clearClientVoiceActivity(userId);
 		this.clientVoiceStateSeqs.delete(userId);
@@ -1492,6 +1497,15 @@ class VoiceRuntime {
 			this.addAudioProducerToVoiceActivityObserver(userId, producer);
 		}
 
+		// A streamer re-publishes their screen after every voice restore, and
+		// their client starts that restore with an empty watcher list. Viewers
+		// who kept watching across it rewatch silently, so restate them.
+		if (type === StreamKind.SCREEN) {
+			for (const watcherId of this.streamWatchers.getWatcherIds(userId, StreamKind.SCREEN)) {
+				this.publishWatcherActivity(watcherId, userId, StreamKind.SCREEN, 'joined', { sync: true });
+			}
+		}
+
 		producer.observer.on('close', () => {
 			const recoverableClose = this.recoverableProducerClosures.has(producer);
 			recordServerStreamEvent(userId, {
@@ -1523,6 +1537,13 @@ class VoiceRuntime {
 				if (this.screenProducers[userId] !== producer) return;
 				delete this.screenProducers[userId];
 				this.endStreamOnProducerClose(userId, 'sharingScreen', recoverableClose);
+				// Viewers only rewatch a share they choose to, so an ended share
+				// ends its audience. A recoverable close keeps it for the restore.
+				// Webcam viewers keep watching across a webcam toggle, so their
+				// membership survives until either side stops or leaves.
+				if (!recoverableClose) {
+					this.streamWatchers.removeStream(userId, StreamKind.SCREEN);
+				}
 			} else if (type === StreamKind.SCREEN_AUDIO) {
 				if (this.screenAudioProducers[userId] !== producer) return;
 				delete this.screenAudioProducers[userId];
@@ -1595,12 +1616,11 @@ class VoiceRuntime {
 			existingConsumer.close();
 		}
 
-		if (kind === StreamKind.VIDEO || kind === StreamKind.SCREEN) {
-			pubsub.publishFor(remoteId, ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY, {
-				watcherId: userId,
-				kind,
-				action: 'joined',
-			});
+		// Clients consume paused and resume once the track is attached, so the
+		// viewer counts as watching from resumeConsumer. An unpaused consume has
+		// no resume step and counts now.
+		if (!consumer.paused) {
+			this.markWatching(userId, remoteId, kind);
 		}
 
 		consumer.observer.on('close', () => {
@@ -1619,14 +1639,10 @@ class VoiceRuntime {
 				return;
 			}
 
-			if (kind === StreamKind.VIDEO || kind === StreamKind.SCREEN) {
-				pubsub.publishFor(remoteId, ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY, {
-					watcherId: userId,
-					kind,
-					action: 'left',
-				});
-			}
-
+			// A consumer closing is not the viewer leaving: repairs, transport
+			// rebuilds and producer restores close consumers the viewer still
+			// wants. Watching ends through stopWatching, a terminal stream close,
+			// or removeUser.
 			delete this.consumers[userId]?.[remoteId]?.[kind];
 
 			if (this.consumers[userId]?.[remoteId]) {
@@ -1643,18 +1659,60 @@ class VoiceRuntime {
 		});
 	};
 
-	public removeConsumer = (userId: number, remoteId: number, kind: StreamKind, expectedConsumerId?: string) => {
+	public removeConsumer = (
+		userId: number,
+		remoteId: number,
+		kind: StreamKind,
+		expectedConsumerId?: string,
+		options: { stopWatching?: boolean } = {},
+	) => {
 		const consumer = this.consumers[userId]?.[remoteId]?.[kind];
 
-		if (!consumer) {
+		if (consumer && (expectedConsumerId === undefined || consumer.id === expectedConsumerId)) {
+			consumer.close();
+		}
+
+		if (!options.stopWatching) {
 			return;
 		}
 
-		if (expectedConsumerId !== undefined && consumer.id !== expectedConsumerId) {
+		// A stop can arrive after a maintenance close already dropped the
+		// consumer, so it applies with no consumer too. A newer consumer that the
+		// stop did not target means the viewer is watching again; keep them.
+		const survivingConsumer = this.consumers[userId]?.[remoteId]?.[kind];
+
+		if (survivingConsumer && !survivingConsumer.closed) {
 			return;
 		}
 
-		consumer.close();
+		if (this.streamWatchers.remove(userId, remoteId, kind)) {
+			this.publishWatcherActivity(userId, remoteId, kind, 'left');
+		}
+	};
+
+	private markWatching = (userId: number, remoteId: number, kind: StreamKind) => {
+		if (this.streamWatchers.add(userId, remoteId, kind)) {
+			this.publishWatcherActivity(userId, remoteId, kind, 'joined');
+		}
+	};
+
+	private publishWatcherActivity = (
+		watcherId: number,
+		remoteId: number,
+		kind: StreamKind,
+		action: 'joined' | 'left',
+		options: { sync?: true } = {},
+	) => {
+		if (kind !== StreamKind.VIDEO && kind !== StreamKind.SCREEN) {
+			return;
+		}
+
+		pubsub.publishFor(remoteId, ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY, {
+			watcherId,
+			kind,
+			action,
+			...options,
+		});
 	};
 
 	public resumeConsumer = async (userId: number, remoteId: number, kind: StreamKind, expectedConsumerId?: string) => {
@@ -1673,6 +1731,13 @@ class VoiceRuntime {
 			consumerId: consumer.id,
 			producerId: consumer.producerId,
 		});
+
+		// The resume await can race a stop or a newer consumer; only the consumer
+		// that is still active proves the viewer is watching.
+		if (!consumer.closed && this.consumers[userId]?.[remoteId]?.[kind] === consumer) {
+			this.markWatching(userId, remoteId, kind);
+		}
+
 		return true;
 	};
 

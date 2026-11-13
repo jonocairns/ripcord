@@ -308,6 +308,12 @@ export const removeUserFromVoiceChannel = (
 	clearPinnedCardById(`user-${userId}`);
 	clearPinnedCardById(`screen-share-${userId}`);
 
+	// The server drops a departed viewer from its watcher list without watcher
+	// activity, so the streamer's count follows the leave itself.
+	if (userId !== ownUserId && channelId === currentChannelId) {
+		useServerStore.getState().removeScreenShareWatcher(userId);
+	}
+
 	if (userId === ownUserId && pendingVoiceSwitchFromChannelIds.has(channelId)) {
 		pendingVoiceSwitchFromChannelIds.delete(channelId);
 		if (channelId === currentChannelId) {
@@ -415,8 +421,13 @@ export const handleStreamWatcherActivity = (activity: {
 	watcherId: number;
 	action: 'joined' | 'left';
 	kind: StreamKind.VIDEO | StreamKind.SCREEN;
+	sync?: true;
 }): void => {
-	playSound(activity.action === 'joined' ? SoundType.STREAM_WATCHER_JOINED : SoundType.STREAM_WATCHER_LEFT);
+	// Sync events restate viewers after this client rebuilt its list; only a
+	// viewer's own start or stop is worth a cue.
+	if (!activity.sync) {
+		playSound(activity.action === 'joined' ? SoundType.STREAM_WATCHER_JOINED : SoundType.STREAM_WATCHER_LEFT);
+	}
 
 	if (activity.kind === StreamKind.SCREEN) {
 		if (activity.action === 'joined') {

@@ -1,4 +1,4 @@
-import type { StreamKind, TStreamEventDetails } from '@sharkord/shared';
+import type { StreamKind, TCloseConsumerIntent, TStreamEventDetails } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
 import {
 	isConsumeCommandRunnable,
@@ -23,6 +23,7 @@ type TCloseRemoteConsumer = (
 	kind: StreamKind,
 	consumerId?: string,
 	reason?: TStreamEventDetails['reason'],
+	intent?: TCloseConsumerIntent,
 ) => Promise<unknown>;
 
 export const createRemoteMediaCommandRunner =
@@ -41,7 +42,7 @@ export const createRemoteMediaCommandRunner =
 				restartExisting: command.isManualRetry,
 			});
 		} else if (command.type === 'closeConsumer') {
-			void ports.closeConsumer(command.remoteId, command.kind, command.consumerId, command.reason);
+			void ports.closeConsumer(command.remoteId, command.kind, command.consumerId, command.reason, command.intent);
 		}
 	};
 export type { TCloseRemoteConsumer, TConsumeRemoteMedia };

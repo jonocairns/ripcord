@@ -114,6 +114,9 @@ export type Events = {
 		watcherId: number;
 		kind: StreamKind.VIDEO | StreamKind.SCREEN;
 		action: 'joined' | 'left';
+		// Restates an existing viewer to a streamer whose client rebuilt its
+		// watcher list; not a viewer action, so no cue. Older clients ignore it.
+		sync?: true;
 	};
 
 	[ServerEvents.PLUGIN_LOG]: TLogEntry;

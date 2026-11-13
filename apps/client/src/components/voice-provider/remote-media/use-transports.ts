@@ -1,6 +1,7 @@
 import {
 	getMediasoupKind,
 	StreamKind,
+	type TCloseConsumerIntent,
 	type TRemoteProducerIds,
 	type TStreamEventDetails,
 	type TTransportParams,
@@ -730,8 +731,13 @@ const useTransports = ({
 	);
 
 	const closeConsumer = useCallback(
-		(remoteId: number, kind: StreamKind, consumerId?: string, reason?: TStreamEventDetails['reason']) =>
-			consumeController.closeConsumer(remoteId, kind, consumerId, reason),
+		(
+			remoteId: number,
+			kind: StreamKind,
+			consumerId?: string,
+			reason?: TStreamEventDetails['reason'],
+			intent?: TCloseConsumerIntent,
+		) => consumeController.closeConsumer(remoteId, kind, consumerId, reason, intent),
 		[consumeController],
 	);
 
