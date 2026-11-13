@@ -639,7 +639,14 @@ class VoiceRuntime {
 
 		if (!user) return;
 
+		const wasSharingScreen = user.state.sharingScreen;
 		user.state = { ...user.state, ...newState };
+
+		// An ended share ends its audience, however it ended: the streamer's own
+		// stop, a terminal producer close, or a restore grace running out.
+		if (wasSharingScreen && !user.state.sharingScreen) {
+			this.streamWatchers.removeStream(userId, StreamKind.SCREEN);
+		}
 
 		if (newState.micMuted === true) {
 			this.observerSpeakingUserIds.delete(userId);
@@ -1530,10 +1537,11 @@ class VoiceRuntime {
 				if (this.screenProducers[userId] !== producer) return;
 				delete this.screenProducers[userId];
 				this.endStreamOnProducerClose(userId, 'sharingScreen', recoverableClose);
-				// Viewers only rewatch a share they choose to, so an ended share
-				// ends its audience. A recoverable close keeps it for the restore.
-				// Webcam viewers keep watching across a webcam toggle, so their
-				// membership survives until either side stops or leaves.
+				// The flag reset above normally clears the audience; this also covers
+				// a terminal close while the flag was already false. A recoverable
+				// close keeps the audience for the restore. Webcam viewers keep
+				// watching across a webcam toggle, so their membership survives
+				// until either side stops or leaves.
 				if (!recoverableClose) {
 					this.streamWatchers.removeStream(userId, StreamKind.SCREEN);
 				}

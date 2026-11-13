@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterEach, describe, expect, jest, spyOn, test } from 'bun:test';
 import { ServerEvents, StreamKind } from '@sharkord/shared';
 import type { AppData, Consumer, Producer } from 'mediasoup/types';
 import { pubsub } from '../../utils/pubsub';
@@ -235,6 +235,43 @@ describe('VoiceRuntime stream watcher activity', () => {
 		await watch('screen-3');
 
 		expect(watcherActions()).toEqual(['joined', 'joined-sync', 'joined']);
+	});
+
+	test("a streamer's own stop ends the audience", async () => {
+		const { runtime, watcherActions, watch } = await setup();
+
+		runtime.updateUserState(STREAMER, { sharingScreen: true });
+		await watch('screen-1');
+		runtime.updateUserState(STREAMER, { sharingScreen: false });
+		runtime.updateUserState(STREAMER, { sharingScreen: true });
+		await watch('screen-2');
+
+		expect(watcherActions()).toEqual(['joined', 'joined']);
+	});
+
+	test('a share that is never restored ends its audience when the grace runs out', async () => {
+		const { runtime, watcherActions, watch } = await setup();
+
+		runtime.updateUserState(STREAMER, { sharingScreen: true });
+		runtime.addProducer(STREAMER, StreamKind.SCREEN, makeProducer('screen-producer-1'));
+		await watch('screen-1');
+
+		jest.useFakeTimers();
+		try {
+			runtime.removeProducer(STREAMER, StreamKind.SCREEN, { recoverable: true });
+			jest.advanceTimersByTime(15_000);
+		} finally {
+			jest.useRealTimers();
+		}
+
+		expect(runtime.getUserState(STREAMER).sharingScreen).toBe(false);
+
+		// A new share is a new audience, so a rewatch is a real join.
+		runtime.updateUserState(STREAMER, { sharingScreen: true });
+		runtime.addProducer(STREAMER, StreamKind.SCREEN, makeProducer('screen-producer-2'));
+		await watch('screen-2');
+
+		expect(watcherActions()).toEqual(['joined', 'joined']);
 	});
 
 	test('webcam viewers keep watching across a webcam toggle', async () => {
