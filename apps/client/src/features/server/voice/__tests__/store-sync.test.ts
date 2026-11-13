@@ -239,7 +239,7 @@ describe('voice store own state derivation', () => {
 		expect(ownVoiceStateSelector(useServerStore.getState())).toEqual(createVoiceState());
 	});
 
-	it('clears screen share watchers when the local own share state changes', () => {
+	it('clears screen share watchers when the local own share stops but not when it is restated', () => {
 		useServerStore.setState({
 			screenShareWatchers: {
 				10: true,
@@ -249,6 +249,12 @@ describe('voice store own state derivation', () => {
 
 		useServerStore.getState().updateOwnVoiceState({
 			sharingScreen: true,
+		});
+
+		expect(useServerStore.getState().screenShareWatchers).toEqual({ 10: true, 11: true });
+
+		useServerStore.getState().updateOwnVoiceState({
+			sharingScreen: false,
 		});
 
 		expect(useServerStore.getState().screenShareWatchers).toEqual({});

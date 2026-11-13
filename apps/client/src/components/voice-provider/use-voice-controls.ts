@@ -190,6 +190,8 @@ const useVoiceControls = ({
 					onVideoTrackStarted: () => {
 						if (!transition.isCurrent()) return;
 						finishScreenShareStart();
+						// A new share starts with no audience; recovery republishes skip this.
+						useServerStore.getState().resetScreenShareWatchers();
 						updateOwnVoiceState({ sharingScreen: true });
 						playSound(SoundType.OWN_USER_STARTED_SCREENSHARE);
 					},

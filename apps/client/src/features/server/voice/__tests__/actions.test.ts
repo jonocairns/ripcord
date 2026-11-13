@@ -662,19 +662,20 @@ describe('voice actions', () => {
 		expect(playSound).not.toHaveBeenCalled();
 	});
 
-	it('keeps screen share viewers when an active share is restated', () => {
+	it('keeps screen share viewers across a recovery restatement and clears them on stop', () => {
 		useServerStore.setState({
 			ownUserId: 42,
 			currentVoiceChannelId: 7,
 			voiceMap: {
 				7: {
 					users: {
-						42: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: true },
+						// The server reset the own row when the producer closed recoverably.
+						42: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: false },
 					},
 				},
 			},
 		});
-		handleStreamWatcherActivity({ watcherId: 10, action: 'joined', kind: StreamKind.SCREEN });
+		handleStreamWatcherActivity({ watcherId: 10, action: 'joined', kind: StreamKind.SCREEN, sync: true });
 
 		useServerStore.getState().updateOwnVoiceState({ sharingScreen: true });
 		expect(useServerStore.getState().screenShareWatchers).toEqual({ 10: true });
