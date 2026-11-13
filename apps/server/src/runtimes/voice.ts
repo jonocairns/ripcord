@@ -505,9 +505,11 @@ class VoiceRuntime {
 	public removeUser = (userId: number) => {
 		this.state.users = this.state.users.filter((u) => u.userId !== userId);
 
-		// Leaving drops viewing and being viewed without watcher activity: the
-		// channel's USER_LEAVE_VOICE already tells the streamer.
-		this.streamWatchers.removeUser(userId);
+		// Leaving ends viewing and being viewed. The channel's USER_LEAVE_VOICE
+		// already cues the streamer, so the badge update is a silent sync.
+		for (const { remoteId, kind } of this.streamWatchers.removeUser(userId)) {
+			this.publishWatcherActivity(userId, remoteId, kind, 'left', { sync: true });
+		}
 		this.cleanupUserResources(userId);
 		this.clearClientVoiceActivity(userId);
 		this.clientVoiceStateSeqs.delete(userId);
@@ -1497,15 +1499,6 @@ class VoiceRuntime {
 			this.addAudioProducerToVoiceActivityObserver(userId, producer);
 		}
 
-		// A streamer re-publishes their screen after every voice restore, and
-		// their client starts that restore with an empty watcher list. Viewers
-		// who kept watching across it rewatch silently, so restate them.
-		if (type === StreamKind.SCREEN) {
-			for (const watcherId of this.streamWatchers.getWatcherIds(userId, StreamKind.SCREEN)) {
-				this.publishWatcherActivity(watcherId, userId, StreamKind.SCREEN, 'joined', { sync: true });
-			}
-		}
-
 		producer.observer.on('close', () => {
 			const recoverableClose = this.recoverableProducerClosures.has(producer);
 			recordServerStreamEvent(userId, {
@@ -1690,9 +1683,30 @@ class VoiceRuntime {
 		}
 	};
 
-	private markWatching = (userId: number, remoteId: number, kind: StreamKind) => {
+	// A rewatch by an existing viewer (after a repair, reconnect or restore) is
+	// restated as a silent sync: the streamer's client may have rebuilt its
+	// watcher list meanwhile, and it only hears about viewers who came back.
+	private markWatching = (userId: number, remoteId: number, kind: StreamKind, options: { restate?: boolean } = {}) => {
 		if (this.streamWatchers.add(userId, remoteId, kind)) {
 			this.publishWatcherActivity(userId, remoteId, kind, 'joined');
+		} else if (options.restate && this.streamWatchers.has(userId, remoteId, kind)) {
+			this.publishWatcherActivity(userId, remoteId, kind, 'joined', { sync: true });
+		}
+	};
+
+	// Called when the viewer is about to receive a producer snapshot. Their
+	// client drops screen-watch intent for a screen missing from it (webcam
+	// intent survives), so membership for such a screen ends here too; otherwise
+	// a share restored later would count a viewer who never rewatches.
+	public forgetWatchesMissingFromSnapshot = (userId: number) => {
+		for (const { remoteId, kind } of this.streamWatchers.getWatchedStreams(userId)) {
+			if (kind !== StreamKind.SCREEN || this.screenProducers[remoteId]) {
+				continue;
+			}
+
+			if (this.streamWatchers.remove(userId, remoteId, kind)) {
+				this.publishWatcherActivity(userId, remoteId, kind, 'left', { sync: true });
+			}
 		}
 	};
 
@@ -1735,7 +1749,7 @@ class VoiceRuntime {
 		// The resume await can race a stop or a newer consumer; only the consumer
 		// that is still active proves the viewer is watching.
 		if (!consumer.closed && this.consumers[userId]?.[remoteId]?.[kind] === consumer) {
-			this.markWatching(userId, remoteId, kind);
+			this.markWatching(userId, remoteId, kind, { restate: true });
 		}
 
 		return true;

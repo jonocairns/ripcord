@@ -114,14 +114,14 @@ describe('VoiceRuntime stream watcher activity', () => {
 				.filter((call) => call[1] === ServerEvents.VOICE_STREAM_WATCHER_ACTIVITY)
 				.map((call) => ({ to: call[0], payload: call[2] }));
 
-		// Silent restatements show as 'sync' so tests can tell them from cues.
+		// Silent badge updates show as '<action>-sync' so tests can tell them from cues.
 		const watcherActions = () =>
 			watcherActivity().flatMap(({ payload }) => {
 				if (typeof payload !== 'object' || payload === null || !('action' in payload)) {
 					return [];
 				}
 
-				return ['sync' in payload && payload.sync ? 'sync' : payload.action];
+				return ['sync' in payload && payload.sync ? `${payload.action}-sync` : payload.action];
 			});
 
 		const watch = async (consumerId: string, kind: StreamKind = StreamKind.SCREEN) => {
@@ -154,7 +154,7 @@ describe('VoiceRuntime stream watcher activity', () => {
 		]);
 	});
 
-	test('repairs and replacement consumers stay silent', async () => {
+	test('repairs and replacement consumers only restate the viewer silently', async () => {
 		const { runtime, watcherActions, watch } = await setup();
 
 		await watch('screen-1');
@@ -162,7 +162,7 @@ describe('VoiceRuntime stream watcher activity', () => {
 		await watch('screen-2');
 		await watch('screen-3');
 
-		expect(watcherActions()).toEqual(['joined']);
+		expect(watcherActions()).toEqual(['joined', 'joined-sync', 'joined-sync']);
 	});
 
 	test('a stop ends watching even after a repair dropped the consumer', async () => {
@@ -185,7 +185,7 @@ describe('VoiceRuntime stream watcher activity', () => {
 		await watch('screen-2');
 		runtime.removeConsumer(VIEWER, STREAMER, StreamKind.SCREEN, 'screen-1', { stopWatching: true });
 
-		expect(watcherActions()).toEqual(['joined']);
+		expect(watcherActions()).toEqual(['joined', 'joined-sync']);
 	});
 
 	test('a resume that loses a race with a stop does not count as watching', async () => {
@@ -200,20 +200,21 @@ describe('VoiceRuntime stream watcher activity', () => {
 		expect(watcherActivity()).toEqual([]);
 	});
 
-	test('a departing viewer or streamer ends watching without watcher activity', async () => {
-		const { runtime, watcherActions, watch } = await setup();
+	test('a departing viewer is a silent badge update and a departing streamer sends nothing', async () => {
+		const { runtime, watcherActivity, watcherActions, watch } = await setup();
 
 		await watch('screen-1');
 		await watch('video-1', StreamKind.VIDEO);
 		runtime.removeUser(VIEWER);
 
-		expect(watcherActions()).toEqual(['joined', 'joined']);
+		expect(watcherActions()).toEqual(['joined', 'joined', 'left-sync', 'left-sync']);
+		expect(watcherActivity().every((event) => event.to === STREAMER)).toBe(true);
 
 		runtime.addUser(VIEWER, { micMuted: false, soundMuted: false });
 		await watch('screen-2');
 		runtime.removeUser(STREAMER);
 
-		expect(watcherActions()).toEqual(['joined', 'joined', 'joined']);
+		expect(watcherActions()).toEqual(['joined', 'joined', 'left-sync', 'left-sync', 'joined']);
 	});
 
 	test('an ended screen share forgets its viewers but a recoverable close keeps them', async () => {
@@ -226,15 +227,44 @@ describe('VoiceRuntime stream watcher activity', () => {
 		runtime.addProducer(STREAMER, StreamKind.SCREEN, makeProducer('screen-producer-2'));
 		await watch('screen-2');
 
-		// The restored share restates its viewer silently for the streamer's
-		// rebuilt list; the viewer's rewatch itself makes no cue.
-		expect(watcherActions()).toEqual(['joined', 'sync']);
+		// The rewatch of the restored share restates the viewer silently.
+		expect(watcherActions()).toEqual(['joined', 'joined-sync']);
 
 		runtime.removeProducer(STREAMER, StreamKind.SCREEN);
 		runtime.addProducer(STREAMER, StreamKind.SCREEN, makeProducer('screen-producer-3'));
 		await watch('screen-3');
 
-		expect(watcherActions()).toEqual(['joined', 'sync', 'joined']);
+		expect(watcherActions()).toEqual(['joined', 'joined-sync', 'joined']);
+	});
+
+	test('a viewer whose snapshot misses a paused share stops counting until they rewatch', async () => {
+		const { runtime, watcherActivity, watcherActions, watch } = await setup();
+
+		runtime.addProducer(STREAMER, StreamKind.SCREEN, makeProducer('screen-producer-1'));
+		await watch('screen-1');
+
+		// The share is mid-restore when the viewer reconnects and reconciles; the
+		// viewer's client drops screen-watch intent for a screen it cannot see.
+		runtime.removeProducer(STREAMER, StreamKind.SCREEN, { recoverable: true });
+		runtime.forgetWatchesMissingFromSnapshot(VIEWER);
+		expect(watcherActions()).toEqual(['joined', 'left-sync']);
+
+		runtime.addProducer(STREAMER, StreamKind.SCREEN, makeProducer('screen-producer-2'));
+		expect(watcherActivity()).toHaveLength(2);
+
+		await watch('screen-2');
+		expect(watcherActions()).toEqual(['joined', 'left-sync', 'joined']);
+	});
+
+	test('a snapshot keeps live screens and absent webcams watched', async () => {
+		const { runtime, watcherActions, watch } = await setup();
+
+		runtime.addProducer(STREAMER, StreamKind.SCREEN, makeProducer('screen-producer-1'));
+		await watch('screen-1');
+		await watch('video-1', StreamKind.VIDEO);
+		runtime.forgetWatchesMissingFromSnapshot(VIEWER);
+
+		expect(watcherActions()).toEqual(['joined', 'joined']);
 	});
 
 	test('webcam viewers keep watching across a webcam toggle', async () => {
@@ -247,6 +277,6 @@ describe('VoiceRuntime stream watcher activity', () => {
 		runtime.addProducer(STREAMER, StreamKind.VIDEO, makeProducer('video-producer-2'));
 		await watch('video-2', StreamKind.VIDEO);
 
-		expect(watcherActions()).toEqual(['joined']);
+		expect(watcherActions()).toEqual(['joined', 'joined-sync']);
 	});
 });

@@ -652,24 +652,13 @@ describe('voice actions', () => {
 		});
 	});
 
-	it('drops a viewer from the screen share badge when they leave the voice channel', () => {
-		useServerStore.setState({
-			ownUserId: 42,
-			currentVoiceChannelId: 7,
-		});
-		handleStreamWatcherActivity({ watcherId: 10, action: 'joined', kind: StreamKind.SCREEN });
-		handleStreamWatcherActivity({ watcherId: 11, action: 'joined', kind: StreamKind.SCREEN });
-
-		removeUserFromVoiceChannel(10, 7);
-		removeUserFromVoiceChannel(11, 8);
-
-		expect(useServerStore.getState().screenShareWatchers).toEqual({ 11: true });
-	});
-
-	it('restates synced screen share viewers without a cue', () => {
+	it('applies synced screen share watcher updates without a cue', () => {
 		handleStreamWatcherActivity({ watcherId: 10, action: 'joined', kind: StreamKind.SCREEN, sync: true });
-
 		expect(useServerStore.getState().screenShareWatchers).toEqual({ 10: true });
+
+		handleStreamWatcherActivity({ watcherId: 10, action: 'left', kind: StreamKind.SCREEN, sync: true });
+		expect(useServerStore.getState().screenShareWatchers).toEqual({});
+
 		expect(playSound).not.toHaveBeenCalled();
 	});
 

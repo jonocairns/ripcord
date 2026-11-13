@@ -2,6 +2,11 @@ import { StreamKind } from '@sharkord/shared';
 
 type TWatchedStreamKind = StreamKind.VIDEO | StreamKind.SCREEN;
 
+type TWatchedStream = {
+	remoteId: number;
+	kind: TWatchedStreamKind;
+};
+
 const isWatchedStreamKind = (kind: StreamKind): kind is TWatchedStreamKind =>
 	kind === StreamKind.VIDEO || kind === StreamKind.SCREEN;
 
@@ -13,7 +18,7 @@ const getStreamKey = (remoteId: number, kind: TWatchedStreamKind) => `${remoteId
 // watching, a stream ends, or someone leaves the channel. Watcher activity
 // events (and the streamer's join/leave sounds) follow this, not consumers.
 class StreamWatchers {
-	private watchersByStream = new Map<string, Set<number>>();
+	private watchersByStream = new Map<string, { stream: TWatchedStream; watcherIds: Set<number> }>();
 
 	// Returns true only when the viewer was not already watching.
 	public add = (watcherId: number, remoteId: number, kind: StreamKind): boolean => {
@@ -22,14 +27,14 @@ class StreamWatchers {
 		}
 
 		const key = getStreamKey(remoteId, kind);
-		const watchers = this.watchersByStream.get(key) ?? new Set<number>();
+		const entry = this.watchersByStream.get(key) ?? { stream: { remoteId, kind }, watcherIds: new Set<number>() };
 
-		if (watchers.has(watcherId)) {
+		if (entry.watcherIds.has(watcherId)) {
 			return false;
 		}
 
-		watchers.add(watcherId);
-		this.watchersByStream.set(key, watchers);
+		entry.watcherIds.add(watcherId);
+		this.watchersByStream.set(key, entry);
 		return true;
 	};
 
@@ -40,18 +45,22 @@ class StreamWatchers {
 		}
 
 		const key = getStreamKey(remoteId, kind);
-		const watchers = this.watchersByStream.get(key);
+		const entry = this.watchersByStream.get(key);
 
-		if (!watchers?.delete(watcherId)) {
+		if (!entry?.watcherIds.delete(watcherId)) {
 			return false;
 		}
 
-		if (watchers.size === 0) {
+		if (entry.watcherIds.size === 0) {
 			this.watchersByStream.delete(key);
 		}
 
 		return true;
 	};
+
+	public has = (watcherId: number, remoteId: number, kind: StreamKind): boolean =>
+		isWatchedStreamKind(kind) &&
+		this.watchersByStream.get(getStreamKey(remoteId, kind))?.watcherIds.has(watcherId) === true;
 
 	public removeStream = (remoteId: number, kind: StreamKind) => {
 		if (!isWatchedStreamKind(kind)) {
@@ -61,26 +70,22 @@ class StreamWatchers {
 		this.watchersByStream.delete(getStreamKey(remoteId, kind));
 	};
 
-	public getWatcherIds = (remoteId: number, kind: StreamKind): number[] => {
-		if (!isWatchedStreamKind(kind)) {
-			return [];
-		}
+	public getWatchedStreams = (watcherId: number): TWatchedStream[] =>
+		[...this.watchersByStream.values()].filter((entry) => entry.watcherIds.has(watcherId)).map((entry) => entry.stream);
 
-		return [...(this.watchersByStream.get(getStreamKey(remoteId, kind)) ?? [])];
-	};
-
-	// Drops the user both as a viewer and as a streamer.
-	public removeUser = (userId: number) => {
+	// Drops the user both as a viewer and as a streamer, returning the streams
+	// they were watching so their streamers can be told.
+	public removeUser = (userId: number): TWatchedStream[] => {
 		this.removeStream(userId, StreamKind.VIDEO);
 		this.removeStream(userId, StreamKind.SCREEN);
 
-		for (const [key, watchers] of this.watchersByStream) {
-			watchers.delete(userId);
+		const watched = this.getWatchedStreams(userId);
 
-			if (watchers.size === 0) {
-				this.watchersByStream.delete(key);
-			}
+		for (const { remoteId, kind } of watched) {
+			this.remove(userId, remoteId, kind);
 		}
+
+		return watched;
 	};
 }
 
