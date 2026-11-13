@@ -25,7 +25,7 @@ import type { TDisconnectInfo, TMessagesMap } from './types';
 import { resolveOwnVoiceState, type TOwnPushHold, type TOwnVoiceIntent } from './voice/own-voice-state';
 
 export interface IServerState {
-	connected: boolean;
+	hasServerSession: boolean;
 	connecting: boolean;
 	mustChangePassword: boolean;
 	disconnectInfo?: TDisconnectInfo;
@@ -84,7 +84,6 @@ export type TInitialServerData = {
 
 type TServerStore = IServerState & {
 	resetState: () => void;
-	setConnected: (connected: boolean) => void;
 	setConnecting: (connecting: boolean) => void;
 	setMustChangePassword: (mustChangePassword: boolean) => void;
 	setServerId: (serverId: string | undefined) => void;
@@ -148,7 +147,7 @@ type TServerStore = IServerState & {
 };
 
 const initialState: IServerState = {
-	connected: false,
+	hasServerSession: false,
 	connecting: false,
 	mustChangePassword: false,
 	disconnectInfo: undefined,
@@ -353,12 +352,6 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 			ownVoiceIntent: get().ownVoiceIntent,
 		});
 	},
-	setConnected: (connected) => {
-		set({
-			connected,
-			connecting: false,
-		});
-	},
 	setConnecting: (connecting) => {
 		set({ connecting });
 	},
@@ -382,7 +375,7 @@ export const useServerStore = create<TServerStore>((set, get) => ({
 		const selectedChannelId = get().selectedChannelId;
 
 		set({
-			connected: true,
+			hasServerSession: true,
 			mustChangePassword: data.mustChangePassword,
 			categories: data.categories,
 			channels: data.channels,

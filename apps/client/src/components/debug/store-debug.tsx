@@ -6,7 +6,7 @@ import { logDebug } from '@/helpers/browser-logger';
 const StoreDebug = () => {
 	const server = useServerStore(
 		useShallow((state) => ({
-			connected: state.connected,
+			hasServerSession: state.hasServerSession,
 			connecting: state.connecting,
 			mustChangePassword: state.mustChangePassword,
 			disconnectInfo: state.disconnectInfo,

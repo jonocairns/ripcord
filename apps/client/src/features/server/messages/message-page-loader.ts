@@ -5,7 +5,7 @@ import { createMessagePageRequest, subscribeToMessageMutations } from './message
 type TSession = {
 	channelId: number;
 	messageSession: number;
-	connected: boolean;
+	hasServerSession: boolean;
 	serverId: string | undefined;
 	nonce: number;
 	client: unknown;
@@ -51,7 +51,7 @@ export const createMessagePageLoader = (deps: TLoaderDeps) => {
 			return (
 				current.channelId === deps.channelId &&
 				current.messageSession === session.messageSession &&
-				current.connected &&
+				current.hasServerSession &&
 				current.serverId === session.serverId &&
 				current.nonce === session.nonce &&
 				current.client === session.client &&

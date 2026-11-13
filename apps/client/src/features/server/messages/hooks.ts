@@ -42,7 +42,7 @@ export const useMessages = (channelId: number) => {
 				return {
 					channelId: channelRef.current,
 					messageSession: getMessageSession(),
-					connected: state.connected,
+					hasServerSession: state.hasServerSession,
 					serverId: state.serverId,
 					nonce: serverRejoinNonceSelector(state),
 					client: getTRPCClientIfInitialized(),
@@ -73,7 +73,7 @@ export const useMessages = (channelId: number) => {
 		const unsubscribeState = useServerStore.subscribe((state, previous) => {
 			if (
 				state.serverId !== previous.serverId ||
-				(previous.connected && !state.connected) ||
+				(previous.hasServerSession && !state.hasServerSession) ||
 				serverRejoinNonceSelector(state) < serverRejoinNonceSelector(previous)
 			)
 				requests.invalidate();

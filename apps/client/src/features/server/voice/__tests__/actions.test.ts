@@ -141,7 +141,7 @@ const setJoinedVoiceChannelState = (state: Partial<ReturnType<typeof useServerSt
 		selectedChannelId: 7,
 		lastTextChannelId: 9,
 		// The recovery-failure leave only fires on a live socket.
-		connected: true,
+		hasServerSession: true,
 		channels: [createChannel(7, ChannelType.VOICE), createChannel(9, ChannelType.TEXT)],
 		...state,
 	});
@@ -486,7 +486,7 @@ describe('voice actions', () => {
 	});
 
 	it('skips the recovery-failure leave while the socket is disconnected', async () => {
-		setJoinedVoiceChannelState({ ownUserId: 42, connected: false });
+		setJoinedVoiceChannelState({ ownUserId: 42, hasServerSession: false });
 
 		expect(await leaveVoiceSessionAfterRecoveryFailure()).toBe(false);
 		expect(leaveMutate).not.toHaveBeenCalled();

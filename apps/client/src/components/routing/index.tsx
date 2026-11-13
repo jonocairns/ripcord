@@ -1,6 +1,6 @@
 import { memo, useEffect } from 'react';
 import { useIsAppLoading } from '@/features/app/hooks';
-import { useDisconnectInfo, useIsConnected, useMustChangePassword, useServerName } from '@/features/server/hooks';
+import { useDisconnectInfo, useHasServerSession, useMustChangePassword, useServerName } from '@/features/server/hooks';
 import { isDesktopServerSetupRequired } from '@/runtime/server-config';
 import { Connect } from '@/screens/connect';
 import { DesktopServerSetup } from '@/screens/desktop-server-setup';
@@ -10,20 +10,20 @@ import { LoadingApp } from '@/screens/loading-app';
 import { ServerView } from '@/screens/server-view';
 
 const Routing = memo(() => {
-	const isConnected = useIsConnected();
+	const hasServerSession = useHasServerSession();
 	const isAppLoading = useIsAppLoading();
 	const disconnectInfo = useDisconnectInfo();
 	const mustChangePassword = useMustChangePassword();
 	const serverName = useServerName();
 
 	useEffect(() => {
-		if (isConnected && serverName) {
+		if (hasServerSession && serverName) {
 			document.title = `${serverName} - Ripcord`;
 			return;
 		}
 
 		document.title = 'Ripcord';
-	}, [isConnected, serverName]);
+	}, [hasServerSession, serverName]);
 
 	if (isDesktopServerSetupRequired()) {
 		return <DesktopServerSetup />;
@@ -33,7 +33,7 @@ const Routing = memo(() => {
 		return <LoadingApp />;
 	}
 
-	if (!isConnected) {
+	if (!hasServerSession) {
 		if (disconnectInfo) {
 			return <Disconnected info={disconnectInfo} />;
 		}

@@ -47,7 +47,7 @@ const setup = () => {
 	let session = {
 		channelId: 1,
 		messageSession: 1,
-		connected: true,
+		hasServerSession: true,
 		serverId: 'server-1',
 		nonce: 1,
 		client: {},
@@ -320,7 +320,7 @@ describe('deferred reconnect page reconciliation', () => {
 	it.each([
 		{ channelId: 2 },
 		{ serverId: 'server-2' },
-		{ connected: false },
+		{ hasServerSession: false },
 		{ nonce: 2 },
 		{ client: {} },
 		{ socketOpen: false },

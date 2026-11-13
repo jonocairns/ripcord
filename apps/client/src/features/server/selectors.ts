@@ -1,6 +1,6 @@
 import type { IServerState } from './slice';
 
-export const connectedSelector = (state: IServerState) => state.connected;
+export const hasServerSessionSelector = (state: IServerState) => state.hasServerSession;
 
 export const disconnectInfoSelector = (state: IServerState) => state.disconnectInfo;
 

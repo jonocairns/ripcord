@@ -101,7 +101,7 @@ const deferred = <T>() => {
 let disconnectInfo: TDisconnectInfo | undefined;
 const state = {
 	setOwnVoiceIntent: () => {},
-	connected: true,
+	hasServerSession: true,
 	connecting: false,
 	resetState: () => {
 		disconnectInfo = undefined;
@@ -769,7 +769,7 @@ if (mode && newModes.includes(mode)) {
 			capturing(fireTimer);
 			assertTornDown(4013);
 		} else if (mode === 'deadline-wasconnected-false') {
-			state.connected = false;
+			state.hasServerSession = false;
 			capturing(() => drop(socket, 4014));
 			const before = trace.length;
 			capturing(fireTimer);
@@ -912,7 +912,7 @@ if (mode && newModes.includes(mode)) {
 			else trpc.cleanup();
 		} else if (mode === 'trace-grace-expiry') {
 			drop(socket);
-			state.connected = false;
+			state.hasServerSession = false;
 			start = trace.length;
 			fireTimer();
 			assert.equal(trpc.getTRPCClientIfInitialized(), null);

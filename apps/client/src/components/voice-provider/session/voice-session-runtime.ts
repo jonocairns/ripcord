@@ -98,7 +98,7 @@ type TVoiceSessionRuntimeDependencies = Pick<
 		isMicWanted: () => boolean;
 		relayOwnVoiceState: () => void;
 		getServerState: () => {
-			connected: boolean;
+			hasServerSession: boolean;
 			setCurrentVoiceChannelId: (id: number | undefined) => void;
 			updateOwnVoiceState: (state: Partial<TVoiceUserState>) => void;
 			setPinnedCard: (card: undefined) => void;
@@ -625,14 +625,14 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		initialize(capabilities, channelId, options);
 
 	const requestRecoveryFailureLeave = async (): Promise<void> => {
-		// Offline terminal cleanup deliberately leaves the server seat to
-		// disconnect grace; only a failed request on a live socket is reportable.
-		if (!getDependencies().getServerState().connected) {
+		// Only while the app still holds a server session is a failed leave reportable;
+		// after a teardown the seat is left to the server's disconnect grace.
+		if (!getDependencies().getServerState().hasServerSession) {
 			return;
 		}
 
 		const didLeave = await getDependencies().leaveVoiceSessionAfterRecoveryFailure();
-		if (!didLeave && getDependencies().getServerState().connected) {
+		if (!didLeave && getDependencies().getServerState().hasServerSession) {
 			throw new Error('Failed to send voice.leave after voice recovery failure');
 		}
 	};

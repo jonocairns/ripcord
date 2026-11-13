@@ -3,8 +3,8 @@ import { useCallback, useMemo } from 'react';
 import { useChannelById, useChannelPermissionsById } from './channels/hooks';
 import { channelReadStateByIdSelector } from './channels/selectors';
 import {
-	connectedSelector,
 	disconnectInfoSelector,
+	hasServerSessionSelector,
 	infoSelector,
 	mustChangePasswordSelector,
 	pluginsEnabledSelector,
@@ -17,7 +17,7 @@ import { voiceChannelStateSelector } from './voice/selectors';
 
 const EMPTY_VOICE_USERS: TVoiceUser[] = [];
 
-export const useIsConnected = () => useServerStore(connectedSelector);
+export const useHasServerSession = () => useServerStore(hasServerSessionSelector);
 
 export const useMustChangePassword = () => useServerStore(mustChangePasswordSelector);
 

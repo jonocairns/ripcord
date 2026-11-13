@@ -48,14 +48,14 @@ const MANUAL_SCENARIOS = [
 ] as const;
 
 const ReconnectLab = () => {
-	const connected = useServerStore((state) => state.connected);
+	const hasServerSession = useServerStore((state) => state.hasServerSession);
 	const currentVoiceChannelId = useServerStore(currentVoiceChannelIdSelector);
 	const [isOpen, setIsOpen] = useState(false);
 	const [pendingAction, setPendingAction] = useState<TReconnectLabAction | undefined>();
 	const [lastResult, setLastResult] = useState('Idle');
 	const [statusTick, setStatusTick] = useState(() => Date.now());
 	const desktopBridge = getDesktopBridge();
-	const canRunVoiceScenarios = connected && currentVoiceChannelId !== undefined;
+	const canRunVoiceScenarios = hasServerSession && currentVoiceChannelId !== undefined;
 	const scheduledActionTimeoutIdsRef = useRef<number[]>([]);
 
 	useEffect(() => {
@@ -227,7 +227,7 @@ const ReconnectLab = () => {
 				<div className="min-w-0">
 					<p className="text-sm font-semibold">Reconnect Lab</p>
 					<p className="text-xs text-muted-foreground">
-						Socket {connected ? 'connected' : 'disconnected'}
+						Server session {hasServerSession ? 'held' : 'absent'}
 						{' · '}
 						{currentVoiceChannelId === undefined ? 'not in voice' : `voice #${currentVoiceChannelId}`}
 					</p>
@@ -247,7 +247,7 @@ const ReconnectLab = () => {
 				<Button
 					size="sm"
 					variant="outline"
-					disabled={!connected || pendingAction !== undefined}
+					disabled={!hasServerSession || pendingAction !== undefined}
 					onClick={() => {
 						void runAction('drop-ws-short', 'Drop WS', async () => {
 							closeCurrentWs();

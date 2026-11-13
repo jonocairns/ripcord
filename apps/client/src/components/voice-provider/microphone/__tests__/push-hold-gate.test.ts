@@ -130,7 +130,7 @@ for (const failure of ['terminal output loss', 'recovery exhaustion'])
 		h.emit('talk', true);
 		h.operations.commitTerminalMicMuted();
 		expect(h.apply).toHaveBeenLastCalledWith(true);
-		useServerStore.setState({ connected: true });
+		useServerStore.setState({ hasServerSession: true });
 		expect(ownTransmittingSelector(store())).toBe(false);
 		expect(store().ownPushHold.talk).toBe(false);
 		h.cleanup();

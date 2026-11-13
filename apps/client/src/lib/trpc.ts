@@ -166,7 +166,7 @@ const initializeTRPC = (host: string) => {
 						closeCode: cause.code,
 						wasClean: cause.wasClean,
 						online: isVoiceReconnectOnline(),
-						wasConnected: useServerStore.getState().connected,
+						wasConnected: useServerStore.getState().hasServerSession,
 					},
 				],
 				'warning',
@@ -179,11 +179,11 @@ const initializeTRPC = (host: string) => {
 					reason: cause.reason,
 					wasClean: cause.wasClean,
 					online: isVoiceReconnectOnline(),
-					wasConnected: useServerStore.getState().connected,
+					wasConnected: useServerStore.getState().hasServerSession,
 				},
 				'warn',
 			);
-			const wasConnected = useServerStore.getState().connected;
+			const wasConnected = useServerStore.getState().hasServerSession;
 			const terminal = !shouldRestoreVoiceAfterDisconnect(cause.code);
 			if (!terminal) lastDrop = { code: cause.code, reason: cause.reason, wasClean: cause.wasClean, wasConnected };
 			run(connection.dispatch({ type: 'socket-closed', terminal, now: performance.now() }));
