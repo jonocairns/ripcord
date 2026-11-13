@@ -85,7 +85,7 @@ const createPreparedMicrophone = (): TMicrophonePreparedPipeline => ({
 const createHarness = () => {
 	const state: {
 		channelId: number | undefined;
-		connected: boolean;
+		hasServerSession: boolean;
 		nonce: number;
 		canSpeak: boolean;
 		own: TVoiceUserState;
@@ -93,7 +93,7 @@ const createHarness = () => {
 		microphoneActive: boolean;
 	} = {
 		channelId: 5,
-		connected: true,
+		hasServerSession: true,
 		nonce: 1,
 		canSpeak: true,
 		own: { micMuted: false, soundMuted: false, webcamEnabled: false, sharingScreen: false },
@@ -113,8 +113,8 @@ const createHarness = () => {
 		},
 	};
 	const server = {
-		get connected() {
-			return state.connected;
+		get hasServerSession() {
+			return state.hasServerSession;
 		},
 		setCurrentVoiceChannelId: mock((id: number | undefined) => {
 			state.channelId = id;
@@ -165,7 +165,7 @@ const createHarness = () => {
 		screenShare,
 		shareAudio,
 		getChannelId: () => state.channelId,
-		isConnected: () => state.connected,
+		hasServerSession: () => state.hasServerSession,
 		getReconnectNonce: () => state.nonce,
 		canSpeak: () => state.canSpeak,
 		getLocalAudioStream: (): MediaStream | undefined => undefined,
@@ -412,7 +412,7 @@ describe('voice session runtime effects', () => {
 	it('disconnected rebuild does not clear resources or consume watch intent', async () => {
 		const h = createHarness();
 		await h.runtime.init(capabilities, 5);
-		h.state.connected = false;
+		h.state.hasServerSession = false;
 		const cleanupCount = h.ports.cleanupTransports.mock.calls.length;
 		await expect(h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext)).rejects.toThrow(
 			'server connection unavailable',
@@ -485,9 +485,9 @@ describe('voice session runtime effects', () => {
 		expect(h.ports.screenShare.stop).toHaveBeenCalledTimes(stopCount);
 	});
 
-	it('offline terminal cleanup skips server leave and relies on disconnect grace', async () => {
+	it('terminal cleanup without a server session skips server leave and relies on disconnect grace', async () => {
 		const h = createHarness();
-		h.state.connected = false;
+		h.state.hasServerSession = false;
 		await h.runtime.clearFailedSession(clearCommand);
 		expect(h.ports.leaveVoiceSessionAfterRecoveryFailure).not.toHaveBeenCalled();
 		expect(h.ports.screenShare.stop).toHaveBeenCalledTimes(1);
@@ -496,10 +496,10 @@ describe('voice session runtime effects', () => {
 	it('only accepted connected failures latch transport recovery', () => {
 		const h = createHarness();
 		dispatchVoiceSession({ type: 'JoinSucceeded', channelId: 5 });
-		h.state.connected = false;
+		h.state.hasServerSession = false;
 		h.runtime.onTransportFailure();
 		expect(getVoiceSessionState().phase.phase).toBe('connected');
-		h.state.connected = true;
+		h.state.hasServerSession = true;
 		h.runtime.onTransportFailure();
 		expect(getVoiceSessionState().phase.phase).toBe('rebuilding');
 		const phase = getVoiceSessionState().phase;
@@ -668,7 +668,7 @@ describe('voice session runtime effects', () => {
 
 	it('rejects disconnected restore before calling the server or consuming watch intent', async () => {
 		const h = createHarness();
-		h.state.connected = false;
+		h.state.hasServerSession = false;
 		await expect(h.runtime.restoreVoiceSession(restoreCommand, h.restoreContext)).rejects.toThrow(
 			'server connection unavailable',
 		);
@@ -719,7 +719,7 @@ describe('voice session runtime effects', () => {
 		const request = deferred<typeof h.bootstrap>();
 		h.ports.requestVoiceRestoreOrJoin.mockImplementation(() => request.promise);
 		const result = h.runtime.restoreVoiceSession(restoreCommand, h.restoreContext).catch((error: unknown) => error);
-		h.state.connected = false;
+		h.state.hasServerSession = false;
 		request.resolve(h.bootstrap);
 		expect(await result).toBeInstanceOf(VoiceSessionExecutionSupersededError);
 		expect(h.markServerSessionEstablished).toHaveBeenCalledTimes(1);
@@ -734,7 +734,7 @@ describe('voice session runtime effects', () => {
 		h.ports.createProducerTransport.mockImplementation(() => transport.promise);
 		const rebuild = h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext);
 		await flush();
-		h.state.connected = false;
+		h.state.hasServerSession = false;
 		transport.resolve();
 		await expect(rebuild).rejects.toBeInstanceOf(VoiceSessionExecutionSupersededError);
 		expect(h.ports.consumeExistingProducers).toHaveBeenCalledTimes(1);
@@ -749,7 +749,7 @@ describe('voice session runtime effects', () => {
 		if (boundary === 'state-sync') h.ports.sendOwnVoiceStateUpdate.mockImplementation(() => gate.promise);
 		const rebuild = h.runtime.rebuildTransports(rebuildCommand, h.rebuildContext);
 		await flush();
-		h.state.connected = false;
+		h.state.hasServerSession = false;
 		gate.resolve();
 		await expect(rebuild).rejects.toBeInstanceOf(VoiceSessionExecutionSupersededError);
 		expect(h.ports.startMonitoring).toHaveBeenCalledTimes(1);
@@ -758,12 +758,12 @@ describe('voice session runtime effects', () => {
 
 	it('disconnected finalization preserves watch intent and desktop audio recovery work', async () => {
 		const h = createHarness();
-		h.state.connected = false;
+		h.state.hasServerSession = false;
 		h.runtime.restoreWatchIntent(snapshot);
 		await h.runtime.recoverDesktopAppAudio();
 		expect(h.ports.rehydrateWatchIntentOnly).not.toHaveBeenCalled();
 		expect(h.ports.shareAudio.recover).not.toHaveBeenCalled();
-		h.state.connected = true;
+		h.state.hasServerSession = true;
 		h.runtime.restoreWatchIntent(snapshot);
 		await h.runtime.recoverDesktopAppAudio();
 		expect(h.ports.rehydrateWatchIntentOnly).toHaveBeenCalledTimes(1);

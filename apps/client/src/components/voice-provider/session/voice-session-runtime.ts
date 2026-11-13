@@ -88,7 +88,7 @@ type TVoiceSessionRuntimeDependencies = Pick<
 		>;
 		shareAudio: Pick<TShareAudioController, 'detachProducer' | 'republish' | 'recover' | 'hasDesktopIntent'>;
 		getChannelId: () => number | undefined;
-		isConnected: () => boolean;
+		hasServerSession: () => boolean;
 		getReconnectNonce: () => number;
 		canSpeak: () => boolean;
 		getLocalAudioStream: () => MediaStream | undefined;
@@ -98,7 +98,7 @@ type TVoiceSessionRuntimeDependencies = Pick<
 		isMicWanted: () => boolean;
 		relayOwnVoiceState: () => void;
 		getServerState: () => {
-			connected: boolean;
+			hasServerSession: boolean;
 			setCurrentVoiceChannelId: (id: number | undefined) => void;
 			updateOwnVoiceState: (state: Partial<TVoiceUserState>) => void;
 			setPinnedCard: (card: undefined) => void;
@@ -195,7 +195,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		getDependencies().logVoice('Transport failure detected', { failure });
 
 		const channelId = getDependencies().getChannelId();
-		if (!getDependencies().isConnected() || channelId === undefined) {
+		if (!getDependencies().hasServerSession() || channelId === undefined) {
 			return;
 		}
 		const phase = getDependencies().getVoiceSessionState().phase;
@@ -625,14 +625,14 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		initialize(capabilities, channelId, options);
 
 	const requestRecoveryFailureLeave = async (): Promise<void> => {
-		// Offline terminal cleanup deliberately leaves the server seat to
-		// disconnect grace; only a failed request on a live socket is reportable.
-		if (!getDependencies().getServerState().connected) {
+		// Only while the app still holds a server session is a failed leave reportable;
+		// after a teardown the seat is left to the server's disconnect grace.
+		if (!getDependencies().getServerState().hasServerSession) {
 			return;
 		}
 
 		const didLeave = await getDependencies().leaveVoiceSessionAfterRecoveryFailure();
-		if (!didLeave && getDependencies().getServerState().connected) {
+		if (!didLeave && getDependencies().getServerState().hasServerSession) {
 			throw new Error('Failed to send voice.leave after voice recovery failure');
 		}
 	};
@@ -666,7 +666,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		let attemptOpen = true;
 		let transportsTouched = false;
 		const isOwnerCurrent = (): boolean => active && ownsSessionExecution() && context.isCurrent();
-		const isCurrentAttempt = (): boolean => attemptOpen && isOwnerCurrent() && getDependencies().isConnected();
+		const isCurrentAttempt = (): boolean => attemptOpen && isOwnerCurrent() && getDependencies().hasServerSession();
 		const restartIfNonceChanged = (): boolean => {
 			if (!isCurrentAttempt()) throw new VoiceSessionExecutionSupersededError();
 			return context.restartIfNonceChanged(getDependencies().getReconnectNonce());
@@ -684,7 +684,7 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 						throw new VoiceSessionExecutionSupersededError();
 					}
 
-					if (!getDependencies().isConnected()) {
+					if (!getDependencies().hasServerSession()) {
 						throw new Error('Voice transport recovery skipped: server connection unavailable');
 					}
 
@@ -881,11 +881,11 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		context: TVoiceSessionRestoreContext,
 	): Promise<{ serverSessionEstablished: boolean }> => {
 		if (!active || !context.isCurrent()) throw new VoiceSessionExecutionSupersededError();
-		if (!getDependencies().isConnected()) throw new Error('Voice restore skipped: server connection unavailable');
+		if (!getDependencies().hasServerSession()) throw new Error('Voice restore skipped: server connection unavailable');
 		const ownsSessionExecution = claimVoiceSessionExecution(executionOwnership);
 		let attemptOpen = true;
 		const isCurrent = (): boolean =>
-			attemptOpen && active && ownsSessionExecution() && context.isCurrent() && getDependencies().isConnected();
+			attemptOpen && active && ownsSessionExecution() && context.isCurrent() && getDependencies().hasServerSession();
 		const reconnectAttemptId = getDependencies().createReconnectAttemptId();
 		const attemptNumber = command.attempt + 1;
 
@@ -1004,10 +1004,10 @@ const createVoiceSessionRuntime = (getDependencies: () => TVoiceSessionRuntimeDe
 		clearFailedSession: clearFailedVoiceSession,
 		captureRecoverySnapshot: () => getDependencies().captureWatchedRemoteStreams(),
 		restoreWatchIntent: (snapshot: TWatchedRemoteStreamsSnapshot) => {
-			if (active && getDependencies().isConnected()) getDependencies().rehydrateWatchIntentOnly(snapshot);
+			if (active && getDependencies().hasServerSession()) getDependencies().rehydrateWatchIntentOnly(snapshot);
 		},
 		recoverDesktopAppAudio: async () => {
-			if (!active || !getDependencies().isConnected()) return;
+			if (!active || !getDependencies().hasServerSession()) return;
 			await getDependencies().shareAudio.recover(isScreenVideoLive);
 		},
 		syncChannel,

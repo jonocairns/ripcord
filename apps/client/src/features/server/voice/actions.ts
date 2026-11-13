@@ -647,10 +647,10 @@ const leaveVoiceMutation = (options: { suppressErrors?: boolean; reason: TVoiceL
 };
 
 const leaveVoiceSessionAfterRecoveryFailure = (): Promise<boolean> => {
-	// A leave queued on a dead socket would flush whenever the WS reconnects
-	// and race whatever session the user establishes by then. When the give-up
-	// happens offline the server's disconnect grace reaps the seat instead.
-	if (!useServerStore.getState().connected) {
+	// Skip the leave only after a teardown, when disconnect grace reaps the seat.
+	// During recovery the leave is deferred until the socket is authenticated
+	// again and must still be sent.
+	if (!useServerStore.getState().hasServerSession) {
 		return Promise.resolve(false);
 	}
 

@@ -30,7 +30,7 @@ description: Drive the running Ripcord web client with Playwright to verify chan
 
 ## Reconnect Lab (dev-only fault injection)
 
-Bottom-right flask button `aria-label="Open reconnect lab"`. Key buttons: `Drop WS (<60s)`, `Slow restore + drop WS` (5s delay — widens the reconnect window for racing manual actions), `Fail next restore + drop WS` (one failure, retry loop should recover), `Force restore conflict` (terminal give-up path), `Forget session + drop WS`. Status line shows `Socket connected · voice #<id>`.
+Bottom-right flask button `aria-label="Open reconnect lab"`. Key buttons: `Drop WS (<60s)`, `Slow restore + drop WS` (5s delay — widens the reconnect window for racing manual actions), `Fail next restore + drop WS` (one failure, retry loop should recover), `Force restore conflict` (terminal give-up path), `Forget session + drop WS`. Status line shows `Server session held · voice #<id>`.
 
 ## Gotchas
 

@@ -853,8 +853,9 @@ const reduceVoiceSession = (state: TVoiceSessionState, event: TVoiceSessionEvent
 
 			// 'leave-and-clear' even without an established restore: a residual seat
 			// may still be bound to this connection (see reduceRestoreFailed). The
-			// runner skips the leave while the socket is down, and the server's
-			// disconnect grace reaps the seat in that case instead.
+			// runner skips the leave only after a teardown, when the server's
+			// disconnect grace reaps the seat; while the app still holds a server
+			// session the leave is deferred until the socket is authenticated again.
 			return failSession(state, 'reconnect-expired', reconnectPhase?.pending.channelId, 'leave-and-clear');
 		}
 		case 'AuthReady':

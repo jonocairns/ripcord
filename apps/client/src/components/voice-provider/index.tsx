@@ -2,7 +2,7 @@ import { ChannelPermission, StreamKind } from '@sharkord/shared';
 import type { RtpCapabilities } from 'mediasoup-client/types';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useCurrentVoiceChannelId } from '@/features/server/channels/hooks';
-import { useChannelCan, useIsConnected } from '@/features/server/hooks';
+import { useChannelCan, useHasServerSession } from '@/features/server/hooks';
 import { useServerStore } from '@/features/server/slice';
 import { useOwnVoiceState } from '@/features/server/voice/hooks';
 import { selectVoiceSessionConnectionStatus } from '@/features/server/voice/voice-session-machine';
@@ -54,7 +54,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 	const currentVoiceChannelId = useCurrentVoiceChannelId();
 	const ownUserId = useServerStore((state) => state.ownUserId);
 	const voiceSessionReconnectNonce = useServerStore((state) => state.voiceSessionReconnectNonce);
-	const isConnected = useIsConnected();
+	const hasServerSession = useHasServerSession();
 	const channelCan = useChannelCan(currentVoiceChannelId);
 	const { devices } = useDevices();
 	const voiceActivityStoreRef = useRef(createVoiceActivityStore());
@@ -183,7 +183,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 		devices,
 		currentVoiceChannelId,
 		localAudioStream,
-		isConnected,
+		hasServerSession,
 		canSpeak: channelCan(ChannelPermission.SPEAK),
 		ownUserId,
 		micMuted: ownVoiceState.micMuted,
@@ -207,7 +207,7 @@ const VoiceProvider = memo(({ children }: TVoiceProviderProps) => {
 
 	const runtime = useVoiceSessionRuntime({
 		currentVoiceChannelId,
-		isConnected,
+		hasServerSession,
 		voiceSessionReconnectNonce,
 		canSpeak: channelCan(ChannelPermission.SPEAK),
 		getLocalAudioStream: () => localAudioStreamRef.current,

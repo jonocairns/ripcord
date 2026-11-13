@@ -50,9 +50,9 @@ describe('subscribeToFileListInvalidations', () => {
 		const unsubscribe = subscribeToFileListInvalidations(refetch);
 		const store = useServerStore.getState();
 
-		store.setConnected(false);
+		useServerStore.setState({ hasServerSession: false });
 		store.setConnecting(true);
-		store.setConnected(true);
+		useServerStore.setState({ hasServerSession: true });
 		store.setInitialData(createInitialData(true));
 		store.resetState();
 		unsubscribe();
@@ -79,8 +79,8 @@ describe('getFileLinkVersion', () => {
 		const store = useServerStore.getState();
 		const initial = getFileLinkVersion();
 
-		store.setConnected(false);
-		store.setConnected(true);
+		useServerStore.setState({ hasServerSession: false });
+		useServerStore.setState({ hasServerSession: true });
 		store.setInitialData(createInitialData(false));
 
 		expect(getFileLinkVersion()).toBe(initial);

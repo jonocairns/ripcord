@@ -237,7 +237,7 @@ describe('microphone integration', () => {
 		monitor.onUpdate(false);
 		h.inputs.ownUserId = 20;
 		monitor.onUpdate(true);
-		h.inputs.isConnected = false;
+		h.inputs.hasServerSession = false;
 		h.integration.syncInputs();
 		expect(monitor.removed).toBe(true);
 		expect(h.broadcasts).toEqual([

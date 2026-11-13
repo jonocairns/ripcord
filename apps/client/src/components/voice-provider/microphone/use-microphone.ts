@@ -90,7 +90,7 @@ const useMicrophone = (inputs: TUseMicrophoneParams) => {
 		// Render inputs trigger reconciliation; operations read committed values.
 		void inputs.currentVoiceChannelId;
 		void inputs.devices.microphoneId;
-		void inputs.isConnected;
+		void inputs.hasServerSession;
 		void inputs.ownUserId;
 		void inputs.micMuted;
 		void inputs.canSpeak;
@@ -99,7 +99,7 @@ const useMicrophone = (inputs: TUseMicrophoneParams) => {
 		integration,
 		inputs.currentVoiceChannelId,
 		inputs.devices.microphoneId,
-		inputs.isConnected,
+		inputs.hasServerSession,
 		inputs.ownUserId,
 		inputs.micMuted,
 		inputs.canSpeak,
