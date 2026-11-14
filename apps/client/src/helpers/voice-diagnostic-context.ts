@@ -165,6 +165,29 @@ const ids = new Set([
 	'reconnectAttemptId',
 	'clientInstanceId',
 ]);
+// Encoder names WebRTC reports, alone or composed, e.g. 'OpenH264',
+// 'SimulcastEncoderAdapter (libvpx, libvpx)' or
+// 'OpenH264 (fallback from: ExternalEncoder (MediaFoundationVideoEncodeAccelerator))'.
+// Every word must be a known name, so free text never passes.
+const encoderImplementationWords = new Set([
+	'libvpx',
+	'libaom',
+	'OpenH264',
+	'ExternalEncoder',
+	'SimulcastEncoderAdapter',
+	'D3D12VideoEncodeAccelerator',
+	'MediaFoundationVideoEncodeAccelerator',
+	'VaapiVideoEncodeAccelerator',
+	'V4L2VideoEncodeAccelerator',
+	'VideoToolbox',
+	'unknown',
+	'fallback',
+	'from',
+]);
+const isKnownEncoderImplementation = (value: unknown) =>
+	typeof value === 'string' &&
+	/^[a-zA-Z0-9 (),:]{1,160}$/.test(value) &&
+	(value.match(/[a-zA-Z0-9]+/g) ?? []).every((word) => encoderImplementationWords.has(word));
 const errorTypes = new Set([
 	'Error',
 	'TypeError',
@@ -232,14 +255,7 @@ export const getVoiceDiagnosticContext = (args: readonly unknown[]): TVoiceConte
 			)
 				result[key] = entry;
 			else if (choices && typeof entry === 'string' && choices.includes(entry)) result[key] = entry;
-			// Chromium's encoder names, e.g. 'D3D12VideoEncodeAccelerator', 'OpenH264' or
-			// 'SimulcastEncoderAdapter (libvpx, libvpx)'.
-			else if (
-				key === 'encoderImplementation' &&
-				typeof entry === 'string' &&
-				/^[a-zA-Z0-9 _(),.+-]{1,80}$/.test(entry)
-			)
-				result[key] = entry;
+			else if (key === 'encoderImplementation' && isKnownEncoderImplementation(entry)) result[key] = entry;
 			else if (!nested && ['failure', 'intent'].includes(key)) visit(entry, true);
 			else if (key === 'error' && entry && typeof entry === 'object') {
 				const name: unknown = Reflect.get(entry, 'name');

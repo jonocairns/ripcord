@@ -114,12 +114,12 @@ it.each([
 });
 
 const mountWithManualTicks = (
-	producer: Producer<AppData>,
+	getProducer: () => Producer<AppData> | undefined,
 	log: (message: string, data?: Record<string, unknown>) => void,
 ) => {
 	let tick = () => {};
 	const dispose = mountScreenShareQualityGuard({
-		getProducer: () => producer,
+		getProducer,
 		log,
 		now: () => 0,
 		setInterval: (handler) => {
@@ -150,7 +150,8 @@ it('stops retrying the floor once the sender codec rejects the update', async ()
 		getStats: async () =>
 			new Map([['out', { type: 'outbound-rtp', kind: 'video', frameHeight: 180, qualityLimitationReason: 'cpu' }]]),
 	} as unknown as RTCRtpSender;
-	const { dispose, runTicks } = mountWithManualTicks(createProducer('screen', createCapture().videoTrack, sender), log);
+	const producer = createProducer('screen', createCapture().videoTrack, sender);
+	const { dispose, runTicks } = mountWithManualTicks(() => producer, log);
 
 	await runTicks(9);
 
@@ -194,7 +195,8 @@ it('reports one sender stats snapshot about 20 seconds after publish', async () 
 				['codec-1', { type: 'codec', mimeType: 'video/H264' }],
 			]),
 	} as unknown as RTCRtpSender;
-	const { dispose, runTicks } = mountWithManualTicks(createProducer('screen', createCapture().videoTrack, sender), log);
+	const producer = createProducer('screen', createCapture().videoTrack, sender);
+	const { dispose, runTicks } = mountWithManualTicks(() => producer, log);
 
 	await runTicks(9);
 	expect(log).not.toHaveBeenCalled();
@@ -215,5 +217,53 @@ it('reports one sender stats snapshot about 20 seconds after publish', async () 
 		mimeType: 'video/H264',
 		degradationPreference: 'balanced',
 	});
+	dispose();
+});
+
+const createLimitedSender = (error: Error) => {
+	const setParameters = mock(async (_params: RTCRtpSendParameters) => {
+		throw error;
+	});
+	const sender = {
+		getParameters: () => ({ encodings: [{}] }),
+		setParameters,
+		getStats: async () =>
+			new Map([['out', { type: 'outbound-rtp', kind: 'video', frameHeight: 180, qualityLimitationReason: 'cpu' }]]),
+	} as unknown as RTCRtpSender;
+	return { sender, setParameters };
+};
+
+it('tries the floor again for a replacement producer after a codec rejection', async () => {
+	const rejected = createLimitedSender(new DOMException('rejected', 'InvalidModificationError'));
+	const replacement = createLimitedSender(new DOMException('rejected', 'InvalidModificationError'));
+	let producer = createProducer('first', createCapture().videoTrack, rejected.sender);
+	const { dispose, runTicks } = mountWithManualTicks(
+		() => producer,
+		() => {},
+	);
+
+	await runTicks(6);
+	expect(rejected.setParameters).toHaveBeenCalledTimes(1);
+
+	producer = createProducer('second', createCapture().videoTrack, replacement.sender);
+	await runTicks(3);
+
+	expect(replacement.setParameters).toHaveBeenCalledTimes(1);
+	dispose();
+});
+
+it('keeps retrying the floor after a transient sender error', async () => {
+	const log = mock((_message: string, _data?: Record<string, unknown>) => {});
+	const { sender, setParameters } = createLimitedSender(new DOMException('busy', 'InvalidStateError'));
+	const producer = createProducer('screen', createCapture().videoTrack, sender);
+	const { dispose, runTicks } = mountWithManualTicks(() => producer, log);
+
+	await runTicks(6);
+
+	expect(setParameters).toHaveBeenCalledTimes(2);
+	expect(
+		log.mock.calls.filter(([message]) => message === 'Failed to apply screen share resolution floor'),
+	).toHaveLength(2);
+	expect(log.mock.calls.some(([message]) => message === 'Screen share resolution floor unavailable')).toBe(false);
 	dispose();
 });

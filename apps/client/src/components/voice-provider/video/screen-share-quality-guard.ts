@@ -226,11 +226,10 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 				return;
 			}
 
-			const statsContext = getSenderStatsContext(statsReport, outbound, sender, captureHeight);
 			statsSamples += 1;
 
 			if (statsSamples === STATS_SNAPSHOT_SAMPLE) {
-				deps.log('Screen share sender stats', statsContext);
+				deps.log('Screen share sender stats', getSenderStatsContext(statsReport, outbound, sender, captureHeight));
 			}
 
 			if (floorUnavailable) {
@@ -256,7 +255,13 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 					belowFloorSamples += 1;
 
 					if (belowFloorSamples >= FLOOR_SAMPLES_BEFORE_APPLY) {
-						await applyResolutionFloor(producer, sender, captureHeight, floorHeight, statsContext);
+						await applyResolutionFloor(
+							producer,
+							sender,
+							captureHeight,
+							floorHeight,
+							getSenderStatsContext(statsReport, outbound, sender, captureHeight),
+						);
 					}
 				} else {
 					belowFloorSamples = 0;

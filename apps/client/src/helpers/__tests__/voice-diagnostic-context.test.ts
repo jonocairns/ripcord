@@ -119,7 +119,17 @@ test('voice diagnostics keep screen share sender stats and reject free-text enco
 	});
 	expect(
 		getVoiceDiagnosticContext([
-			{ encoderImplementation: 'user@example.com', mimeType: 'text/html', scalabilityMode: 'S9T9' },
+			{
+				encoderImplementation: 'OpenH264 (fallback from: ExternalEncoder (MediaFoundationVideoEncodeAccelerator))',
+			},
+		]),
+	).toEqual({
+		encoderImplementation: 'OpenH264 (fallback from: ExternalEncoder (MediaFoundationVideoEncodeAccelerator))',
+	});
+	expect(
+		getVoiceDiagnosticContext([
+			{ encoderImplementation: 'Alice private meeting', mimeType: 'text/html', scalabilityMode: 'S9T9' },
 		]),
 	).toEqual({});
+	expect(getVoiceDiagnosticContext([{ encoderImplementation: 'user@example.com' }])).toEqual({});
 });

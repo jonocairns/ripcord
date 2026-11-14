@@ -28,8 +28,10 @@ const VIDEO_DEGRADATION_PREFERENCE: RTCDegradationPreference = 'balanced';
 // shed a temporal layer per slow viewer (graceful frame-rate drop instead of a
 // frozen/stuttering stream + PLI storms), and reinforces the degradation
 // preference under bitrate pressure. The bitrate configuration below adds a
-// per-codec ceiling. Best on VP9; hardware H264 may fall back to a single layer
-// (L1T1), which is harmless.
+// per-codec ceiling. Best on VP9. Windows hardware H264 cannot encode L1T3 and
+// then rejects every later setParameters, so the degradation preference below
+// and the screen share resolution floor do not apply there. Forcing L1T1 to make
+// those updates succeed (#374) made desktop shares worse, so it was reverted.
 const VIDEO_SCALABILITY_MODE = 'L1T3';
 
 type TVideoProducerEncoding = {
