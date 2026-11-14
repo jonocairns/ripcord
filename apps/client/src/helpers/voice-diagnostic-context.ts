@@ -111,6 +111,10 @@ const enums: Record<string, readonly string[]> = {
 		'recovery-exhausted',
 	],
 	mode: ['automatic', 'manual'],
+	qualityLimitationReason: ['none', 'cpu', 'bandwidth', 'other'],
+	degradationPreference: ['balanced', 'maintain-framerate', 'maintain-resolution'],
+	scalabilityMode: ['L1T1', 'L1T2', 'L1T3'],
+	mimeType: ['video/H264', 'video/VP8', 'video/VP9', 'video/AV1'],
 };
 const flags = new Set([
 	'micMuted',
@@ -126,6 +130,7 @@ const flags = new Set([
 	'online',
 	'wasConnected',
 	'reconnect',
+	'powerEfficientEncoder',
 ]);
 const counters = new Set([
 	'channelId',
@@ -145,6 +150,12 @@ const counters = new Set([
 	'framesReceived',
 	'framesDecoded',
 	'framesRendered',
+	'captureHeight',
+	'floorHeight',
+	'frameWidth',
+	'frameHeight',
+	'framesPerSecond',
+	'targetBitrate',
 ]);
 const ids = new Set([
 	'producerId',
@@ -221,6 +232,14 @@ export const getVoiceDiagnosticContext = (args: readonly unknown[]): TVoiceConte
 			)
 				result[key] = entry;
 			else if (choices && typeof entry === 'string' && choices.includes(entry)) result[key] = entry;
+			// Chromium's encoder names, e.g. 'D3D12VideoEncodeAccelerator', 'OpenH264' or
+			// 'SimulcastEncoderAdapter (libvpx, libvpx)'.
+			else if (
+				key === 'encoderImplementation' &&
+				typeof entry === 'string' &&
+				/^[a-zA-Z0-9 _(),.+-]{1,80}$/.test(entry)
+			)
+				result[key] = entry;
 			else if (!nested && ['failure', 'intent'].includes(key)) visit(entry, true);
 			else if (key === 'error' && entry && typeof entry === 'object') {
 				const name: unknown = Reflect.get(entry, 'name');
