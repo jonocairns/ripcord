@@ -111,6 +111,10 @@ const enums: Record<string, readonly string[]> = {
 		'recovery-exhausted',
 	],
 	mode: ['automatic', 'manual'],
+	qualityLimitationReason: ['none', 'cpu', 'bandwidth', 'other'],
+	degradationPreference: ['balanced', 'maintain-framerate', 'maintain-resolution'],
+	scalabilityMode: ['L1T1', 'L1T2', 'L1T3'],
+	mimeType: ['video/H264', 'video/VP8', 'video/VP9', 'video/AV1'],
 };
 const flags = new Set([
 	'micMuted',
@@ -126,6 +130,7 @@ const flags = new Set([
 	'online',
 	'wasConnected',
 	'reconnect',
+	'powerEfficientEncoder',
 ]);
 const counters = new Set([
 	'channelId',
@@ -145,6 +150,12 @@ const counters = new Set([
 	'framesReceived',
 	'framesDecoded',
 	'framesRendered',
+	'captureHeight',
+	'floorHeight',
+	'frameWidth',
+	'frameHeight',
+	'framesPerSecond',
+	'targetBitrate',
 ]);
 const ids = new Set([
 	'producerId',
@@ -154,6 +165,29 @@ const ids = new Set([
 	'reconnectAttemptId',
 	'clientInstanceId',
 ]);
+// Encoder names WebRTC reports, alone or composed, e.g. 'OpenH264',
+// 'SimulcastEncoderAdapter (libvpx, libvpx)' or
+// 'OpenH264 (fallback from: ExternalEncoder (MediaFoundationVideoEncodeAccelerator))'.
+// Every word must be a known name, so free text never passes.
+const encoderImplementationWords = new Set([
+	'libvpx',
+	'libaom',
+	'OpenH264',
+	'ExternalEncoder',
+	'SimulcastEncoderAdapter',
+	'D3D12VideoEncodeAccelerator',
+	'MediaFoundationVideoEncodeAccelerator',
+	'VaapiVideoEncodeAccelerator',
+	'V4L2VideoEncodeAccelerator',
+	'VideoToolbox',
+	'unknown',
+	'fallback',
+	'from',
+]);
+const isKnownEncoderImplementation = (value: unknown) =>
+	typeof value === 'string' &&
+	/^[a-zA-Z0-9 (),:]{1,160}$/.test(value) &&
+	(value.match(/[a-zA-Z0-9]+/g) ?? []).every((word) => encoderImplementationWords.has(word));
 const errorTypes = new Set([
 	'Error',
 	'TypeError',
@@ -221,6 +255,7 @@ export const getVoiceDiagnosticContext = (args: readonly unknown[]): TVoiceConte
 			)
 				result[key] = entry;
 			else if (choices && typeof entry === 'string' && choices.includes(entry)) result[key] = entry;
+			else if (key === 'encoderImplementation' && isKnownEncoderImplementation(entry)) result[key] = entry;
 			else if (!nested && ['failure', 'intent'].includes(key)) visit(entry, true);
 			else if (key === 'error' && entry && typeof entry === 'object') {
 				const name: unknown = Reflect.get(entry, 'name');

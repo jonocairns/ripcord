@@ -1,6 +1,5 @@
 import type { AppData, Producer } from 'mediasoup-client/types';
 import { VIDEO_DEGRADATION_PREFERENCE } from './video-producer-config';
-import { SCALABILITY_MODE_FALLBACK_LOG, updateVideoSenderParameters } from './video-sender-parameters';
 
 // Runtime quality guard for the local screen-share producer, driven by the
 // sender's outbound-rtp stats.
@@ -11,6 +10,13 @@ import { SCALABILITY_MODE_FALLBACK_LOG, updateVideoSenderParameters } from './vi
 // quality-limited, the sender is pinned to the floor resolution with
 // 'maintain-resolution' so frame rate absorbs the remaining pressure; once
 // the limitation clears it is restored to 'balanced' at full resolution.
+// Desktop hardware H264 rejects these sender updates (the encoder cannot do the
+// L1T3 requested at publish), so the first InvalidModificationError turns the
+// floor off for that producer instead of retrying every few seconds.
+//
+// The guard also reports one sender stats snapshot shortly after publish, and
+// another whenever the floor would engage, so share quality can be judged from
+// measurements instead of inferred from guard activity.
 
 const POLL_INTERVAL_MS = 2_000;
 const FLOOR_SAMPLES_BEFORE_APPLY = 3;
@@ -21,6 +27,59 @@ const FLOOR_CAPTURE_DIVISOR = 2;
 // doesn't thrash setParameters on every degradation cycle.
 const FLOOR_REAPPLY_COOLDOWN_MS = 15_000;
 const QUALITY_LIMITATION_REASONS_FOR_FLOOR = new Set(['bandwidth', 'cpu']);
+// Ten 2 s samples: about 20 s after publish, once the encoder has settled.
+const STATS_SNAPSHOT_SAMPLE = 10;
+
+type TOutboundVideoStats = {
+	frameHeight?: number;
+	frameWidth?: number;
+	framesPerSecond?: number;
+	targetBitrate?: number;
+	qualityLimitationReason?: string;
+	encoderImplementation?: string;
+	powerEfficientEncoder?: boolean;
+	scalabilityMode?: string;
+	codecId?: string;
+};
+
+const roundStat = (value: number | undefined) =>
+	typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value) : undefined;
+
+const isInvalidModificationError = (error: unknown) =>
+	typeof error === 'object' && error !== null && Reflect.get(error, 'name') === 'InvalidModificationError';
+
+// Field names match the voice diagnostic allowlist; anything else is dropped
+// before it leaves the client.
+const getSenderStatsContext = (
+	statsReport: RTCStatsReport,
+	outbound: TOutboundVideoStats,
+	sender: RTCRtpSender,
+	captureHeight: number,
+) => {
+	const codec: unknown = outbound.codecId ? statsReport.get(outbound.codecId) : undefined;
+	const mimeType: unknown = codec && typeof codec === 'object' ? Reflect.get(codec, 'mimeType') : undefined;
+	let degradationPreference: RTCDegradationPreference | undefined;
+
+	try {
+		degradationPreference = sender.getParameters().degradationPreference;
+	} catch {
+		degradationPreference = undefined;
+	}
+
+	return {
+		captureHeight,
+		frameWidth: roundStat(outbound.frameWidth),
+		frameHeight: roundStat(outbound.frameHeight),
+		framesPerSecond: roundStat(outbound.framesPerSecond),
+		targetBitrate: roundStat(outbound.targetBitrate),
+		qualityLimitationReason: outbound.qualityLimitationReason,
+		encoderImplementation: outbound.encoderImplementation,
+		powerEfficientEncoder: outbound.powerEfficientEncoder,
+		scalabilityMode: outbound.scalabilityMode,
+		mimeType,
+		degradationPreference,
+	};
+};
 
 type TScreenShareQualityGuardDependencies = {
 	getProducer: () => Producer<AppData> | undefined;
@@ -37,6 +96,8 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 	let recoveredSamples = 0;
 	let floorApplied = false;
 	let floorCooldownUntil = 0;
+	let floorUnavailable = false;
+	let statsSamples = 0;
 
 	const resetForProducer = (producerId: string) => {
 		trackedProducerId = producerId;
@@ -46,6 +107,8 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 		// applied floor is gone with the old sender.
 		floorApplied = false;
 		floorCooldownUntil = 0;
+		floorUnavailable = false;
+		statsSamples = 0;
 	};
 
 	const applyResolutionFloor = async (
@@ -53,56 +116,54 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 		sender: RTCRtpSender,
 		captureHeight: number,
 		floorHeight: number,
+		statsContext: Record<string, unknown>,
 	) => {
 		try {
-			const { updated, scalabilityModeFallback } = await updateVideoSenderParameters(sender, (params) => {
-				const encoding = params.encodings?.[0];
+			// getParameters/setParameters are coupled by transactionId — keep this
+			// read-modify-write free of awaits in between (see the note on
+			// applyVideoDegradationPreference in video-producer-config).
+			const params = sender.getParameters();
+			const encoding = params.encodings?.[0];
 
-				if (!encoding) {
-					return false;
-				}
-
-				encoding.scaleResolutionDownBy = Math.max(1, captureHeight / floorHeight);
-				params.degradationPreference = 'maintain-resolution';
-				return true;
-			});
-			if (!updated || disposed || deps.getProducer() !== producer || producer.closed) return;
-
-			if (scalabilityModeFallback) {
-				deps.log(SCALABILITY_MODE_FALLBACK_LOG);
+			if (!encoding) {
+				return;
 			}
+
+			encoding.scaleResolutionDownBy = Math.max(1, captureHeight / floorHeight);
+			params.degradationPreference = 'maintain-resolution';
+			await sender.setParameters(params);
+			if (disposed || deps.getProducer() !== producer || producer.closed) return;
 
 			floorApplied = true;
 			belowFloorSamples = 0;
 			recoveredSamples = 0;
-			deps.log('Screen share resolution floor applied', {
-				captureHeight,
-				floorHeight,
-			});
+			deps.log('Screen share resolution floor applied', { ...statsContext, floorHeight });
 		} catch (error) {
 			if (disposed || deps.getProducer() !== producer || producer.closed) return;
 			belowFloorSamples = 0;
+
+			if (isInvalidModificationError(error)) {
+				floorUnavailable = true;
+				deps.log('Screen share resolution floor unavailable', { ...statsContext, floorHeight, error });
+				return;
+			}
+
 			deps.log('Failed to apply screen share resolution floor', { error });
 		}
 	};
 
 	const releaseResolutionFloor = async (producer: Producer<AppData>, sender: RTCRtpSender) => {
 		try {
-			const { scalabilityModeFallback } = await updateVideoSenderParameters(sender, (params) => {
-				const encoding = params.encodings?.[0];
+			const params = sender.getParameters();
+			const encoding = params.encodings?.[0];
 
-				if (encoding) {
-					encoding.scaleResolutionDownBy = 1;
-				}
-
-				params.degradationPreference = VIDEO_DEGRADATION_PREFERENCE;
-				return true;
-			});
-			if (disposed || deps.getProducer() !== producer || producer.closed) return;
-
-			if (scalabilityModeFallback) {
-				deps.log(SCALABILITY_MODE_FALLBACK_LOG);
+			if (encoding) {
+				encoding.scaleResolutionDownBy = 1;
 			}
+
+			params.degradationPreference = VIDEO_DEGRADATION_PREFERENCE;
+			await sender.setParameters(params);
+			if (disposed || deps.getProducer() !== producer || producer.closed) return;
 
 			floorApplied = false;
 			belowFloorSamples = 0;
@@ -147,12 +208,7 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 				return;
 			}
 
-			let outbound:
-				| {
-						frameHeight?: number;
-						qualityLimitationReason?: string;
-				  }
-				| undefined;
+			let outbound: TOutboundVideoStats | undefined;
 
 			for (const stat of statsReport.values()) {
 				if (stat.type === 'outbound-rtp' && stat.kind === 'video') {
@@ -167,6 +223,16 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 			const captureHeight = producer.track?.getSettings().height;
 
 			if (typeof captureHeight !== 'number' || captureHeight <= 0) {
+				return;
+			}
+
+			statsSamples += 1;
+
+			if (statsSamples === STATS_SNAPSHOT_SAMPLE) {
+				deps.log('Screen share sender stats', getSenderStatsContext(statsReport, outbound, sender, captureHeight));
+			}
+
+			if (floorUnavailable) {
 				return;
 			}
 
@@ -189,7 +255,13 @@ const mountScreenShareQualityGuard = (deps: TScreenShareQualityGuardDependencies
 					belowFloorSamples += 1;
 
 					if (belowFloorSamples >= FLOOR_SAMPLES_BEFORE_APPLY) {
-						await applyResolutionFloor(producer, sender, captureHeight, floorHeight);
+						await applyResolutionFloor(
+							producer,
+							sender,
+							captureHeight,
+							floorHeight,
+							getSenderStatsContext(statsReport, outbound, sender, captureHeight),
+						);
 					}
 				} else {
 					belowFloorSamples = 0;

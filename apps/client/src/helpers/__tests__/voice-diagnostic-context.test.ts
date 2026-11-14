@@ -84,3 +84,52 @@ test('voice diagnostics keep the DOMException type for rejected sender parameter
 		]),
 	).toEqual({ errorType: 'InvalidModificationError' });
 });
+
+test('voice diagnostics keep screen share sender stats and reject free-text encoder names', () => {
+	expect(
+		getVoiceDiagnosticContext([
+			{
+				captureHeight: 1440,
+				floorHeight: 720,
+				frameWidth: 1280,
+				frameHeight: 720,
+				framesPerSecond: 30,
+				targetBitrate: 2_500_000,
+				qualityLimitationReason: 'bandwidth',
+				encoderImplementation: 'SimulcastEncoderAdapter (libvpx, libvpx)',
+				powerEfficientEncoder: false,
+				scalabilityMode: 'L1T3',
+				mimeType: 'video/H264',
+				degradationPreference: 'balanced',
+			},
+		]),
+	).toEqual({
+		captureHeight: 1440,
+		floorHeight: 720,
+		frameWidth: 1280,
+		frameHeight: 720,
+		framesPerSecond: 30,
+		targetBitrate: 2_500_000,
+		qualityLimitationReason: 'bandwidth',
+		encoderImplementation: 'SimulcastEncoderAdapter (libvpx, libvpx)',
+		powerEfficientEncoder: false,
+		scalabilityMode: 'L1T3',
+		mimeType: 'video/H264',
+		degradationPreference: 'balanced',
+	});
+	expect(
+		getVoiceDiagnosticContext([
+			{
+				encoderImplementation: 'OpenH264 (fallback from: ExternalEncoder (MediaFoundationVideoEncodeAccelerator))',
+			},
+		]),
+	).toEqual({
+		encoderImplementation: 'OpenH264 (fallback from: ExternalEncoder (MediaFoundationVideoEncodeAccelerator))',
+	});
+	expect(
+		getVoiceDiagnosticContext([
+			{ encoderImplementation: 'Alice private meeting', mimeType: 'text/html', scalabilityMode: 'S9T9' },
+		]),
+	).toEqual({});
+	expect(getVoiceDiagnosticContext([{ encoderImplementation: 'user@example.com' }])).toEqual({});
+});

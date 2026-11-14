@@ -113,33 +113,13 @@ it.each([
 	dispose();
 });
 
-it('applies the resolution floor when the negotiated codec rejects the published scalability mode', async () => {
+const mountWithManualTicks = (
+	getProducer: () => Producer<AppData> | undefined,
+	log: (message: string, data?: Record<string, unknown>) => void,
+) => {
 	let tick = () => {};
-	const log = mock((_message: string, _data?: Record<string, unknown>) => {});
-	// Windows hardware H264: getParameters echoes the requested L1T3 while
-	// setParameters rejects it for the negotiated codec.
-	type TSenderParameters = {
-		degradationPreference?: RTCDegradationPreference;
-		encodings: Array<{ scalabilityMode?: string; scaleResolutionDownBy?: number }>;
-	};
-	let current: TSenderParameters = { encodings: [{ scalabilityMode: 'L1T3' }] };
-	const setParameters = mock(async (params: TSenderParameters) => {
-		if (params.encodings.some((encoding) => encoding.scalabilityMode === 'L1T3')) {
-			throw new DOMException('unsupported scalabilityMode', 'InvalidModificationError');
-		}
-		current = structuredClone(params);
-	});
-	const sender = {
-		getParameters: () => structuredClone(current),
-		setParameters,
-		getStats: async () =>
-			new Map([
-				['out', { type: 'outbound-rtp', kind: 'video', frameHeight: 180, qualityLimitationReason: 'bandwidth' }],
-			]),
-	} as unknown as RTCRtpSender;
-	const producer = createProducer('screen', createCapture().videoTrack, sender);
 	const dispose = mountScreenShareQualityGuard({
-		getProducer: () => producer,
+		getProducer,
 		log,
 		now: () => 0,
 		setInterval: (handler) => {
@@ -150,17 +130,140 @@ it('applies the resolution floor when the negotiated codec rejects the published
 		},
 		clearInterval,
 	});
-	for (let i = 0; i < 3; i += 1) {
-		tick();
-		await flush();
-	}
+	const runTicks = async (count: number) => {
+		for (let i = 0; i < count; i += 1) {
+			tick();
+			await flush();
+		}
+	};
+	return { dispose, runTicks };
+};
+
+it('stops retrying the floor once the sender codec rejects the update', async () => {
+	const log = mock((_message: string, _data?: Record<string, unknown>) => {});
+	const setParameters = mock(async (_params: RTCRtpSendParameters) => {
+		throw new DOMException('Attempted to set RtpParameters scalabilityMode', 'InvalidModificationError');
+	});
+	const sender = {
+		getParameters: () => ({ encodings: [{}], degradationPreference: 'maintain-framerate' }),
+		setParameters,
+		getStats: async () =>
+			new Map([['out', { type: 'outbound-rtp', kind: 'video', frameHeight: 180, qualityLimitationReason: 'cpu' }]]),
+	} as unknown as RTCRtpSender;
+	const producer = createProducer('screen', createCapture().videoTrack, sender);
+	const { dispose, runTicks } = mountWithManualTicks(() => producer, log);
+
+	await runTicks(9);
+
+	expect(setParameters).toHaveBeenCalledTimes(1);
+	const unavailable = log.mock.calls.filter(([message]) => message === 'Screen share resolution floor unavailable');
+	expect(unavailable).toHaveLength(1);
+	expect(unavailable[0]?.[1]).toMatchObject({
+		captureHeight: 720,
+		floorHeight: 360,
+		frameHeight: 180,
+		qualityLimitationReason: 'cpu',
+		degradationPreference: 'maintain-framerate',
+	});
+	expect(log.mock.calls.some(([message]) => message === 'Failed to apply screen share resolution floor')).toBe(false);
+	dispose();
+});
+
+it('reports one sender stats snapshot about 20 seconds after publish', async () => {
+	const log = mock((_message: string, _data?: Record<string, unknown>) => {});
+	const sender = {
+		getParameters: () => ({ encodings: [{}], degradationPreference: 'balanced' }),
+		setParameters: mock(async () => {}),
+		getStats: async () =>
+			new Map<string, Record<string, unknown>>([
+				[
+					'out',
+					{
+						type: 'outbound-rtp',
+						kind: 'video',
+						codecId: 'codec-1',
+						frameWidth: 1280,
+						frameHeight: 720,
+						framesPerSecond: 29.7,
+						targetBitrate: 2_500_000.4,
+						qualityLimitationReason: 'none',
+						encoderImplementation: 'D3D12VideoEncodeAccelerator',
+						powerEfficientEncoder: true,
+						scalabilityMode: 'L1T1',
+					},
+				],
+				['codec-1', { type: 'codec', mimeType: 'video/H264' }],
+			]),
+	} as unknown as RTCRtpSender;
+	const producer = createProducer('screen', createCapture().videoTrack, sender);
+	const { dispose, runTicks } = mountWithManualTicks(() => producer, log);
+
+	await runTicks(9);
+	expect(log).not.toHaveBeenCalled();
+
+	await runTicks(5);
+
+	expect(log).toHaveBeenCalledTimes(1);
+	expect(log).toHaveBeenCalledWith('Screen share sender stats', {
+		captureHeight: 720,
+		frameWidth: 1280,
+		frameHeight: 720,
+		framesPerSecond: 30,
+		targetBitrate: 2_500_000,
+		qualityLimitationReason: 'none',
+		encoderImplementation: 'D3D12VideoEncodeAccelerator',
+		powerEfficientEncoder: true,
+		scalabilityMode: 'L1T1',
+		mimeType: 'video/H264',
+		degradationPreference: 'balanced',
+	});
+	dispose();
+});
+
+const createLimitedSender = (error: Error) => {
+	const setParameters = mock(async (_params: RTCRtpSendParameters) => {
+		throw error;
+	});
+	const sender = {
+		getParameters: () => ({ encodings: [{}] }),
+		setParameters,
+		getStats: async () =>
+			new Map([['out', { type: 'outbound-rtp', kind: 'video', frameHeight: 180, qualityLimitationReason: 'cpu' }]]),
+	} as unknown as RTCRtpSender;
+	return { sender, setParameters };
+};
+
+it('tries the floor again for a replacement producer after a codec rejection', async () => {
+	const rejected = createLimitedSender(new DOMException('rejected', 'InvalidModificationError'));
+	const replacement = createLimitedSender(new DOMException('rejected', 'InvalidModificationError'));
+	let producer = createProducer('first', createCapture().videoTrack, rejected.sender);
+	const { dispose, runTicks } = mountWithManualTicks(
+		() => producer,
+		() => {},
+	);
+
+	await runTicks(6);
+	expect(rejected.setParameters).toHaveBeenCalledTimes(1);
+
+	producer = createProducer('second', createCapture().videoTrack, replacement.sender);
+	await runTicks(3);
+
+	expect(replacement.setParameters).toHaveBeenCalledTimes(1);
+	dispose();
+});
+
+it('keeps retrying the floor after a transient sender error', async () => {
+	const log = mock((_message: string, _data?: Record<string, unknown>) => {});
+	const { sender, setParameters } = createLimitedSender(new DOMException('busy', 'InvalidStateError'));
+	const producer = createProducer('screen', createCapture().videoTrack, sender);
+	const { dispose, runTicks } = mountWithManualTicks(() => producer, log);
+
+	await runTicks(6);
+
 	expect(setParameters).toHaveBeenCalledTimes(2);
-	expect(current.degradationPreference).toBe('maintain-resolution');
-	expect(current.encodings[0]?.scalabilityMode).toBe('L1T1');
-	expect(current.encodings[0]?.scaleResolutionDownBy).toBe(2);
-	expect(log.mock.calls.map(([message]) => message)).toEqual([
-		'Video sender scalability mode fell back to L1T1',
-		'Screen share resolution floor applied',
-	]);
+	expect(
+		log.mock.calls.filter(([message]) => message === 'Failed to apply screen share resolution floor'),
+	).toHaveLength(2);
+	expect(log.mock.calls.some(([message]) => message === 'Screen share resolution floor unavailable')).toBe(false);
 	dispose();
 });
