@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.5](https://github.com/jonocairns/ripcord/compare/v2.6.4...v2.6.5) (2026-11-14)
+
+
+### Bug Fixes
+
+* restore screen share encoding from before the L1T1 fallback ([#438](https://github.com/jonocairns/ripcord/issues/438)) ([377dac7](https://github.com/jonocairns/ripcord/commit/377dac70a7fb38978721b4eaa8d17501df8007c5))
+
 ## [2.6.4](https://github.com/jonocairns/ripcord/compare/v2.6.3...v2.6.4) (2026-11-13)
 
 
