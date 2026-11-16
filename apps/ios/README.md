@@ -104,7 +104,9 @@ nix develop -c bunx playwright install chromium
 
 Start `Tools/start-local-server.ts` through the local service supervisor, running
 from the repository root. It uses a **separate** SQLite database in
-`.amp/in/ios-server/data`, signaling port 4993 and loopback WebRTC port 40003.
+`.amp/in/ios-server/data`, loopback-only HTTP/WebSocket signaling on port 4993
+and loopback WebRTC port 40003. The launcher temporarily confines the shared HTTP
+listener to `127.0.0.1` during startup; production binding defaults are unchanged.
 Never point this fixture at a real deployment. Ensure `/.amp/in/` is in the
 repository-local Git exclude before running it.
 
@@ -218,6 +220,10 @@ fault proxy, not a real TOTP-enabled account or password-protected server.
   existing web app. Reconnect is manual; rejoin voice explicitly afterward.
   Reconnect clears any adopted old voice seat, and terminal media failure leaves
   voice rather than retaining silent server membership.
+- Channel lists, privacy flags and speaking permissions are connect-time snapshots.
+  Reconnect after an administrator changes channels or permissions. Live permission
+  updates and mid-call changes to microphone availability are not implemented;
+  the server still enforces authorization on signaling requests.
 - Text is rendered as plain text, with basic/numeric entity decoding and emoji
   image placeholders. No rich formatting, uploads, reactions, edits or typing UI.
   Existing message edits/deletions are reflected. History is paginated in batches

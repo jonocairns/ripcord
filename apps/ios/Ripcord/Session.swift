@@ -108,7 +108,13 @@ final class Session: ObservableObject {
         await voice.stopLocally()
         try checkCurrent(generation)
         let refreshed = try await auth.refresh(refreshToken: tokens.refreshToken)
-        try checkCurrent(generation)
+        do {
+          try checkCurrent(generation)
+        } catch {
+          // The connection task may be cancelled; revocation must still run.
+          await Task { await auth.logout(refreshToken: refreshed.refreshToken) }.value
+          throw error
+        }
         self.tokens = refreshed
       } else if tokens == nil, let challengeToken {
         let verified = try await auth.verify2FA(

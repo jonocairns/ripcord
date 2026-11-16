@@ -52,8 +52,8 @@ final class VoiceClient: ObservableObject {
     guard !joining else { throw RipcordError.message("A voice join is already in progress") }
     joining = true
     defer { joining = false }
-    await leave()
-    let token = generation
+    let token = await leave()
+    guard generation == token else { throw CancellationError() }
     canSpeak = speakingChannelIDs.contains(target)
     if canSpeak {
       status = "Requesting microphone"
@@ -141,10 +141,13 @@ final class VoiceClient: ObservableObject {
     }
   }
 
-  func leave(status finalStatus: String = "Not connected", reason: String = "user_action") async {
+  @discardableResult
+  func leave(status finalStatus: String = "Not connected", reason: String = "user_action") async
+    -> UUID
+  {
     let hadSession = channelId != nil
     let token = await stopLocally(status: finalStatus)
-    guard generation == token else { return }
+    guard generation == token else { return token }
     if hadSession {
       do {
         _ = try await rpc.call(
@@ -153,6 +156,7 @@ final class VoiceClient: ObservableObject {
         if generation == token { errorMessage = error.localizedDescription }
       }
     }
+    return token
   }
 
   /// Used for socket loss and session replacement. NEVER sends voice.leave.
@@ -386,7 +390,6 @@ final class VoiceClient: ObservableObject {
             guard self.generation == token, self.producers[key] == nil else { return }
             if kind == "screen", self.watchedUserId == userId {
               await self.stopWatching()
-              self.screenTrack = nil
             }
           }
         }

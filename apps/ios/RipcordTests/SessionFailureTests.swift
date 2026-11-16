@@ -174,6 +174,68 @@ final class SessionFailureTests: XCTestCase {
     XCTAssertNotEqual(successor, .null, "Old-session cleanup must not evict a successor's call")
   }
 
+  func testStoppedChannelSwitchCannotRestartVoiceAfterDelayedLeave() async throws {
+    _ = try await control(["reset": .bool(true)])
+    setenv("RIPCORD_SYNTHETIC_AUDIO", "1", 1)
+    let session = session()
+    addTeardownBlock {
+      _ = try await self.control(["reset": .bool(true)])
+      await session.voice.leave()
+      await session.signOut()
+    }
+    await session.signIn()
+    try await session.voice.join(channelId: 3)
+    _ = try await control(["hold": .array([.string("voice.leave")])])
+    let switching = Task { try await session.voice.join(channelId: 3) }
+    try await waitFor("voice.leave")
+    await session.voice.stopLocally()
+    _ = try await control(["hold": .array([]), "release": .bool(true)])
+    do {
+      try await switching.value
+      XCTFail("A stopped channel switch must not restart voice")
+    } catch is CancellationError {
+      // Session replacement and explicit stop supersede the requested join.
+    }
+    XCTAssertNil(session.voice.channelId)
+    let state = try await control()
+    XCTAssertEqual(state["paths"].array.filter { $0 == .string("voice.join") }.count, 1)
+  }
+
+  func testOldScreenClosureCannotClearAReplacementWatch() async throws {
+    _ = try await control(["reset": .bool(true)])
+    setenv("RIPCORD_SYNTHETIC_AUDIO", "1", 1)
+    let session = session()
+    addTeardownBlock {
+      _ = try await self.control(["reset": .bool(true)])
+      await session.voice.leave()
+      await session.signOut()
+    }
+    await session.signIn()
+    try await session.voice.join(channelId: 3)
+    for _ in 0..<100 where session.voice.screenSharers.isEmpty {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    let sharer = try XCTUnwrap(session.voice.screenSharers.first)
+    await session.voice.watch(userId: sharer)
+    XCTAssertNotNil(session.voice.screenTrack)
+    _ = try await control(["hold": .array([.string("voice.closeConsumer")])])
+    let url = try XCTUnwrap(
+      URL(string: "http://localhost:5193/fixture?action=codec&value=video/VP8"))
+    let (_, response) = try await URLSession.shared.data(from: url)
+    XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+    try await waitFor("voice.closeConsumer")
+    for _ in 0..<100 where !session.voice.screenSharers.contains(sharer) {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    await session.voice.watch(userId: sharer)
+    XCTAssertNotNil(
+      session.voice.screenTrack, "A new watch must connect before old cleanup completes")
+    _ = try await control(["hold": .array([]), "release": .bool(true)])
+    try await Task.sleep(for: .milliseconds(500))
+    XCTAssertNotNil(session.voice.screenTrack, "Old consumer cleanup must not erase a new watch")
+    XCTAssertEqual(session.voice.watchedUserId, sharer)
+  }
+
   func testSignOutClearsLocalStateBeforeLogoutAndInvalidatesHistory() async throws {
     _ = try await control(["reset": .bool(true)])
     let session = session()
@@ -278,6 +340,28 @@ final class SessionFailureTests: XCTestCase {
     XCTAssertNil(session.challengeToken)
     XCTAssertTrue(session.serverPassword.isEmpty)
     XCTAssertFalse(session.authenticated)
+  }
+
+  func testRestartSignInDuringRefreshRevokesUnadoptedReplacement() async throws {
+    _ = try await control(["reset": .bool(true)])
+    let session = session()
+    addTeardownBlock {
+      _ = try await self.control(["reset": .bool(true)])
+      await session.signOut()
+    }
+    await session.signIn()
+    XCTAssertTrue(session.connected)
+    _ = try await control(["hold": .array([.string("refresh")])])
+    let reconnect = Task { await session.reconnect() }
+    try await waitFor("refresh")
+    session.restartSignIn()
+    _ = try await control(["hold": .array([]), "release": .bool(true)])
+    await reconnect.value
+    let state = try await control()
+    XCTAssertEqual(state["revokedReplacement"].bool, true)
+    XCTAssertFalse(session.authenticated)
+    XCTAssertFalse(session.connected)
+    XCTAssertNil(session.errorMessage)
   }
 
   func testSignOutDuringRefreshRevokesReplacementWithoutReconnecting() async throws {

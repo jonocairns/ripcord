@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import http from 'node:http';
 import path from 'node:path';
 
 // A separate, persistent development database; never use the desktop/server data folder.
@@ -19,7 +20,17 @@ process.env.SHARKORD_WEBRTC_IPV6_ENABLED = 'false';
 process.env.SHARKORD_DEBUG = 'true';
 process.env.RIPCORD_CLIENT_ERROR_REPORTING_SENTRY_DSN = '';
 process.env.RIPCORD_SERVER_ERROR_REPORTING_SENTRY_DSN = '';
-await import('../../server/src/index');
+// Confine the shared server's listener to this fixture process, without changing
+// production binding defaults. Server startup finishes before the import returns.
+const listen = http.Server.prototype.listen;
+http.Server.prototype.listen = function (this: http.Server) {
+	return listen.call(this, { port: Number(process.env.SHARKORD_PORT), host: '127.0.0.1' });
+};
+try {
+	await import('../../server/src/index');
+} finally {
+	http.Server.prototype.listen = listen;
+}
 // Native lifecycle tests perform more logins than a human. Rate limiting has
 // its own backend tests; keep those budgets out of this isolated fixture.
 const { clearRateLimitersForTests } = await import('../../server/src/utils/rate-limiters/rate-limiter');

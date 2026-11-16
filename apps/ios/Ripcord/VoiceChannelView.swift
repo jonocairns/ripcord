@@ -37,7 +37,9 @@ struct VoiceChannelView: View {
                 Task {
                   defer { joining = false }
                   do { try await voice.join(channelId: channel.id) } catch {
-                    session.errorMessage = error.localizedDescription
+                    if !(error is CancellationError) {
+                      session.errorMessage = error.localizedDescription
+                    }
                   }
                 }
               } label: {
