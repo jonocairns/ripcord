@@ -1,8 +1,12 @@
 .git
 .direnv
 .claude
+.amp/in/
 node_modules
 **/node_modules
+# Bun's frozen workspace install needs the manifest, not the native app or fixtures.
+apps/ios/*
+!apps/ios/package.json
 apps/client/dist
 apps/desktop/build
 apps/desktop/src/

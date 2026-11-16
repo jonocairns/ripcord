@@ -45,7 +45,9 @@ The bot token authors release PRs so their PR checks run automatically. A separa
 3. The workflow creates the version tag and a draft GitHub release, then builds the server/web bundle. Before uploading anything, it boots the Linux server binary in the shipped Debian image and checks its health, version, and web interface. It then uploads the server binaries and `release.json` and pushes the versioned `ghcr.io/jonocairns/ripcord:vX.Y.Z` image.
 4. Windows, macOS, and Linux desktop builds upload their assets to that same release. Only after every build succeeds does the workflow publish the GitHub release automatically, then promote the built Docker image to `latest`. Each publication operation has three bounded attempts; Docker promotion cannot start until the GitHub assets are available.
 
-The draft is an intermediate build state; no manual publication is needed. Stable desktop workflows require an existing release and never create one themselves. The independent Windows beta workflow retains its prerelease behavior.
+PR checks use job-level change selection: native iOS and documentation-only changes skip JavaScript product checks; iOS fixture changes retain JavaScript quality checks but skip web E2E and desktop builds. Shared dependencies and unknown paths conservatively run all product checks. The PR workflow still starts, and the title check is never path-filtered. Stable release and recovery calls always run the complete quality/platform checks against the verified immutable source, regardless of changed paths. New CI-selection tooling runs from the workflow checkout so historical release sources need not contain it.
+
+The draft is an intermediate build state; no manual publication is needed. Stable desktop workflows require an existing release and never create one themselves. The independent Windows beta workflow retains its prerelease behavior, but does not run for iOS-only pushes.
 
 ## Recovering a failed release
 
