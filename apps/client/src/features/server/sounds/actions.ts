@@ -1,3 +1,8 @@
+import {
+	getStoredVolume,
+	MASTER_OUTPUT_VOLUME_KEY,
+	toPlaybackVolume,
+} from '@/components/voice-provider/volume-control-storage';
 import { getPublicAssetUrl } from '@/helpers/get-file-url';
 import { SoundType } from '../types';
 
@@ -151,6 +156,9 @@ const playBufferedSound = (config: TSoundAssetConfig): Promise<void> => {
 
 		source.buffer = buffer;
 		source.connect(gain).connect(masterGain);
+		// Follow the speaker volume slider. Read it from storage once the buffer is
+		// ready, so a slider change made while the sound was loading still applies.
+		masterGain.gain.setValueAtTime(toPlaybackVolume(100, getStoredVolume(MASTER_OUTPUT_VOLUME_KEY)), now());
 		source.start();
 	});
 };

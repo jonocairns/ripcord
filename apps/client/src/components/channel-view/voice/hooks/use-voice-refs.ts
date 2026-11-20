@@ -1,7 +1,7 @@
 import { StreamKind } from '@sharkord/shared';
 import { useEffect, useMemo } from 'react';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
-import { MASTER_OUTPUT_VOLUME_KEY } from '@/components/voice-provider/volume-control-storage';
+import { MASTER_OUTPUT_VOLUME_KEY, toPlaybackVolume } from '@/components/voice-provider/volume-control-storage';
 import { useIsOwnUser } from '@/features/server/users/hooks';
 import { useVoice } from '@/features/server/voice/hooks';
 import { buildCombinedScreenShareStream } from '../screen-share-stream';
@@ -93,9 +93,9 @@ const useVoiceRefs = ({
 	const externalVolumeKey = pluginId && streamKey ? getExternalVolumeKey(pluginId, streamKey) : null;
 
 	const externalVolume = externalVolumeKey ? getVolume(externalVolumeKey) : 100;
-	const userPlaybackVolume = (userVolume * masterOutputVolume) / 10000;
-	const screenSharePlaybackVolume = (userScreenVolume * masterOutputVolume) / 10000;
-	const externalPlaybackVolume = (externalVolume * masterOutputVolume) / 10000;
+	const userPlaybackVolume = toPlaybackVolume(userVolume, masterOutputVolume);
+	const screenSharePlaybackVolume = toPlaybackVolume(userScreenVolume, masterOutputVolume);
+	const externalPlaybackVolume = toPlaybackVolume(externalVolume, masterOutputVolume);
 
 	useEffect(() => {
 		if (!videoRef.current) return;
