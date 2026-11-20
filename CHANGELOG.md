@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.6](https://github.com/jonocairns/ripcord/compare/v2.6.5...v2.6.6) (2026-11-20)
+
+
+### Bug Fixes
+
+* apply speaker volume to sound effects and pop-out streams ([#441](https://github.com/jonocairns/ripcord/issues/441)) ([4dc68bb](https://github.com/jonocairns/ripcord/commit/4dc68bba0e88fe6fd5ea809297aeb583d94a4785))
+
 ## [2.6.5](https://github.com/jonocairns/ripcord/compare/v2.6.4...v2.6.5) (2026-11-14)
 
 
