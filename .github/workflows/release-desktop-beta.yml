@@ -8,6 +8,7 @@ on:
       - "**"
       - "!**/*.md"
       - "!docs/**"
+      - "!apps/ios/**"
       - "!.github/**"
       - ".github/workflows/release-desktop-beta.yml"
       - ".github/workflows/release-desktop-windows.yml"

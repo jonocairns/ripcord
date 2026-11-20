@@ -2,8 +2,8 @@
 	"$schema": "https://unpkg.com/knip@5/schema.json",
 	"workspaces": {
 		".": {
-			"entry": ["scripts/pr-review/*.ts", "scripts/release/*.test.mjs"],
-			"project": ["scripts/pr-review/*.ts", "scripts/release/*.mjs"]
+			"entry": ["scripts/pr-review/*.ts", "scripts/release/*.test.mjs", "scripts/ci/*.test.mjs"],
+			"project": ["scripts/pr-review/*.ts", "scripts/release/*.mjs", "scripts/ci/*.mjs"]
 		},
 		"apps/server": {
 			"entry": [
@@ -23,6 +23,10 @@
 		"apps/desktop": {
 			"entry": ["src/main/index.ts", "src/preload/index.ts", "scripts/**/*.mjs", "src/main/__tests__/**"],
 			"project": ["src/**/*.ts", "scripts/**/*.mjs"]
+		},
+		"apps/ios": {
+			"entry": ["Tools/start-local-server.ts", "Tools/start-peer.ts", "Tools/peer.ts"],
+			"project": ["Tools/*.ts"]
 		},
 		"packages/shared": {
 			"entry": ["src/**/__tests__/**/*.test.ts"],

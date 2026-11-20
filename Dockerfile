@@ -9,6 +9,7 @@ WORKDIR /app
 COPY package.json bun.lock ./
 COPY apps/client/package.json apps/client/
 COPY apps/desktop/package.json apps/desktop/
+COPY apps/ios/package.json apps/ios/
 COPY apps/server/package.json apps/server/
 COPY packages/shared/package.json packages/shared/
 COPY packages/plugin-sdk/package.json packages/plugin-sdk/
