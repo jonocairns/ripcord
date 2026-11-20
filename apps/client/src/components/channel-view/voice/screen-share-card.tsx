@@ -286,23 +286,21 @@ const ScreenShareCard = memo(
 				popoutVideo.srcObject = popoutScreenSharePlaybackStream;
 			}
 
-			popoutVideo.volume = popoutPlaybackVolume;
-			popoutVideo.muted = isOwnUser || !hasScreenShareAudioStream || isMuted;
-
 			return () => {
 				if (popoutVideo.srcObject === popoutScreenSharePlaybackStream) {
 					popoutVideo.srcObject = null;
 				}
 			};
-		}, [
-			hasScreenShareAudioStream,
-			isMuted,
-			isOwnUser,
-			isPoppedOut,
-			popoutScreenSharePlaybackStream,
-			popoutPlaybackVolume,
-			popoutVideoElement,
-		]);
+		}, [isPoppedOut, popoutScreenSharePlaybackStream, popoutVideoElement]);
+
+		useEffect(() => {
+			if (!popoutVideoElement) {
+				return;
+			}
+
+			popoutVideoElement.volume = popoutPlaybackVolume;
+			popoutVideoElement.muted = isOwnUser || !hasScreenShareAudioStream || isMuted;
+		}, [hasScreenShareAudioStream, isMuted, isOwnUser, popoutPlaybackVolume, popoutVideoElement]);
 
 		useEffect(() => {
 			if (!isPoppedOut || !popoutVideoElement) {
