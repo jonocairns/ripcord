@@ -14,6 +14,7 @@ import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useState } fro
 import { toast } from 'sonner';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
+import { MASTER_OUTPUT_VOLUME_KEY, toPlaybackVolume } from '@/components/voice-provider/volume-control-storage';
 import { cn } from '@/lib/utils';
 import { CardControls } from './card-controls';
 import { ControlButton } from './control-button';
@@ -156,6 +157,7 @@ const ExternalStreamCard = memo(
 		const volumeKey = getExternalVolumeKey(stream.pluginId, stream.key);
 		const volume = getVolume(volumeKey);
 		const isMuted = volume === 0;
+		const popoutPlaybackVolume = toPlaybackVolume(volume, getVolume(MASTER_OUTPUT_VOLUME_KEY));
 
 		const {
 			containerRef,
@@ -216,13 +218,13 @@ const ExternalStreamCard = memo(
 				return;
 			}
 
-			popoutVideoElement.volume = volume / 100;
+			popoutVideoElement.volume = popoutPlaybackVolume;
 			popoutVideoElement.muted = isMuted;
 
 			void popoutVideoElement.play().catch(() => {
 				// Browsers can still reject playback in the pop-out window.
 			});
-		}, [hasAudio, isMuted, popoutVideoElement, volume]);
+		}, [hasAudio, isMuted, popoutPlaybackVolume, popoutVideoElement]);
 
 		const handlePopoutMuteToggle = useCallback(() => {
 			enablePopoutAudio();
@@ -367,9 +369,9 @@ const ExternalStreamCard = memo(
 				return;
 			}
 
-			popoutVideoElement.volume = volume / 100;
+			popoutVideoElement.volume = popoutPlaybackVolume;
 			popoutVideoElement.muted = !externalAudioStream || isMuted || !isPopoutAudioEnabled;
-		}, [externalAudioStream, isMuted, isPopoutAudioEnabled, popoutVideoElement, volume]);
+		}, [externalAudioStream, isMuted, isPopoutAudioEnabled, popoutPlaybackVolume, popoutVideoElement]);
 
 		useEffect(() => {
 			if (!isPoppedOut || !popoutVideoElement) {

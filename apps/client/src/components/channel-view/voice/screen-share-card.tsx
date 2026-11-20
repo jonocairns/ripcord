@@ -3,6 +3,7 @@ import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useState } fro
 import { toast } from 'sonner';
 import type { TVisibleRemoteMedia } from '@/components/voice-provider/remote-media/remote-media-subscriptions';
 import { useVolumeControl } from '@/components/voice-provider/volume-control-context';
+import { MASTER_OUTPUT_VOLUME_KEY, toPlaybackVolume } from '@/components/voice-provider/volume-control-storage';
 import { useOwnUserId, useUserById } from '@/features/server/users/hooks';
 import { useScreenShareWatcherCount } from '@/features/server/voice/hooks';
 import { useWindowFocus } from '@/hooks/use-window-focus';
@@ -126,6 +127,7 @@ const ScreenShareCard = memo(
 		const volumeKey = getUserScreenVolumeKey(userId);
 		const volume = getVolume(volumeKey);
 		const isMuted = volume === 0;
+		const popoutPlaybackVolume = toPlaybackVolume(volume, getVolume(MASTER_OUTPUT_VOLUME_KEY));
 		const [isFullscreen, setIsFullscreen] = useState(false);
 		const [isPoppedOut, setIsPoppedOut] = useState(false);
 		const [popoutWindow, setPopoutWindow] = useState<Window | null>(null);
@@ -284,7 +286,7 @@ const ScreenShareCard = memo(
 				popoutVideo.srcObject = popoutScreenSharePlaybackStream;
 			}
 
-			popoutVideo.volume = volume / 100;
+			popoutVideo.volume = popoutPlaybackVolume;
 			popoutVideo.muted = isOwnUser || !hasScreenShareAudioStream || isMuted;
 
 			return () => {
@@ -298,8 +300,8 @@ const ScreenShareCard = memo(
 			isOwnUser,
 			isPoppedOut,
 			popoutScreenSharePlaybackStream,
+			popoutPlaybackVolume,
 			popoutVideoElement,
-			volume,
 		]);
 
 		useEffect(() => {

@@ -1,3 +1,8 @@
+import {
+	getStoredVolume,
+	MASTER_OUTPUT_VOLUME_KEY,
+	toPlaybackVolume,
+} from '@/components/voice-provider/volume-control-storage';
 import { getPublicAssetUrl } from '@/helpers/get-file-url';
 import { SoundType } from '../types';
 
@@ -160,6 +165,10 @@ const playSoundEffect = (type: SoundType) => {
 	if (!soundAsset) {
 		return;
 	}
+
+	// Follow the speaker volume slider. Read it from storage on each play so this
+	// module stays outside React and always uses the latest saved value.
+	masterGain.gain.setValueAtTime(toPlaybackVolume(100, getStoredVolume(MASTER_OUTPUT_VOLUME_KEY)), now());
 
 	void playBufferedSound(soundAsset).catch(() => {
 		// Ignore asset failures and avoid falling back to synthetic cues.

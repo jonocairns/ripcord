@@ -41,6 +41,11 @@ const getStoredVolume = (key: TVolumeKey): number => {
 	return loadVolumesFromStorage()[key] ?? 100;
 };
 
+// Volumes are stored as 0-100 percentages; playback APIs want 0-1.
+const toPlaybackVolume = (volume: number, masterOutputVolume: number): number => {
+	return Math.min(1, Math.max(0, (volume * masterOutputVolume) / 10000));
+};
+
 export type { TVolumeKey, TVolumeSettings, TVolumeSettingsUpdatedDetail };
 export {
 	dispatchVolumeSettingsUpdated,
@@ -49,5 +54,6 @@ export {
 	MASTER_OUTPUT_VOLUME_KEY,
 	OWN_MIC_VOLUME_KEY,
 	saveVolumesToStorage,
+	toPlaybackVolume,
 	VOLUME_SETTINGS_UPDATED_EVENT,
 };
