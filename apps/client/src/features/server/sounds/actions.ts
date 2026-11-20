@@ -156,6 +156,9 @@ const playBufferedSound = (config: TSoundAssetConfig): Promise<void> => {
 
 		source.buffer = buffer;
 		source.connect(gain).connect(masterGain);
+		// Follow the speaker volume slider. Read it from storage once the buffer is
+		// ready, so a slider change made while the sound was loading still applies.
+		masterGain.gain.setValueAtTime(toPlaybackVolume(100, getStoredVolume(MASTER_OUTPUT_VOLUME_KEY)), now());
 		source.start();
 	});
 };
@@ -165,10 +168,6 @@ const playSoundEffect = (type: SoundType) => {
 	if (!soundAsset) {
 		return;
 	}
-
-	// Follow the speaker volume slider. Read it from storage on each play so this
-	// module stays outside React and always uses the latest saved value.
-	masterGain.gain.setValueAtTime(toPlaybackVolume(100, getStoredVolume(MASTER_OUTPUT_VOLUME_KEY)), now());
 
 	void playBufferedSound(soundAsset).catch(() => {
 		// Ignore asset failures and avoid falling back to synthetic cues.
