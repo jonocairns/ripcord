@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { finalizeDesktopUpdate } from './desktop-update.mjs';
 import {
 	api,
 	assertTagSource,
@@ -63,6 +66,16 @@ switch (process.argv[2]) {
 		assertTagSource(repository, tag, process.env.EXPECTED_SHA);
 		await publishRelease({ repository, tag, image: process.env.IMAGE, digest: process.env.IMAGE_DIGEST });
 		break;
+	case 'finalize-desktop-update': {
+		const keyFile = path.join(directory, 'apps/desktop/src/main/update-signing-keys.json');
+		finalizeDesktopUpdate({
+			directory: process.env.DESKTOP_UPDATE_DIR,
+			changelogPath: path.join(directory, 'CHANGELOG.md'),
+			privateKeyPem: process.env.DESKTOP_UPDATE_SIGNING_KEY,
+			publicKeys: JSON.parse(readFileSync(keyFile, 'utf8')).publicKeys,
+		});
+		break;
+	}
 	case 'check-current':
 		output({ current: api(repository, 'git/ref/heads/main').object.sha === process.env.GITHUB_SHA });
 		break;

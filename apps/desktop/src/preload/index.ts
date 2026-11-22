@@ -411,6 +411,7 @@ const desktopBridge = {
 	pingSidecar: () => ipcRenderer.invoke('desktop:ping-sidecar'),
 	getUpdateStatus: (): Promise<TDesktopUpdateStatus> => ipcRenderer.invoke('desktop:get-update-status'),
 	checkForUpdates: (): Promise<TDesktopUpdateStatus> => ipcRenderer.invoke('desktop:check-for-updates'),
+	restartToUpdate: (): Promise<boolean> => ipcRenderer.invoke('desktop:restart-to-update'),
 	listShareSources: () => ipcRenderer.invoke('desktop:list-share-sources'),
 	resetScreenSharePicker: (): Promise<void> => ipcRenderer.invoke('desktop:reset-screen-share-picker'),
 	listAppAudioTargets: (sourceId?: string): Promise<TDesktopAppAudioTargetsResult> =>

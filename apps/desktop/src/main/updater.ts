@@ -1,14 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
-import { autoUpdater, type UpdateInfo } from 'electron-updater';
+import { autoUpdater, NsisUpdater, type ProgressInfo, type UpdateInfo } from 'electron-updater';
 import type { TDesktopUpdateStatus } from './types';
+import { resolveReleaseNotes } from './update-release-notes';
+import { verifyDownloadedUpdate, verifyUpdateMetadata } from './update-verification';
 
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const APP_UPDATE_CONFIG_FILENAME = 'app-update.yml';
 const MAX_UPDATE_ERROR_MESSAGE_LENGTH = 280;
-const MANUAL_INSTALL_REQUIRED_ERROR_PATTERN =
+const UPDATE_VERIFICATION_ERROR_PATTERN =
 	/ERR_UPDATER_INVALID_SIGNATURE|not signed by the application owner|sign verification failed/i;
+const UNVERIFIED_UPDATE_MESSAGE = 'This update could not be verified, so it was not installed.';
 
 const TRANSIENT_ERROR_PATTERN =
 	/ECONNRESET|ENOTFOUND|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|socket hang up|network|502|503|504|429|Bad Gateway|Service Unavailable|Gateway Timeout/i;
@@ -23,21 +26,22 @@ const createBaseStatus = (): TDesktopUpdateStatus => ({
 	currentVersion: app.getVersion(),
 });
 
-const hasAppUpdateConfig = (): boolean => {
+const readAppUpdateConfig = (): string | undefined => {
 	const appUpdateConfigPath = path.join(process.resourcesPath, APP_UPDATE_CONFIG_FILENAME);
 
-	return fs.existsSync(appUpdateConfigPath);
+	try {
+		return fs.readFileSync(appUpdateConfigPath, 'utf8');
+	} catch {
+		return undefined;
+	}
 };
 
 const resolveUserFacingUpdateErrorMessage = (error: Error): string => {
 	const rawMessage = error.message?.trim() || 'Unknown updater error.';
 	const normalized = rawMessage.replace(/\s+/g, ' ').trim();
 
-	if (MANUAL_INSTALL_REQUIRED_ERROR_PATTERN.test(normalized)) {
-		return (
-			'Update package signature could not be verified on this machine. ' +
-			'Please download and install the latest Ripcord version manually.'
-		);
+	if (UPDATE_VERIFICATION_ERROR_PATTERN.test(normalized)) {
+		return UNVERIFIED_UPDATE_MESSAGE;
 	}
 
 	const withoutRawInfo = normalized.replace(/\s*raw info:\s*.+$/i, '');
@@ -49,15 +53,9 @@ const resolveUserFacingUpdateErrorMessage = (error: Error): string => {
 	return `${compact.slice(0, MAX_UPDATE_ERROR_MESSAGE_LENGTH - 1)}…`;
 };
 
-const isManualInstallRequiredError = (error: Error): boolean => {
-	const rawMessage = error.message?.trim() || '';
-	const normalized = rawMessage.replace(/\s+/g, ' ').trim();
-	return MANUAL_INSTALL_REQUIRED_ERROR_PATTERN.test(normalized);
-};
-
 const isTransientError = (error: Error): boolean => {
 	const rawMessage = error.message?.trim() || '';
-	if (MANUAL_INSTALL_REQUIRED_ERROR_PATTERN.test(rawMessage)) {
+	if (UPDATE_VERIFICATION_ERROR_PATTERN.test(rawMessage)) {
 		return false;
 	}
 	return TRANSIENT_ERROR_PATTERN.test(rawMessage);
@@ -71,6 +69,12 @@ class DesktopUpdater {
 	private intervalHandle?: NodeJS.Timeout;
 	private retryHandle?: NodeJS.Timeout;
 	private consecutiveTransientFailures = 0;
+	private nsisUpdater?: NsisUpdater;
+	// The update being downloaded. The signature check reads it because
+	// electron-updater only passes the downloaded file's path.
+	private downloadingInfo?: UpdateInfo;
+	private downloadInFlight = false;
+	private restartRequested = false;
 
 	private emitStatus(update: TDesktopUpdateStatus) {
 		this.status = update;
@@ -86,12 +90,99 @@ class DesktopUpdater {
 	}
 
 	private handleUpdateAvailable(info: UpdateInfo) {
+		const releaseNotes = resolveReleaseNotes({
+			info,
+			currentVersion: app.getVersion(),
+			availableVersion: info.version,
+		});
+
+		// Builds whose app-update.yml would skip verification keep the manual
+		// download.
+		if (!this.nsisUpdater) {
+			this.consecutiveTransientFailures = 0;
+			this.setStatus({
+				state: 'available',
+				availableVersion: info.version,
+				manualInstallRequired: true,
+				checkedAtIso: new Date().toISOString(),
+				message: undefined,
+				releaseNotes,
+			});
+			return;
+		}
+
+		// Every release after this build is signed, so a missing or invalid
+		// signature means the release assets were altered. Offer no download link:
+		// it would point at the same unverified installer.
+		const rejection = verifyUpdateMetadata(info);
+		if (rejection) {
+			console.error('[desktop] Rejected unverified update', { version: info.version, reason: rejection });
+			this.setStatus({
+				state: 'error',
+				availableVersion: info.version,
+				manualInstallRequired: undefined,
+				checkedAtIso: new Date().toISOString(),
+				percent: undefined,
+				bytesPerSecond: undefined,
+				message: UNVERIFIED_UPDATE_MESSAGE,
+				releaseNotes: undefined,
+			});
+			return;
+		}
+
+		// The retry counter is not reset here: each download retry re-checks for
+		// updates, so resetting would retry a failing download forever.
+		this.downloadingInfo = info;
+		this.downloadInFlight = true;
+		this.setStatus({
+			state: 'downloading',
+			availableVersion: info.version,
+			manualInstallRequired: undefined,
+			checkedAtIso: new Date().toISOString(),
+			percent: 0,
+			bytesPerSecond: undefined,
+			transferredBytes: undefined,
+			totalBytes: undefined,
+			message: undefined,
+			releaseNotes,
+		});
+
+		void this.nsisUpdater
+			.downloadUpdate()
+			.catch(() => {
+				// Download failures also arrive through the 'error' event.
+			})
+			.finally(() => {
+				this.downloadInFlight = false;
+			});
+	}
+
+	private handleDownloadProgress(progress: ProgressInfo) {
+		if (this.status.state !== 'downloading') {
+			return;
+		}
+
+		const percent = Math.floor(progress.percent);
+		if (percent === this.status.percent) {
+			return;
+		}
+
+		this.setStatus({
+			percent,
+			bytesPerSecond: progress.bytesPerSecond,
+			transferredBytes: progress.transferred,
+			totalBytes: progress.total,
+		});
+	}
+
+	private handleUpdateDownloaded(info: UpdateInfo) {
 		this.consecutiveTransientFailures = 0;
 		this.setStatus({
-			state: 'available',
+			state: 'downloaded',
 			availableVersion: info.version,
-			manualInstallRequired: true,
-			checkedAtIso: new Date().toISOString(),
+			manualInstallRequired: undefined,
+			percent: 100,
+			bytesPerSecond: undefined,
 			message: undefined,
 		});
 	}
@@ -108,11 +199,14 @@ class DesktopUpdater {
 			transferredBytes: undefined,
 			totalBytes: undefined,
 			message: undefined,
+			releaseNotes: undefined,
 		});
 	}
 
 	private handleUpdateError(error: Error) {
 		console.error('[desktop] Auto-update error', error);
+		const failedDownload = this.downloadingInfo;
+		this.downloadingInfo = undefined;
 
 		if (isTransientError(error)) {
 			this.consecutiveTransientFailures += 1;
@@ -132,11 +226,38 @@ class DesktopUpdater {
 			this.consecutiveTransientFailures = 0;
 		}
 
-		const manualInstallRequired = isManualInstallRequiredError(error);
+		if (failedDownload && UPDATE_VERIFICATION_ERROR_PATTERN.test(error.message ?? '')) {
+			this.setStatus({
+				state: 'error',
+				availableVersion: failedDownload.version,
+				manualInstallRequired: undefined,
+				checkedAtIso: new Date().toISOString(),
+				percent: undefined,
+				bytesPerSecond: undefined,
+				message: UNVERIFIED_UPDATE_MESSAGE,
+				releaseNotes: undefined,
+			});
+			return;
+		}
+
+		// A download that fails for any other reason falls back to the manual
+		// installer link.
+		if (failedDownload) {
+			this.setStatus({
+				state: 'available',
+				availableVersion: failedDownload.version,
+				manualInstallRequired: true,
+				checkedAtIso: new Date().toISOString(),
+				percent: undefined,
+				bytesPerSecond: undefined,
+				message: resolveUserFacingUpdateErrorMessage(error),
+			});
+			return;
+		}
 
 		this.setStatus({
 			state: 'error',
-			manualInstallRequired,
+			manualInstallRequired: undefined,
 			checkedAtIso: new Date().toISOString(),
 			message: resolveUserFacingUpdateErrorMessage(error),
 		});
@@ -191,7 +312,14 @@ class DesktopUpdater {
 			return;
 		}
 
-		if (!hasAppUpdateConfig()) {
+		// Beta builds (0.0.0-beta.N) are not published to the stable update feed.
+		if (app.getVersion().includes('-')) {
+			this.markDisabled('Automatic updates are not available for beta builds.');
+			return;
+		}
+
+		const appUpdateConfig = readAppUpdateConfig();
+		if (appUpdateConfig === undefined) {
 			this.markDisabled(
 				'Auto-update metadata is missing (app-update.yml). Install the packaged desktop app to enable updates.',
 			);
@@ -200,7 +328,28 @@ class DesktopUpdater {
 
 		this.enabled = true;
 		autoUpdater.autoDownload = false;
-		autoUpdater.autoInstallOnAppQuit = false;
+		autoUpdater.allowPrerelease = false;
+
+		// electron-updater only runs the signature check when app-update.yml names
+		// a publisher, so without one, updates stay manual instead of unverified.
+		if (autoUpdater instanceof NsisUpdater && /^publisherName:/m.test(appUpdateConfig)) {
+			const nsisUpdater = autoUpdater;
+			nsisUpdater.verifyUpdateCodeSignature = async (_publisherNames, filePath) => {
+				const info = this.downloadingInfo;
+				if (!info) {
+					return 'No update download is in progress.';
+				}
+
+				return await verifyDownloadedUpdate({ info, filePath });
+			};
+			nsisUpdater.autoInstallOnAppQuit = true;
+			// Web-installer packages are not covered by the update signature.
+			nsisUpdater.disableWebInstaller = true;
+			this.nsisUpdater = nsisUpdater;
+		} else {
+			console.warn('[desktop] Update verification is unavailable; updates must be installed manually.');
+			autoUpdater.autoInstallOnAppQuit = false;
+		}
 
 		autoUpdater.on('checking-for-update', () => {
 			this.setStatus({
@@ -218,6 +367,14 @@ class DesktopUpdater {
 			this.handleUpdateNotAvailable(info);
 		});
 
+		autoUpdater.on('download-progress', (progress) => {
+			this.handleDownloadProgress(progress);
+		});
+
+		autoUpdater.on('update-downloaded', (info) => {
+			this.handleUpdateDownloaded(info);
+		});
+
 		autoUpdater.on('error', (error) => {
 			this.handleUpdateError(error);
 		});
@@ -232,15 +389,42 @@ class DesktopUpdater {
 	}
 
 	public async checkForUpdates() {
-		if (!this.enabled) {
+		// A newer release found mid-download would replace the metadata the
+		// signature check expects, and a downloaded update is installed on quit.
+		if (!this.enabled || this.downloadInFlight || this.status.state === 'downloaded') {
 			return;
 		}
 
 		try {
 			await autoUpdater.checkForUpdates();
-		} catch (error) {
-			this.handleUpdateError(error as Error);
+		} catch {
+			// Check failures also arrive through the 'error' event; handling them
+			// here as well would count each failure twice toward the retry limit.
 		}
+	}
+
+	// Quits through the normal quit flow, which flushes the renderer and stops
+	// the capture sidecar before installPendingUpdateBeforeQuit runs.
+	public restartToUpdate(): boolean {
+		if (this.status.state !== 'downloaded' || !this.nsisUpdater) {
+			return false;
+		}
+
+		this.restartRequested = true;
+		app.quit();
+		return true;
+	}
+
+	// Called at the end of the quit flow. A plain quit installs silently through
+	// electron-updater's quit handler (autoInstallOnAppQuit); only an explicit
+	// restart relaunches the app after installing.
+	public installPendingUpdateBeforeQuit() {
+		if (!this.restartRequested || !this.nsisUpdater) {
+			return;
+		}
+
+		this.restartRequested = false;
+		this.nsisUpdater.install(true, true);
 	}
 
 	public getStatus() {

@@ -35,6 +35,7 @@ In Ripcord's **Settings → Environments**, create `release`. Leave required rev
 
 - `RELEASE_BOT_APP_ID`: the numeric App ID from the General page (not the Client ID or installation ID).
 - `RELEASE_BOT_PRIVATE_KEY`: the entire downloaded PEM file, including its BEGIN/END lines and newlines.
+- `DESKTOP_UPDATE_SIGNING_KEY`: the Ed25519 private key (PKCS#8 PEM) that signs Windows desktop updates. See [Windows desktop updates](#windows-desktop-updates).
 
 The bot token authors release PRs so their PR checks run automatically. A separate bot token creates tags and draft releases. Only that token requests Workflows write permission, which [GitHub requires](https://docs.github.com/en/rest/releases/releases#create-a-release) for historical release commits whose workflow files differ from current main; `GITHUB_TOKEN` cannot grant it. Asset uploads, final publication, and GHCR use the workflow's `GITHUB_TOKEN`. If updating an existing App, save this permission and accept the updated permissions for its installation. Enable GitHub Actions and allow workflow writes in the repository. Preserve the existing Windows signing and Sentry secrets; Windows stable builds require `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`.
 
@@ -46,6 +47,20 @@ The bot token authors release PRs so their PR checks run automatically. A separa
 4. Windows, macOS, and Linux desktop builds upload their assets to that same release. Only after every build succeeds does the workflow publish the GitHub release automatically, then promote the built Docker image to `latest`. Each publication operation has three bounded attempts; Docker promotion cannot start until the GitHub assets are available.
 
 The draft is an intermediate build state; no manual publication is needed. Stable desktop workflows require an existing release and never create one themselves. The independent Windows beta workflow retains its prerelease behavior.
+
+## Windows desktop updates
+
+The Windows app downloads updates in the background, then installs them when the user clicks **Restart to update** or quits. The installer's Authenticode certificate is self-signed, so other machines never trust it. The app therefore verifies updates with Ripcord's own Ed25519 key instead.
+
+After the Windows build, a separate `sign` job in the `release` environment runs `node scripts/release/cli.mjs finalize-desktop-update`. It runs no dependency installs or build scripts. It checks the installer against `latest.yml`, then signs its version, file name, and sha512. It verifies the signature against `apps/desktop/src/main/update-signing-keys.json` and appends it to `latest.yml` as `ripcordUpdateSignature`. It also appends release notes for the last ten versions, built from `CHANGELOG.md`, as `ripcordReleaseNotes`. A changelog problem skips the notes, but a signing problem fails the release. The app refuses any update whose signature or hash does not match. It treats releases without a signature as manual downloads.
+
+To rotate the key:
+
+1. Add the new public key (base64 SPKI DER) to `update-signing-keys.json` and ship a release still signed with the old key.
+2. Once users have that release, replace `DESKTOP_UPDATE_SIGNING_KEY`.
+3. Remove the old public key in a later release.
+
+If the private key is lost, users must install the next release manually.
 
 ## Recovering a failed release
 

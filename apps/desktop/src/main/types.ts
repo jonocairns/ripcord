@@ -149,6 +149,13 @@ export type TDesktopUpdateState =
 	| 'downloaded'
 	| 'error';
 
+export type TDesktopReleaseNoteVersion = {
+	version: string;
+	date?: string;
+	features: string[];
+	fixes: string[];
+};
+
 export type TDesktopUpdateStatus = {
 	state: TDesktopUpdateState;
 	currentVersion: string;
@@ -160,6 +167,7 @@ export type TDesktopUpdateStatus = {
 	transferredBytes?: number;
 	totalBytes?: number;
 	message?: string;
+	releaseNotes?: TDesktopReleaseNoteVersion[];
 };
 
 export type TPushKeybindKind = 'talk' | 'mute';
