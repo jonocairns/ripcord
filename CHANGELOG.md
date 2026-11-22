@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.7.1](https://github.com/jonocairns/ripcord/compare/v2.7.0...v2.7.1) (2026-11-22)
+
+
+### Bug Fixes
+
+* make pop-out stream audio controls discoverable ([#445](https://github.com/jonocairns/ripcord/issues/445)) ([0e69a94](https://github.com/jonocairns/ripcord/commit/0e69a949e635d5c80cc592a2718d908313d2eb32))
+
 ## [2.7.0](https://github.com/jonocairns/ripcord/compare/v2.6.6...v2.7.0) (2026-11-22)
 
 
