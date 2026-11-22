@@ -149,17 +149,27 @@ export type TDesktopUpdateState =
 	| 'downloaded'
 	| 'error';
 
+export type TDesktopReleaseNoteVersion = {
+	version: string;
+	date?: string;
+	features: string[];
+	fixes: string[];
+};
+
 export type TDesktopUpdateStatus = {
 	state: TDesktopUpdateState;
 	currentVersion: string;
 	availableVersion?: string;
 	manualInstallRequired?: boolean;
+	// The available update failed signature or hash verification and was refused.
+	unverified?: boolean;
 	checkedAtIso?: string;
 	percent?: number;
 	bytesPerSecond?: number;
 	transferredBytes?: number;
 	totalBytes?: number;
 	message?: string;
+	releaseNotes?: TDesktopReleaseNoteVersion[];
 };
 
 export type TPushKeybindKind = 'talk' | 'mute';

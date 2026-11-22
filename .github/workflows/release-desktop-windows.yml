@@ -48,21 +48,26 @@ permissions:
   contents: write
 
 jobs:
-  build-and-upload:
+  build:
     runs-on: windows-latest
+    # Dependency installs and build scripts run here, so this job gets a
+    # read-only token.
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
     env:
       RELEASE_TAG: ${{ inputs.tag }}
       RELEASE_REF: ${{ inputs.ref }}
       RELEASE_VERSION: ${{ inputs.version }}
       RELEASE_PRERELEASE: ${{ inputs.prerelease }}
-      CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: Resolve inputs and validate
         id: resolve
         shell: bash
+        env:
+          HAS_CSC_SECRETS: ${{ secrets.WIN_CSC_LINK != '' && secrets.WIN_CSC_KEY_PASSWORD != '' }}
         run: |
           if [ -z "${RELEASE_TAG}" ]; then
             echo "::error::tag is required."
@@ -79,7 +84,7 @@ jobs:
               echo "::error::Invalid tag format: ${RELEASE_TAG} (expected vX.Y.Z)"
               exit 1
             fi
-            if [ -z "${CSC_LINK}" ] || [ -z "${CSC_KEY_PASSWORD}" ]; then
+            if [ "${HAS_CSC_SECRETS}" != "true" ]; then
               echo "::error::Windows signing secrets are missing."
               echo "Set WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD in repository secrets."
               exit 1
@@ -93,9 +98,17 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ steps.resolve.outputs.ref }}
+          persist-credentials: false
+
+      # Recorded before any checked-out code runs; the sign job checks that this
+      # is the release tag's commit.
+      - name: Record build source
+        id: source
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.4.4"
 
@@ -103,10 +116,10 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: apps/desktop/sidecar -> target
 
@@ -135,6 +148,9 @@ jobs:
       - name: Package Windows installer (signed if CSC secrets present)
         working-directory: apps/desktop
         shell: bash
+        env:
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: |
           if [ -z "${CSC_LINK}" ] || [ -z "${CSC_KEY_PASSWORD}" ]; then
             echo "No CSC secrets present — building unsigned installer."
@@ -148,6 +164,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          # The app only verifies update signatures when app-update.yml names a
+          # publisher; without it, updates would stay manual.
+          app_update_config="build/out/win-unpacked/resources/app-update.yml"
+          if ! grep -q '^publisherName:' "${app_update_config}"; then
+            echo "::error::${app_update_config} has no publisherName."
+            cat "${app_update_config}" || true
+            exit 1
+          fi
 
           if [ "${RELEASE_PRERELEASE}" = "true" ]; then
             echo "Prerelease build — skipping updater-metadata validation (beta.yml is not consumed by the stable channel)."
@@ -180,14 +205,121 @@ jobs:
 
           echo "Validated updater metadata installer path: ${installer_path}"
 
-      - name: Upload desktop assets to GitHub release
-        shell: bash
-        run: |
-          shopt -s nullglob
-          assets=(
+      - name: Keep desktop assets for signing and upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-windows
+          path: |
             apps/desktop/build/out/*.exe
             apps/desktop/build/out/*.blockmap
             apps/desktop/build/out/latest*.yml
+          if-no-files-found: error
+          retention-days: 1
+
+  # Signing runs apart from the build so no dependency install or build script
+  # shares a runner with the update signing key. The key is a `release`
+  # environment secret, so only workflows running on main can read it. The
+  # scripts run from this workflow's own main commit, not from the `ref` input,
+  # so a dispatch naming another branch cannot run that branch's code with the
+  # key. Before signing, it checks that the build came from the release tag's
+  # commit on main and that latest.yml matches the tag's version, so a dispatch
+  # with another `ref` or `version` cannot produce an update clients trust. Only
+  # the changelog and public keys come from the built commit.
+  sign:
+    needs: build
+    if: inputs.prerelease != true
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout release scripts
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Checkout the release's changelog and update keys
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.build.outputs.sha }}
+          path: release-src
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            CHANGELOG.md
+            apps/desktop/src/main/update-signing-keys.json
+
+      - name: Download desktop assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: desktop-windows
+          path: desktop-out
+
+      - name: Sign the update and add release notes
+        env:
+          DESKTOP_UPDATE_DIR: desktop-out
+          DESKTOP_UPDATE_SOURCE_DIR: release-src
+          DESKTOP_UPDATE_SOURCE_SHA: ${{ needs.build.outputs.sha }}
+          DESKTOP_UPDATE_SIGNING_KEY: ${{ secrets.DESKTOP_UPDATE_SIGNING_KEY }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/release/cli.mjs finalize-desktop-update
+
+      - name: Keep signed updater metadata
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-windows-signed-metadata
+          path: desktop-out/latest.yml
+          if-no-files-found: error
+          retention-days: 1
+
+  upload:
+    needs: [build, sign]
+    if: >-
+      always() && needs.build.result == 'success' &&
+      (needs.sign.result == 'success' || (inputs.prerelease == true && needs.sign.result == 'skipped'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_PRERELEASE: ${{ inputs.prerelease }}
+
+    steps:
+      - name: Download desktop assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: desktop-windows
+          path: desktop-out
+
+      - name: Download signed updater metadata
+        if: inputs.prerelease != true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: desktop-windows-signed-metadata
+          path: desktop-signed
+
+      - name: Use signed updater metadata
+        if: inputs.prerelease != true
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '^ripcordUpdateSignature:' desktop-signed/latest.yml
+          cp desktop-signed/latest.yml desktop-out/latest.yml
+
+      - name: Upload desktop assets to GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          shopt -s nullglob
+          assets=(
+            desktop-out/*.exe
+            desktop-out/*.blockmap
+            desktop-out/latest*.yml
           )
 
           if [ ${#assets[@]} -eq 0 ]; then

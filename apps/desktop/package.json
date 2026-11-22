@@ -80,7 +80,12 @@
 				"nsis"
 			],
 			"executableName": "Ripcord",
-			"icon": "icons/icon.ico"
+			"icon": "icons/icon.ico",
+			"signtoolOptions": {
+				"publisherName": [
+					"Sharkord Dev Code Signing"
+				]
+			}
 		},
 		"linux": {
 			"target": [

@@ -979,6 +979,10 @@ const registerIpcHandlers = () => {
 		return desktopUpdater.getStatus();
 	});
 
+	handleTrusted('desktop:restart-to-update', () => {
+		return desktopUpdater.restartToUpdate();
+	});
+
 	handleTrusted('desktop:list-share-sources', () => {
 		return listShareSources();
 	});
@@ -1238,6 +1242,11 @@ app.on('before-quit', (event) => {
 				reason: result.reason,
 			});
 		}
+
+		// Start the installer only once the sidecar has stopped and diagnostics are
+		// flushed: the NSIS updater kills any process still running from the
+		// install directory shortly after it starts.
+		desktopUpdater.installPendingUpdateBeforeQuit();
 
 		desktopQuitFlushInterceptInProgress = false;
 		desktopQuitFlushCompleted = true;

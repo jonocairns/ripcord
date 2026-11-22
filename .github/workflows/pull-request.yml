@@ -63,7 +63,7 @@ jobs:
       - name: Check release version annotations and regressions
         run: |
           node scripts/release/cli.mjs check-lockfile
-          node --test scripts/release/release.test.mjs
+          node --test scripts/release/release.test.mjs scripts/release/desktop-update.test.mjs
 
       - name: Check types
         run: bun run check-types

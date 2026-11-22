@@ -5,6 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+	assertDesktopUpdateSource,
 	assertTagSource,
 	checkoutQualitySource,
 	publishRelease,
@@ -273,6 +274,30 @@ test('source checks reject missing identities and tags moved after resolution', 
 	assertTagSource(repository, tag, sourceSha, mockGitHub());
 	assert.throws(() => assertTagSource(repository, tag, testedSha, mockGitHub()), /verified immutable/);
 	assert.throws(() => assertTagSource(repository, tag, '', mockGitHub()), /verified immutable/);
+});
+
+test('desktop update signing requires the tag commit on main history', () => {
+	assertDesktopUpdateSource({ repository, tag, sourceSha, workflowSha: testedSha, run: mockGitHub() });
+	assert.throws(
+		() =>
+			assertDesktopUpdateSource({ repository, tag, sourceSha: testedSha, workflowSha: testedSha, run: mockGitHub() }),
+		/verified immutable/,
+	);
+	assert.throws(
+		() =>
+			assertDesktopUpdateSource({
+				repository,
+				tag,
+				sourceSha,
+				workflowSha: testedSha,
+				run: mockGitHub({ [`compare/${sourceSha}...${testedSha}`]: { status: 'diverged' } }),
+			}),
+		/tested main history/,
+	);
+	assert.throws(
+		() => assertDesktopUpdateSource({ repository, tag: 'beta', sourceSha, workflowSha: testedSha, run: mockGitHub() }),
+		/stable vX.Y.Z/,
+	);
 });
 
 test('recovery rejects malformed tags before requesting or checking out source', () => {
