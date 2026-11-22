@@ -6,8 +6,11 @@ import updateSigningKeys from './update-signing-keys.json';
 // Authenticode: the installer's certificate is self-signed, so Windows never
 // reports it as trusted on other machines. The release workflow signs the
 // payload below and appends the signature to latest.yml
-// (scripts/release/desktop-update.mjs builds the same payload).
+// (scripts/release/desktop-update.mjs builds the same payload). The payload
+// covers the release notes too, so everything the app reads from latest.yml is
+// signed.
 const UPDATE_SIGNATURE_FIELD = 'ripcordUpdateSignature';
+const RELEASE_NOTES_FIELD = 'ripcordReleaseNotes';
 const UPDATE_SIGNATURE_PAYLOAD_HEADER = 'ripcord-desktop-update-v1';
 const DESKTOP_UPDATE_PUBLIC_KEYS: readonly string[] = updateSigningKeys.publicKeys;
 
@@ -15,6 +18,7 @@ type TSignedUpdate = {
 	version: string;
 	fileName: string;
 	sha512: string;
+	notesSha256: string;
 	signature: string;
 };
 
@@ -39,10 +43,25 @@ const readStringField = (value: unknown, key: string): string | undefined => {
 	return trimmed && !trimmed.includes('\n') ? trimmed : undefined;
 };
 
-const buildUpdateSignaturePayload = ({ version, fileName, sha512 }: Omit<TSignedUpdate, 'signature'>): string =>
-	[UPDATE_SIGNATURE_PAYLOAD_HEADER, `version=${version}`, `file=${fileName}`, `sha512=${sha512}`].join('\n');
+const buildUpdateSignaturePayload = ({
+	version,
+	fileName,
+	sha512,
+	notesSha256,
+}: Omit<TSignedUpdate, 'signature'>): string =>
+	[
+		UPDATE_SIGNATURE_PAYLOAD_HEADER,
+		`version=${version}`,
+		`file=${fileName}`,
+		`sha512=${sha512}`,
+		`notes-sha256=${notesSha256}`,
+	].join('\n');
 
 const resolveSignedUpdate = (info: unknown): TSignedUpdate | string => {
+	if (typeof info !== 'object' || info === null) {
+		return 'Update metadata is not an object.';
+	}
+
 	const version = readStringField(info, 'version');
 	if (!version) {
 		return 'Update metadata has no version.';
@@ -55,29 +74,35 @@ const resolveSignedUpdate = (info: unknown): TSignedUpdate | string => {
 
 	// The signature does not cover these fields, so refuse metadata that uses
 	// them: a web-installer package or an elevated (UAC) install.
-	if (typeof info === 'object' && info !== null && Reflect.get(info, 'packages') !== undefined) {
+	if (Reflect.get(info, 'packages') !== undefined) {
 		return 'Update metadata must not list web-installer packages.';
 	}
 
-	const files: unknown = typeof info === 'object' && info !== null ? Reflect.get(info, 'files') : undefined;
-	const installers = Array.isArray(files)
-		? files.filter((file) => readStringField(file, 'url')?.toLowerCase().endsWith('.exe'))
-		: [];
-	if (installers.length !== 1) {
+	// Exactly one file, so electron-updater cannot pick a different entry than
+	// the one checked here (it matches installers by URL path, not raw string).
+	const files: unknown = Reflect.get(info, 'files');
+	if (!Array.isArray(files) || files.length !== 1) {
 		return 'Update metadata must list exactly one installer.';
 	}
 
-	const fileName = readStringField(installers[0], 'url');
-	const sha512 = readStringField(installers[0], 'sha512');
-	if (!fileName || !sha512) {
+	const [installer] = files;
+	const fileName = readStringField(installer, 'url');
+	const sha512 = readStringField(installer, 'sha512');
+	if (!fileName?.toLowerCase().endsWith('.exe') || !sha512) {
 		return 'Update metadata has an incomplete installer entry.';
 	}
 
-	if (Reflect.get(installers[0], 'isAdminRightsRequired') === true) {
+	if (Reflect.get(installer, 'isAdminRightsRequired') === true) {
 		return 'Update metadata must not require an elevated install.';
 	}
 
-	return { version, fileName, sha512, signature };
+	const notes: unknown = Reflect.get(info, RELEASE_NOTES_FIELD);
+	if (notes !== undefined && typeof notes !== 'string') {
+		return 'Update metadata has malformed release notes.';
+	}
+	const notesSha256 = notes === undefined ? '' : createHash('sha256').update(notes, 'utf8').digest('hex');
+
+	return { version, fileName, sha512, notesSha256, signature };
 };
 
 const verifyUpdateSignature = (update: TSignedUpdate, publicKeys: readonly string[]): boolean => {

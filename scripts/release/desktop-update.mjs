@@ -12,8 +12,20 @@ const PAYLOAD_HEADER = 'ripcord-desktop-update-v1';
 const MAX_RELEASE_NOTE_VERSIONS = 10;
 const HIDDEN_CHANGELOG_SCOPES = new Set(['ci']);
 
-export function buildUpdateSignaturePayload({ version, fileName, sha512 }) {
-	return [PAYLOAD_HEADER, `version=${version}`, `file=${fileName}`, `sha512=${sha512}`].join('\n');
+// notesSha256 is the hex sha256 of the exact ripcordReleaseNotes string, or ''
+// when the release has no notes.
+export function buildUpdateSignaturePayload({ version, fileName, sha512, notesSha256 }) {
+	return [
+		PAYLOAD_HEADER,
+		`version=${version}`,
+		`file=${fileName}`,
+		`sha512=${sha512}`,
+		`notes-sha256=${notesSha256}`,
+	].join('\n');
+}
+
+export function hashReleaseNotes(notesText) {
+	return notesText === undefined ? '' : createHash('sha256').update(notesText, 'utf8').digest('hex');
 }
 
 function unquoteYamlScalar(value) {
@@ -154,7 +166,14 @@ function hashFile(filePath) {
 	return createHash('sha512').update(readFileSync(filePath)).digest('base64');
 }
 
-export function finalizeDesktopUpdate({ directory, changelogPath, privateKeyPem, publicKeys, log = console.log }) {
+export function finalizeDesktopUpdate({
+	directory,
+	changelogPath,
+	expectedVersion,
+	privateKeyPem,
+	publicKeys,
+	log = console.log,
+}) {
 	if (!directory) {
 		throw new Error('DESKTOP_UPDATE_DIR must point at the electron-builder output directory.');
 	}
@@ -164,28 +183,35 @@ export function finalizeDesktopUpdate({ directory, changelogPath, privateKeyPem,
 
 	const metadataPath = path.join(directory, 'latest.yml');
 	const metadataText = readFileSync(metadataPath, 'utf8');
-	const update = parseUpdateMetadata(metadataText);
-
-	if (hashFile(path.join(directory, update.fileName)) !== update.sha512) {
-		throw new Error(`${update.fileName} does not match the sha512 in latest.yml.`);
+	const metadata = parseUpdateMetadata(metadataText);
+	if (metadata.version !== expectedVersion) {
+		throw new Error(`latest.yml is for ${metadata.version}, but the release is ${expectedVersion}.`);
 	}
 
+	if (hashFile(path.join(directory, metadata.fileName)) !== metadata.sha512) {
+		throw new Error(`${metadata.fileName} does not match the sha512 in latest.yml.`);
+	}
+
+	// Notes are a nice-to-have: a changelog problem must not block the release.
+	let notesText;
+	try {
+		notesText = JSON.stringify(buildReleaseNotes(readFileSync(changelogPath, 'utf8'), metadata.version));
+	} catch (error) {
+		log(`::warning::Skipping desktop release notes: ${error instanceof Error ? error.message : String(error)}`);
+	}
+
+	const update = { ...metadata, notesSha256: hashReleaseNotes(notesText) };
 	const signature = signUpdate(update, privateKeyPem);
 	if (!isTrustedUpdateSignature(update, signature, publicKeys)) {
 		throw new Error('The signing key does not match a public key in update-signing-keys.json.');
 	}
 
 	const fields = [`${SIGNATURE_FIELD}: ${quoteYamlString(signature)}`];
-
-	// Notes are a nice-to-have: a changelog problem must not block the release.
-	try {
-		const notes = buildReleaseNotes(readFileSync(changelogPath, 'utf8'), update.version);
-		fields.push(`${RELEASE_NOTES_FIELD}: ${quoteYamlString(JSON.stringify(notes))}`);
-	} catch (error) {
-		log(`::warning::Skipping desktop release notes: ${error instanceof Error ? error.message : String(error)}`);
+	if (notesText !== undefined) {
+		fields.push(`${RELEASE_NOTES_FIELD}: ${quoteYamlString(notesText)}`);
 	}
 
 	const separator = metadataText.endsWith('\n') ? '' : '\n';
 	writeFileSync(metadataPath, `${metadataText}${separator}${fields.join('\n')}\n`);
-	log(`Signed ${update.fileName} (${update.version}).`);
+	log(`Signed ${metadata.fileName} (${metadata.version}).`);
 }

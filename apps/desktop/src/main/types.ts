@@ -161,6 +161,8 @@ export type TDesktopUpdateStatus = {
 	currentVersion: string;
 	availableVersion?: string;
 	manualInstallRequired?: boolean;
+	// The available update failed signature or hash verification and was refused.
+	unverified?: boolean;
 	checkedAtIso?: string;
 	percent?: number;
 	bytesPerSecond?: number;

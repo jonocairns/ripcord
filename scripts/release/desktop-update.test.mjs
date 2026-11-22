@@ -8,6 +8,7 @@ import {
 	buildReleaseNotes,
 	buildUpdateSignaturePayload,
 	finalizeDesktopUpdate,
+	hashReleaseNotes,
 	isTrustedUpdateSignature,
 	parseChangelog,
 	parseUpdateMetadata,
@@ -86,9 +87,15 @@ const writeRelease = (directory, version, contents = 'install') => {
 
 test('the signed payload matches the format the desktop app verifies', () => {
 	assert.equal(
-		buildUpdateSignaturePayload({ version: '2.7.0', fileName: 'Ripcord.Desktop.Setup.2.7.0.exe', sha512: 'abc==' }),
-		'ripcord-desktop-update-v1\nversion=2.7.0\nfile=Ripcord.Desktop.Setup.2.7.0.exe\nsha512=abc==',
+		buildUpdateSignaturePayload({
+			version: '2.7.0',
+			fileName: 'Ripcord.Desktop.Setup.2.7.0.exe',
+			sha512: 'abc==',
+			notesSha256: hashReleaseNotes('{"versions":[]}'),
+		}),
+		'ripcord-desktop-update-v1\nversion=2.7.0\nfile=Ripcord.Desktop.Setup.2.7.0.exe\nsha512=abc==\nnotes-sha256=e64db0fde59206a0cf85c783e644f5e2ffd6a519dbf7d720cc9e5b0ace3d46a4',
 	);
+	assert.equal(hashReleaseNotes(undefined), '');
 });
 
 test('reads the installer from electron-builder metadata', () => {
@@ -143,6 +150,7 @@ test('finalizing signs the installer and appends notes the updater can read back
 		finalizeDesktopUpdate({
 			directory,
 			changelogPath: path.join(directory, 'CHANGELOG.md'),
+			expectedVersion: '2.7.0',
 			privateKeyPem: keys.privateKeyPem,
 			publicKeys: [keys.publicKey],
 			log: () => {},
@@ -150,14 +158,21 @@ test('finalizing signs the installer and appends notes the updater can read back
 
 		const finalized = readFileSync(path.join(directory, 'latest.yml'), 'utf8');
 		const signature = finalized.match(/^ripcordUpdateSignature: '(.+)'$/m)?.[1];
-		assert.ok(signature);
-		assert.ok(isTrustedUpdateSignature({ version: '2.7.0', fileName, sha512 }, signature, [keys.publicKey]));
-		assert.equal(isTrustedUpdateSignature({ version: '2.6.9', fileName, sha512 }, signature, [keys.publicKey]), false);
-
 		const notesLine = finalized.match(/^ripcordReleaseNotes: '(.+)'$/m)?.[1];
+		assert.ok(signature);
 		assert.ok(notesLine);
-		const notes = JSON.parse(notesLine.replaceAll("''", "'"));
-		assert.deepEqual(notes.versions[0].fixes, ["Keep the window's size after restarting"]);
+		const notesText = notesLine.replaceAll("''", "'");
+		assert.deepEqual(JSON.parse(notesText).versions[0].fixes, ["Keep the window's size after restarting"]);
+
+		const signed = { version: '2.7.0', fileName, sha512, notesSha256: hashReleaseNotes(notesText) };
+		assert.ok(isTrustedUpdateSignature(signed, signature, [keys.publicKey]));
+		assert.equal(isTrustedUpdateSignature({ ...signed, version: '2.6.9' }, signature, [keys.publicKey]), false);
+		assert.equal(
+			isTrustedUpdateSignature({ ...signed, notesSha256: hashReleaseNotes(`${notesText} `) }, signature, [
+				keys.publicKey,
+			]),
+			false,
+		);
 	});
 });
 
@@ -169,6 +184,7 @@ test('finalizing fails when the key does not match the committed public key', ()
 				finalizeDesktopUpdate({
 					directory,
 					changelogPath: path.join(directory, 'CHANGELOG.md'),
+					expectedVersion: '2.7.0',
 					privateKeyPem: createKeys().privateKeyPem,
 					publicKeys: [createKeys().publicKey],
 					log: () => {},
@@ -188,6 +204,7 @@ test('finalizing fails when the installer differs from latest.yml', () => {
 				finalizeDesktopUpdate({
 					directory,
 					changelogPath: path.join(directory, 'CHANGELOG.md'),
+					expectedVersion: '2.7.0',
 					privateKeyPem: keys.privateKeyPem,
 					publicKeys: [keys.publicKey],
 					log: () => {},
@@ -207,6 +224,7 @@ test('a broken changelog skips the notes but still signs the update', () => {
 		finalizeDesktopUpdate({
 			directory,
 			changelogPath: path.join(directory, 'CHANGELOG.md'),
+			expectedVersion: '2.7.0',
 			privateKeyPem: keys.privateKeyPem,
 			publicKeys: [keys.publicKey],
 			log: (line) => logs.push(line),
@@ -216,5 +234,24 @@ test('a broken changelog skips the notes but still signs the update', () => {
 		assert.match(finalized, /^ripcordUpdateSignature: /m);
 		assert.doesNotMatch(finalized, /^ripcordReleaseNotes: /m);
 		assert.ok(logs.some((line) => line.includes('Skipping desktop release notes')));
+	});
+});
+
+test('finalizing fails when latest.yml is for a different version than the release', () => {
+	withReleaseDirectory((directory) => {
+		const keys = createKeys();
+		writeRelease(directory, '2.7.0');
+		assert.throws(
+			() =>
+				finalizeDesktopUpdate({
+					directory,
+					changelogPath: path.join(directory, 'CHANGELOG.md'),
+					expectedVersion: '2.7.1',
+					privateKeyPem: keys.privateKeyPem,
+					publicKeys: [keys.publicKey],
+					log: () => {},
+				}),
+			/release is 2.7.1/,
+		);
 	});
 });

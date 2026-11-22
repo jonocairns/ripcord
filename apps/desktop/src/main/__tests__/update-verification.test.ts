@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
+import { createHash, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
 import { describe, it } from 'node:test';
 import updateSigningKeys from '../update-signing-keys.json';
 import { buildUpdateSignaturePayload, verifyDownloadedUpdate, verifyUpdateMetadata } from '../update-verification';
@@ -12,12 +12,16 @@ const createKeys = () => {
 	return { privateKey, publicKey: publicKey.export({ type: 'spki', format: 'der' }).toString('base64') };
 };
 
+const NOTES = '{"versions":[{"version":"2.7.0","features":["Install updates in the background"],"fixes":[]}]}';
+const sha256 = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
+
 const signedInfo = (
 	privateKey: ReturnType<typeof createKeys>['privateKey'],
-	signed = { version: '2.7.0', fileName: FILE_NAME, sha512: SHA512 },
+	signed = { version: '2.7.0', fileName: FILE_NAME, sha512: SHA512, notesSha256: sha256(NOTES) },
 ) => ({
 	version: '2.7.0',
 	files: [{ url: FILE_NAME, sha512: SHA512, size: 7 }],
+	ripcordReleaseNotes: NOTES,
 	ripcordUpdateSignature: sign(null, Buffer.from(buildUpdateSignaturePayload(signed)), privateKey).toString('base64'),
 });
 
@@ -26,8 +30,13 @@ const hashAs = (sha512: string) => async () => sha512;
 void describe('buildUpdateSignaturePayload', () => {
 	void it('matches the payload the release workflow signs', () => {
 		assert.equal(
-			buildUpdateSignaturePayload({ version: '2.7.0', fileName: 'Ripcord.Desktop.Setup.2.7.0.exe', sha512: 'abc==' }),
-			'ripcord-desktop-update-v1\nversion=2.7.0\nfile=Ripcord.Desktop.Setup.2.7.0.exe\nsha512=abc==',
+			buildUpdateSignaturePayload({
+				version: '2.7.0',
+				fileName: 'Ripcord.Desktop.Setup.2.7.0.exe',
+				sha512: 'abc==',
+				notesSha256: sha256('{"versions":[]}'),
+			}),
+			'ripcord-desktop-update-v1\nversion=2.7.0\nfile=Ripcord.Desktop.Setup.2.7.0.exe\nsha512=abc==\nnotes-sha256=e64db0fde59206a0cf85c783e644f5e2ffd6a519dbf7d720cc9e5b0ace3d46a4',
 		);
 	});
 });
@@ -70,7 +79,12 @@ void describe('verifyDownloadedUpdate', () => {
 
 	void it('rejects metadata whose version differs from what was signed', async () => {
 		const keys = createKeys();
-		const info = signedInfo(keys.privateKey, { version: '2.6.9', fileName: FILE_NAME, sha512: SHA512 });
+		const info = signedInfo(keys.privateKey, {
+			version: '2.6.9',
+			fileName: FILE_NAME,
+			sha512: SHA512,
+			notesSha256: sha256(NOTES),
+		});
 		const result = await verifyDownloadedUpdate({
 			info,
 			filePath: 'installer.exe',
@@ -134,8 +148,28 @@ void describe('verifyUpdateMetadata', () => {
 		const info = signedInfo(keys.privateKey);
 		const withPackages = { ...info, packages: { x64: { path: 'evil.7z', sha512: SHA512 } } };
 		const elevated = { ...info, files: [{ url: FILE_NAME, sha512: SHA512, isAdminRightsRequired: true }] };
+		// electron-updater picks installers by URL path, so a decoy entry must not
+		// sit next to the signed one.
+		const decoy = { ...info, files: [{ url: 'evil-x64.exe?a', sha512: SHA512 }, ...info.files] };
 
 		assert.match(verifyUpdateMetadata(withPackages, [keys.publicKey]) ?? '', /web-installer packages/);
 		assert.match(verifyUpdateMetadata(elevated, [keys.publicKey]) ?? '', /elevated install/);
+		assert.match(verifyUpdateMetadata(decoy, [keys.publicKey]) ?? '', /exactly one installer/);
+	});
+
+	void it('rejects release notes changed after signing', () => {
+		const keys = createKeys();
+		const info = signedInfo(keys.privateKey);
+
+		assert.match(
+			verifyUpdateMetadata({ ...info, ripcordReleaseNotes: NOTES.replace('background', 'foreground') }, [
+				keys.publicKey,
+			]) ?? '',
+			/trusted Ripcord key/,
+		);
+		assert.match(
+			verifyUpdateMetadata({ ...info, ripcordReleaseNotes: 42 }, [keys.publicKey]) ?? '',
+			/malformed release notes/,
+		);
 	});
 });

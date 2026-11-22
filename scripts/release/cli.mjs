@@ -67,10 +67,14 @@ switch (process.argv[2]) {
 		await publishRelease({ repository, tag, image: process.env.IMAGE, digest: process.env.IMAGE_DIGEST });
 		break;
 	case 'finalize-desktop-update': {
-		const keyFile = path.join(directory, 'apps/desktop/src/main/update-signing-keys.json');
+		// The changelog and public keys come from the release being built, which
+		// may be checked out apart from these scripts.
+		const releaseSource = process.env.DESKTOP_UPDATE_SOURCE_DIR || directory;
+		const keyFile = path.join(releaseSource, 'apps/desktop/src/main/update-signing-keys.json');
 		finalizeDesktopUpdate({
 			directory: process.env.DESKTOP_UPDATE_DIR,
-			changelogPath: path.join(directory, 'CHANGELOG.md'),
+			changelogPath: path.join(releaseSource, 'CHANGELOG.md'),
+			expectedVersion: process.env.DESKTOP_UPDATE_VERSION,
 			privateKeyPem: process.env.DESKTOP_UPDATE_SIGNING_KEY,
 			publicKeys: JSON.parse(readFileSync(keyFile, 'utf8')).publicKeys,
 		});

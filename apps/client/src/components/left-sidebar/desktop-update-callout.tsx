@@ -1,4 +1,4 @@
-import { Download, RotateCw } from 'lucide-react';
+import { Download, RotateCw, ShieldAlert } from 'lucide-react';
 import { memo, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { getDesktopBridge } from '@/runtime/desktop-bridge';
 import type { TDesktopUpdateStatus } from '@/runtime/types';
@@ -25,7 +25,7 @@ const resolveManualUpdateUrl = (availableVersion?: string): string => {
 	return `${MANUAL_UPDATE_BASE_URL}/download/${encodeURIComponent(releaseTag)}/${encodeURIComponent(installerFileName)}`;
 };
 
-type TCalloutKind = 'ready' | 'manual';
+type TCalloutKind = 'ready' | 'manual' | 'blocked';
 
 type TCalloutContent = {
 	kind: TCalloutKind;
@@ -46,6 +46,18 @@ const resolveCalloutContent = (status: TDesktopUpdateStatus, canRestart: boolean
 				? `${versionLabel} installs when you restart or close Ripcord.`
 				: `${versionLabel} installs when you close Ripcord.`,
 			icon: <RotateCw className="h-4 w-4 text-success" />,
+			pulseTitle: false,
+		};
+	}
+
+	// A refused update gets no download link: it would point at the same
+	// unverified installer.
+	if (status.state === 'error' && status.unverified) {
+		return {
+			kind: 'blocked',
+			title: 'Update blocked',
+			description: `${versionLabel} could not be verified, so it was not installed.`,
+			icon: <ShieldAlert className="h-4 w-4 text-destructive" />,
 			pulseTitle: false,
 		};
 	}
@@ -162,7 +174,7 @@ const DesktopUpdateCallout = memo(() => {
 					</Button>
 				)}
 
-				{releaseNotes && releaseNotes.length > 0 && (
+				{calloutContent.kind !== 'blocked' && releaseNotes && releaseNotes.length > 0 && (
 					<Popover>
 						<PopoverTrigger asChild>
 							<Button size="sm" variant="ghost" className="mt-1 w-full text-muted-foreground">

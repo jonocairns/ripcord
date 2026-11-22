@@ -52,7 +52,19 @@ The draft is an intermediate build state; no manual publication is needed. Stabl
 
 The Windows app downloads updates in the background, then installs them when the user clicks **Restart to update** or quits. The installer's Authenticode certificate is self-signed, so other machines never trust it. The app therefore verifies updates with Ripcord's own Ed25519 key instead.
 
-After the Windows build, a separate `sign` job in the `release` environment runs `node scripts/release/cli.mjs finalize-desktop-update`. It runs no dependency installs or build scripts. It checks the installer against `latest.yml`, then signs its version, file name, and sha512. It verifies the signature against `apps/desktop/src/main/update-signing-keys.json` and appends it to `latest.yml` as `ripcordUpdateSignature`. It also appends release notes for the last ten versions, built from `CHANGELOG.md`, as `ripcordReleaseNotes`. A changelog problem skips the notes, but a signing problem fails the release. The app refuses any update whose signature or hash does not match. It treats releases without a signature as manual downloads.
+After the Windows build, a separate `sign` job in the `release` environment runs `node scripts/release/cli.mjs finalize-desktop-update`. It runs no dependency installs or build scripts, and it runs the scripts from the workflow's own `main` commit. Only `CHANGELOG.md` and `update-signing-keys.json` come from the release ref.
+
+The job does the following:
+
+- Checks that `latest.yml` is for the release version and that the installer matches it.
+- Builds release notes for the last ten versions from `CHANGELOG.md`.
+- Signs the version, file name, installer sha512, and a hash of the notes.
+- Verifies the signature against the release's `apps/desktop/src/main/update-signing-keys.json`.
+- Appends `ripcordUpdateSignature` and `ripcordReleaseNotes` to `latest.yml`.
+
+A changelog problem drops the notes, but a signing problem fails the release.
+
+The app checks the signature before downloading and the installer's hash after. If either check fails, or the update has no signature, the app refuses the update. It shows **Update blocked** in the sidebar and offers no download link, because the link would point at the same unverified installer.
 
 To rotate the key:
 
@@ -60,7 +72,7 @@ To rotate the key:
 2. Once users have that release, replace `DESKTOP_UPDATE_SIGNING_KEY`.
 3. Remove the old public key in a later release.
 
-If the private key is lost, users must install the next release manually.
+If the private key is lost, the app shows **Update blocked** for every release signed with a new key. Users must then download and install a release from GitHub themselves.
 
 The Authenticode certificate (`CN=Sharkord Dev Code Signing`, self-signed) expires on 19 February 2027. Updates no longer depend on it, but it still signs the installer, and Windows shows its name in file properties and install prompts. When renewing it, issue the new certificate as `CN=Ripcord`. Replace `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`, and set `win.signtoolOptions.publisherName` in `apps/desktop/package.json` to the new name. Keep `appId` (`com.sharkord.desktop`) unchanged, because the installer uses it to find the existing install it upgrades.
 

@@ -50,8 +50,13 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    # Dependency installs and build scripts run here, so this job gets a
+    # read-only token.
+    permissions:
+      contents: read
     outputs:
       ref: ${{ steps.resolve.outputs.ref }}
+      version: ${{ steps.resolve.outputs.version }}
     env:
       RELEASE_TAG: ${{ inputs.tag }}
       RELEASE_REF: ${{ inputs.ref }}
@@ -207,7 +212,10 @@ jobs:
 
   # Signing runs apart from the build so no dependency install or build script
   # shares a runner with the update signing key. The key is a `release`
-  # environment secret, so only stable releases from main can read it.
+  # environment secret, so only workflows running on main can read it. The
+  # scripts run from this workflow's own main commit, not from the `ref` input,
+  # so a dispatch naming another branch cannot run that branch's code with the
+  # key; only the changelog and public keys come from the release ref.
   sign:
     needs: build
     if: inputs.prerelease != true
@@ -217,11 +225,22 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout release scripts and changelog
+      - name: Checkout release scripts
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Checkout the release's changelog and update keys
         uses: actions/checkout@v5
         with:
           ref: ${{ needs.build.outputs.ref }}
+          path: release-src
           persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            CHANGELOG.md
+            apps/desktop/src/main/update-signing-keys.json
 
       - name: Download desktop assets
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -232,6 +251,8 @@ jobs:
       - name: Sign the update and add release notes
         env:
           DESKTOP_UPDATE_DIR: desktop-out
+          DESKTOP_UPDATE_SOURCE_DIR: release-src
+          DESKTOP_UPDATE_VERSION: ${{ needs.build.outputs.version }}
           DESKTOP_UPDATE_SIGNING_KEY: ${{ secrets.DESKTOP_UPDATE_SIGNING_KEY }}
         run: node scripts/release/cli.mjs finalize-desktop-update
 
@@ -249,6 +270,8 @@ jobs:
       always() && needs.build.result == 'success' &&
       (needs.sign.result == 'success' || (inputs.prerelease == true && needs.sign.result == 'skipped'))
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       RELEASE_TAG: ${{ inputs.tag }}
       RELEASE_PRERELEASE: ${{ inputs.prerelease }}
