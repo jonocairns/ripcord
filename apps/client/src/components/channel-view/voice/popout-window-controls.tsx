@@ -29,12 +29,13 @@ const PopoutWindowControls = memo(
 		};
 
 		return (
-			// Frameless Electron popouts use this bar as their title bar. It stays
-			// draggable while faded out, so users can always move the window.
+			// Frameless Electron popouts use this bar as their title bar. It is only
+			// a drag region while shown: Windows drag regions swallow mouse events, so
+			// a hidden one would stop pointer movement at the top edge revealing it.
 			<div
 				className="ripcord-popout-titlebar"
 				data-visible={visible}
-				data-draggable={Boolean(controlPopoutWindow) && !isFullscreen}
+				data-draggable={Boolean(controlPopoutWindow) && !isFullscreen && visible}
 			>
 				{controlPopoutWindow && <span className="ripcord-popout-title">{title}</span>}
 				<fieldset ref={controlsRef} className="ripcord-popout-controls" aria-label="Pop-out controls">

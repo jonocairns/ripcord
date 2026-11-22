@@ -15,9 +15,10 @@ import { useScreenShareZoom } from './hooks/use-screen-share-zoom';
 import { useStreamStats } from './hooks/use-stream-stats';
 import { useVoiceRefs } from './hooks/use-voice-refs';
 import { PinButton } from './pin-button';
-import { PopoutVolumePanel } from './popout-volume-panel';
+import { PopoutAudioUnavailable, PopoutVolumePanel } from './popout-volume-panel';
 import { DEFAULT_WINDOW_FEATURES, PopoutWindow } from './popout-window';
 import { PopoutWindowControls } from './popout-window-controls';
+import { getScreenAudioStatus, SCREEN_AUDIO_STATUS_LABELS } from './screen-audio-status';
 import { buildCombinedScreenShareStream } from './screen-share-stream';
 import { StreamSettingsPopover } from './stream-settings-popover';
 import { VoiceSurface } from './voice-surface';
@@ -333,13 +334,13 @@ const ScreenShareCard = memo(
 
 		const streamAspectRatio = streamStats ? `${streamStats.width} / ${streamStats.height}` : '16 / 9';
 		const shouldFitStreamAspect = isPinned || fitStreamAspect || !showPinControls;
+		const screenAudioStatus = getScreenAudioStatus(hasScreenShareAudioStream, screenAudioSlot);
+		const pendingScreenAudioStatus =
+			screenAudioStatus === 'connecting' || screenAudioStatus === 'failed' ? screenAudioStatus : undefined;
+		// The slot can report live a moment before the stream attaches; keep the
+		// chip hidden for that gap.
 		const shouldShowScreenAudioAffordance =
-			!isOwnUser &&
-			screenAudioSlot?.desired === true &&
-			screenAudioSlot.status !== 'live' &&
-			!hasScreenShareAudioStream;
-		const screenAudioLabel =
-			screenAudioSlot?.status === 'failed' ? 'Screen audio unavailable' : 'Screen audio connecting';
+			!isOwnUser && pendingScreenAudioStatus && screenAudioSlot?.status !== 'live';
 
 		return (
 			<>
@@ -426,10 +427,12 @@ const ScreenShareCard = memo(
 							<VolumeX
 								className={cn(
 									'size-4 shrink-0',
-									screenAudioSlot.status === 'failed' ? 'text-destructive' : 'text-warning',
+									pendingScreenAudioStatus === 'failed' ? 'text-destructive' : 'text-warning',
 								)}
 							/>
-							<span className="min-w-0 truncate text-xs font-medium">{screenAudioLabel}</span>
+							<span className="min-w-0 truncate text-xs font-medium">
+								{SCREEN_AUDIO_STATUS_LABELS[pendingScreenAudioStatus]}
+							</span>
 							<ControlButton
 								icon={RefreshCw}
 								onClick={onRetryScreenAudio}
@@ -506,14 +509,17 @@ const ScreenShareCard = memo(
 								isFullscreen={isPopoutFullscreen}
 								onToggleFullscreen={handleTogglePopoutFullscreen}
 							>
-								{!isOwnUser && hasScreenShareAudioStream && (
-									<PopoutVolumePanel
-										volume={volume}
-										isMuted={isMuted}
-										onMuteToggle={handleMuteToggle}
-										onVolumeChange={handlePopoutVolumeChange}
-									/>
-								)}
+								{!isOwnUser &&
+									(screenAudioStatus === 'live' ? (
+										<PopoutVolumePanel
+											volume={volume}
+											isMuted={isMuted}
+											onMuteToggle={handleMuteToggle}
+											onVolumeChange={handlePopoutVolumeChange}
+										/>
+									) : (
+										<PopoutAudioUnavailable status={screenAudioStatus} onRetry={onRetryScreenAudio} />
+									))}
 							</PopoutWindowControls>
 							<video
 								ref={setPopoutVideoElement}
