@@ -62,6 +62,8 @@ To rotate the key:
 
 If the private key is lost, users must install the next release manually.
 
+The Authenticode certificate (`CN=Sharkord Dev Code Signing`, self-signed) expires on 19 February 2027. Updates no longer depend on it, but it still signs the installer, and Windows shows its name in file properties and install prompts. When renewing it, issue the new certificate as `CN=Ripcord`. Replace `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`, and set `win.signtoolOptions.publisherName` in `apps/desktop/package.json` to the new name. Keep `appId` (`com.sharkord.desktop`) unchanged, because the installer uses it to find the existing install it upgrades.
+
 ## Recovering a failed release
 
 For a transient failure, use **Re-run failed jobs** on the original workflow run. This preserves the release outputs for the jobs that already succeeded.
