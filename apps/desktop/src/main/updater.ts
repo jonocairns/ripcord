@@ -18,6 +18,7 @@ const readAppUpdateConfig = (): string | undefined => {
 const updater = new DesktopUpdater({
 	getVersion: () => app.getVersion(),
 	quitApp: () => app.quit(),
+	relaunchApp: () => app.relaunch(),
 	checkForUpdates: () => autoUpdater.checkForUpdates(),
 });
 

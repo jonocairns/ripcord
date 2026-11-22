@@ -20,18 +20,23 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 const createHarness = ({
 	withInstaller = true,
 	metadataRejection = null,
+	installerStarts = true,
 }: {
 	withInstaller?: boolean;
 	metadataRejection?: string | null;
+	installerStarts?: boolean;
 } = {}) => {
 	const timers: TTimer[] = [];
-	const calls = { checks: 0, downloads: 0, quits: 0, installs: [] as [boolean, boolean][] };
+	const calls = { checks: 0, downloads: 0, quits: 0, relaunches: 0, installs: [] as [boolean, boolean][] };
 	let rejectDownload: ((error: Error) => void) | undefined;
 
 	const updater = new DesktopUpdater({
 		getVersion: () => '2.6.6',
 		quitApp: () => {
 			calls.quits += 1;
+		},
+		relaunchApp: () => {
+			calls.relaunches += 1;
 		},
 		checkForUpdates: async () => {
 			calls.checks += 1;
@@ -64,7 +69,7 @@ const createHarness = ({
 					},
 					install: (isSilent, isForceRunAfter) => {
 						calls.installs.push([isSilent, isForceRunAfter]);
-						return true;
+						return installerStarts;
 					},
 				}
 			: undefined,
@@ -113,6 +118,17 @@ void describe('DesktopUpdater', () => {
 		updater.installPendingUpdateBeforeQuit();
 		updater.installPendingUpdateBeforeQuit();
 		assert.deepEqual(calls.installs, [[true, true]]);
+		assert.equal(calls.relaunches, 0);
+	});
+
+	void it('relaunches the current version when the installer cannot start', () => {
+		const { updater, calls } = createHarness({ installerStarts: false });
+		updater.handleUpdateAvailable(updateInfo('2.7.0'));
+		updater.handleUpdateDownloaded(updateInfo('2.7.0'));
+
+		updater.restartToUpdate();
+		updater.installPendingUpdateBeforeQuit();
+		assert.equal(calls.relaunches, 1);
 	});
 
 	void it('keeps a downloaded update ready when cache housekeeping fails afterwards', async () => {

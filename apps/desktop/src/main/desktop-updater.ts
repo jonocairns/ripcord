@@ -32,6 +32,7 @@ type TUpdateInstaller = {
 type TDesktopUpdaterDeps = {
 	getVersion: () => string;
 	quitApp: () => void;
+	relaunchApp: () => void;
 	checkForUpdates: () => Promise<unknown>;
 	verifyMetadata?: (info: UpdateInfo) => string | null;
 	verifyDownload?: (info: UpdateInfo, filePath: string) => Promise<string | null>;
@@ -363,7 +364,13 @@ class DesktopUpdater {
 		}
 
 		this.restartRequested = false;
-		this.installer.install(true, true);
+		// The app is already shutting down, so a failed start cannot be undone.
+		// Relaunch the current version instead of leaving Ripcord closed: the
+		// cached installer shows as ready again on the next launch.
+		if (!this.installer.install(true, true)) {
+			this.log.error('[desktop] Update installer did not start; relaunching the current version');
+			this.deps.relaunchApp();
+		}
 	}
 
 	public getStatus() {
