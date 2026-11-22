@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { finalizeDesktopUpdate } from './desktop-update.mjs';
 import {
 	api,
+	assertDesktopUpdateSource,
 	assertTagSource,
 	checkoutQualitySource,
 	command,
@@ -67,14 +68,20 @@ switch (process.argv[2]) {
 		await publishRelease({ repository, tag, image: process.env.IMAGE, digest: process.env.IMAGE_DIGEST });
 		break;
 	case 'finalize-desktop-update': {
+		assertDesktopUpdateSource({
+			repository,
+			tag,
+			sourceSha: process.env.DESKTOP_UPDATE_SOURCE_SHA,
+			workflowSha: process.env.GITHUB_SHA,
+		});
 		// The changelog and public keys come from the release being built, which
-		// may be checked out apart from these scripts.
+		// is checked out apart from these scripts.
 		const releaseSource = process.env.DESKTOP_UPDATE_SOURCE_DIR || directory;
 		const keyFile = path.join(releaseSource, 'apps/desktop/src/main/update-signing-keys.json');
 		finalizeDesktopUpdate({
 			directory: process.env.DESKTOP_UPDATE_DIR,
 			changelogPath: path.join(releaseSource, 'CHANGELOG.md'),
-			expectedVersion: process.env.DESKTOP_UPDATE_VERSION,
+			expectedVersion: tag.slice(1),
 			privateKeyPem: process.env.DESKTOP_UPDATE_SIGNING_KEY,
 			publicKeys: JSON.parse(readFileSync(keyFile, 'utf8')).publicKeys,
 		});

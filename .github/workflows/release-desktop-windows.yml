@@ -55,8 +55,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      ref: ${{ steps.resolve.outputs.ref }}
-      version: ${{ steps.resolve.outputs.version }}
+      sha: ${{ steps.source.outputs.sha }}
     env:
       RELEASE_TAG: ${{ inputs.tag }}
       RELEASE_REF: ${{ inputs.ref }}
@@ -100,6 +99,13 @@ jobs:
         with:
           ref: ${{ steps.resolve.outputs.ref }}
           persist-credentials: false
+
+      # Recorded before any checked-out code runs; the sign job checks that this
+      # is the release tag's commit.
+      - name: Record build source
+        id: source
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -215,7 +221,10 @@ jobs:
   # environment secret, so only workflows running on main can read it. The
   # scripts run from this workflow's own main commit, not from the `ref` input,
   # so a dispatch naming another branch cannot run that branch's code with the
-  # key; only the changelog and public keys come from the release ref.
+  # key. Before signing, it checks that the build came from the release tag's
+  # commit on main and that latest.yml matches the tag's version, so a dispatch
+  # with another `ref` or `version` cannot produce an update clients trust. Only
+  # the changelog and public keys come from the built commit.
   sign:
     needs: build
     if: inputs.prerelease != true
@@ -234,7 +243,7 @@ jobs:
       - name: Checkout the release's changelog and update keys
         uses: actions/checkout@v5
         with:
-          ref: ${{ needs.build.outputs.ref }}
+          ref: ${{ needs.build.outputs.sha }}
           path: release-src
           persist-credentials: false
           sparse-checkout-cone-mode: false
@@ -252,8 +261,10 @@ jobs:
         env:
           DESKTOP_UPDATE_DIR: desktop-out
           DESKTOP_UPDATE_SOURCE_DIR: release-src
-          DESKTOP_UPDATE_VERSION: ${{ needs.build.outputs.version }}
+          DESKTOP_UPDATE_SOURCE_SHA: ${{ needs.build.outputs.sha }}
           DESKTOP_UPDATE_SIGNING_KEY: ${{ secrets.DESKTOP_UPDATE_SIGNING_KEY }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/release/cli.mjs finalize-desktop-update
 
       - name: Keep signed updater metadata

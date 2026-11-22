@@ -109,6 +109,14 @@ export function assertTagSource(repository, tag, expectedSha, run = command) {
 	}
 }
 
+// The Windows update signer only signs a build whose source is the release
+// tag's commit and on the main history the workflow runs from, so a manual
+// dispatch naming another ref cannot produce an update clients trust.
+export function assertDesktopUpdateSource({ repository, tag, sourceSha, workflowSha, run = command }) {
+	assertTagSource(repository, tag, sourceSha, run);
+	assertAncestor(api(repository, `compare/${sourceSha}...${workflowSha}`, run));
+}
+
 export function mergedReleasePrs(repository, label, run = command) {
 	// Label filters route `gh pr list` through the search index, which can lag
 	// behind the merge push that triggered this run. List PRs directly instead.

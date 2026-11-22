@@ -262,6 +262,14 @@ class DesktopUpdater {
 
 	public handleUpdateError(error: Error) {
 		this.log.error('[desktop] Auto-update error', error);
+
+		// electron-updater emits update-downloaded and queues the install before
+		// its last cache housekeeping, which can still fail. The verified update
+		// stays ready, so keep showing it.
+		if (this.status.state === 'downloaded') {
+			return;
+		}
+
 		const failedDownload = this.downloadingInfo;
 		this.downloadingInfo = undefined;
 

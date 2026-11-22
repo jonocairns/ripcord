@@ -115,6 +115,16 @@ void describe('DesktopUpdater', () => {
 		assert.deepEqual(calls.installs, [[true, true]]);
 	});
 
+	void it('keeps a downloaded update ready when cache housekeeping fails afterwards', async () => {
+		const { updater, failDownload } = createHarness();
+		updater.handleUpdateAvailable(updateInfo('2.7.0'));
+		updater.handleUpdateDownloaded(updateInfo('2.7.0'));
+		await failDownload(updaterError('EPERM: operation not permitted, copyfile current.blockmap'));
+
+		assert.equal(updater.getStatus().state, 'downloaded');
+		assert.equal(updater.restartToUpdate(), true);
+	});
+
 	void it('leaves a plain quit to the install-on-quit handler', () => {
 		const { updater, calls } = createHarness();
 		updater.handleUpdateAvailable(updateInfo('2.7.0'));

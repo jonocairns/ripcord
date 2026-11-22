@@ -56,7 +56,8 @@ After the Windows build, a separate `sign` job in the `release` environment runs
 
 The job does the following:
 
-- Checks that `latest.yml` is for the release version and that the installer matches it.
+- Checks that the build came from the release tag's commit on `main`, so a manual dispatch naming another `ref` or `version` cannot produce a trusted update.
+- Checks that `latest.yml` is for the tag's version and that the installer matches it.
 - Builds release notes for the last ten versions from `CHANGELOG.md`.
 - Signs the version, file name, installer sha512, and a hash of the notes.
 - Verifies the signature against the release's `apps/desktop/src/main/update-signing-keys.json`.
@@ -71,6 +72,8 @@ To rotate the key:
 1. Add the new public key (base64 SPKI DER) to `update-signing-keys.json` and ship a release still signed with the old key.
 2. Once users have that release, replace `DESKTOP_UPDATE_SIGNING_KEY`.
 3. Remove the old public key in a later release.
+
+The current workflow cannot rebuild releases from before Windows auto-update (v2.6.6 and earlier): they have no `update-signing-keys.json`, so signing fails closed.
 
 If the private key is lost, the app shows **Update blocked** for every release signed with a new key. Users must then download and install a release from GitHub themselves.
 
