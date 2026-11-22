@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.7.0](https://github.com/jonocairns/ripcord/compare/v2.6.6...v2.7.0) (2026-11-22)
+
+
+### Features
+
+* install Windows desktop updates automatically ([#443](https://github.com/jonocairns/ripcord/issues/443)) ([e420ddd](https://github.com/jonocairns/ripcord/commit/e420ddde0a207efd41564a8e08a6113b6377b711))
+
 ## [2.6.6](https://github.com/jonocairns/ripcord/compare/v2.6.5...v2.6.6) (2026-11-20)
 
 
