@@ -21,20 +21,36 @@ jobs:
   source:
     name: Verify quality source
     runs-on: ubuntu-latest
+    outputs:
+      quality: ${{ steps.changes.outputs.quality }}
+      product: ${{ steps.changes.outputs.product }}
     steps:
       # Run verification from the workflow commit before checking out caller input.
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+          # Compare the complete PR range, including fork heads and renamed paths.
+          fetch-depth: 0
       - name: Verify the requested commit belongs to main
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
           QUALITY_SOURCE_SHA: ${{ inputs.ref }}
         run: node scripts/release/cli.mjs quality-source
+      # Keep new CI tooling in the workflow checkout: historical release sources
+      # need not contain it and must still receive their full original checks.
+      - name: Test CI path selection
+        run: node --test scripts/ci/changes.test.mjs
+      - name: Select affected PR checks
+        id: changes
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci/changes.mjs
 
   test:
     needs: source
+    if: needs.source.outputs.quality == 'true'
     name: Quality + Server Tests
     runs-on: ubuntu-latest
     env:
@@ -94,6 +110,7 @@ jobs:
   # runs every Playwright suite, so a failure blocks Release Please and builds.
   e2e:
     needs: source
+    if: needs.source.outputs.product == 'true'
     name: ${{ github.event_name == 'pull_request' && 'Screen-share E2E' || 'Full E2E' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -145,6 +162,7 @@ jobs:
 
   sidecar-windows:
     needs: source
+    if: needs.source.outputs.product == 'true'
     name: Desktop Build + Sidecar (Windows)
     runs-on: windows-latest
     env:
@@ -195,6 +213,7 @@ jobs:
 
   sidecar-macos:
     needs: source
+    if: needs.source.outputs.product == 'true'
     name: Desktop Build + Sidecar (macOS)
     runs-on: macos-latest
     env:
@@ -245,6 +264,7 @@ jobs:
 
   sidecar-linux:
     needs: source
+    if: needs.source.outputs.product == 'true'
     name: Desktop Build + Sidecar (Linux)
     runs-on: ubuntu-latest
     env:

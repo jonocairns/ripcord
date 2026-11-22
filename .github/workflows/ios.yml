@@ -1,0 +1,88 @@
+name: iOS
+
+on:
+  pull_request:
+    paths:
+      - "apps/ios/Ripcord/**"
+      - "apps/ios/RipcordTests/**"
+      - "apps/ios/RipcordUITests/**"
+      - "apps/ios/Ripcord.xcodeproj/**/Package.resolved"
+      - "apps/ios/project.yml"
+      - ".github/workflows/ios.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/ios/Ripcord/**"
+      - "apps/ios/RipcordTests/**"
+      - "apps/ios/RipcordUITests/**"
+      - "apps/ios/Ripcord.xcodeproj/**/Package.resolved"
+      - "apps/ios/project.yml"
+      - ".github/workflows/ios.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulator:
+    name: Swift lint + simulator unit tests
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun swift-format --version
+
+      - name: Lint Swift
+        run: xcrun swift-format lint --strict --recursive apps/ios/Ripcord apps/ios/RipcordTests apps/ios/RipcordUITests
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec apps/ios/project.yml
+
+      - name: Build all test targets and run standalone unit tests
+        # SessionFailureTests and UI flows need the isolated server/browser peer.
+        # Build them too, but do not claim this job exercises live media.
+        run: |
+          xcodebuild build-for-testing \
+            -project apps/ios/Ripcord.xcodeproj -scheme Ripcord \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' \
+            -derivedDataPath apps/ios/DerivedData \
+            -clonedSourcePackagesDirPath apps/ios/.build/SourcePackages \
+            -onlyUsePackageVersionsFromResolvedFile \
+            CODE_SIGNING_ALLOWED=NO
+          xcodebuild test-without-building \
+            -project apps/ios/Ripcord.xcodeproj -scheme Ripcord \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' \
+            -derivedDataPath apps/ios/DerivedData \
+            -clonedSourcePackagesDirPath apps/ios/.build/SourcePackages \
+            -only-testing:RipcordTests/MessageTests \
+            -only-testing:RipcordTests/RPCClientTests \
+            -only-testing:RipcordTests/RipcordThemeTests \
+            -parallel-testing-enabled NO \
+            -resultBundlePath apps/ios/build/UnitTests.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unit-test-results
+          path: apps/ios/build/*.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
