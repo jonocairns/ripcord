@@ -334,14 +334,13 @@ const ScreenShareCard = memo(
 
 		const streamAspectRatio = streamStats ? `${streamStats.width} / ${streamStats.height}` : '16 / 9';
 		const shouldFitStreamAspect = isPinned || fitStreamAspect || !showPinControls;
-		const shouldShowScreenAudioAffordance =
-			!isOwnUser &&
-			screenAudioSlot?.desired === true &&
-			screenAudioSlot.status !== 'live' &&
-			!hasScreenShareAudioStream;
 		const screenAudioStatus = getScreenAudioStatus(hasScreenShareAudioStream, screenAudioSlot);
-		const screenAudioLabel =
-			screenAudioSlot?.status === 'failed' ? SCREEN_AUDIO_STATUS_LABELS.failed : SCREEN_AUDIO_STATUS_LABELS.connecting;
+		const pendingScreenAudioStatus =
+			screenAudioStatus === 'connecting' || screenAudioStatus === 'failed' ? screenAudioStatus : undefined;
+		// The slot can report live a moment before the stream attaches; keep the
+		// chip hidden for that gap.
+		const shouldShowScreenAudioAffordance =
+			!isOwnUser && pendingScreenAudioStatus && screenAudioSlot?.status !== 'live';
 
 		return (
 			<>
@@ -428,10 +427,12 @@ const ScreenShareCard = memo(
 							<VolumeX
 								className={cn(
 									'size-4 shrink-0',
-									screenAudioSlot.status === 'failed' ? 'text-destructive' : 'text-warning',
+									pendingScreenAudioStatus === 'failed' ? 'text-destructive' : 'text-warning',
 								)}
 							/>
-							<span className="min-w-0 truncate text-xs font-medium">{screenAudioLabel}</span>
+							<span className="min-w-0 truncate text-xs font-medium">
+								{SCREEN_AUDIO_STATUS_LABELS[pendingScreenAudioStatus]}
+							</span>
 							<ControlButton
 								icon={RefreshCw}
 								onClick={onRetryScreenAudio}

@@ -27,6 +27,10 @@ describe('getScreenAudioStatus', () => {
 		assert.equal(getScreenAudioStatus(false, { desired: false, status: 'closing', producerPresent: true }), 'stopped');
 	});
 
+	it('reports none when the sharer stopped audio, even though the viewer still wants it', () => {
+		assert.equal(getScreenAudioStatus(false, { desired: true, status: 'failed', producerPresent: false }), 'none');
+	});
+
 	it('reports none when the share has no audio', () => {
 		assert.equal(getScreenAudioStatus(false, undefined), 'none');
 		assert.equal(getScreenAudioStatus(false, { desired: false, status: 'closing', producerPresent: false }), 'none');
