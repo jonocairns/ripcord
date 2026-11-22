@@ -138,6 +138,19 @@ const POPOUT_STYLES = `
 		text-align: right;
 		font-size: 11px;
 	}
+	.ripcord-popout-audio-unavailable {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 46px;
+		opacity: 0.45;
+	}
+	.ripcord-popout-audio-retry[data-status="connecting"] {
+		color: oklch(0.82 0.16 80);
+	}
+	.ripcord-popout-audio-retry[data-status="failed"] {
+		color: oklch(0.704 0.191 22.216);
+	}
 	.ripcord-popout-controls :focus-visible {
 		outline: 2px solid white;
 		outline-offset: -2px;
